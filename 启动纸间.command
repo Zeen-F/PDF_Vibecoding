@@ -6,7 +6,11 @@ if ! command -v node >/dev/null 2>&1; then
   if [[ -x "$BUNDLED_NODE/node" ]]; then export PATH="$BUNDLED_NODE:$PATH"; fi
 fi
 if ! command -v node >/dev/null 2>&1; then
-  print '未找到 Node.js。请安装 Node.js 22.13 或更新版本，再重新打开。'
+  print '未找到 Node.js。请安装 Node.js 24 LTS，再重新打开。'
+  read '?按回车关闭…'; exit 1
+fi
+if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+  print 'Node.js 版本过旧。请安装 Node.js 24 LTS，再重新打开。'
   read '?按回车关闭…'; exit 1
 fi
 if [[ ! -d node_modules ]]; then

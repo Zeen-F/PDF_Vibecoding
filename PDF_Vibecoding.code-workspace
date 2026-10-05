@@ -1,0 +1,23 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": {
+    "files.exclude": {
+      "**/.DS_Store": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "dist": true,
+      "public/pdf-assets": true,
+      "data": true,
+      ".local": true
+    }
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      { "label": "开发 Paperdesk", "type": "shell", "command": "npm run dev", "problemMatcher": [] },
+      { "label": "检查 Paperdesk", "type": "shell", "command": "npm run check", "group": "test", "problemMatcher": [] },
+      { "label": "启动正式阅读库", "type": "shell", "command": "npm start", "problemMatcher": [] }
+    ]
+  }
+}

@@ -1,0 +1,77 @@
+# 开发指南
+
+## 环境与首次安装
+
+需要 Node.js 24.0.0 或更新版本，推荐 `.nvmrc` / `.node-version` 指定的 24 LTS。`package-lock.json` 固定依赖解析结果，首次安装依赖与 Chromium 需要网络。
+
+```sh
+npm ci
+npx playwright install chromium
+```
+
+`npm ci` 安装项目依赖，Chromium 用于自动浏览器回归；只进行日常阅读时不必安装测试浏览器。
+
+VS Code 或兼容编辑器可打开根目录的 `PDF_Vibecoding.code-workspace`。其中任务对应开发启动、完整检查和日常启动，使用相同的 npm 入口。
+
+## 启动方式
+
+| 用途 | 命令 | 页面 | 默认文献库 |
+| --- | --- | --- | --- |
+| 开发 | `npm run dev` | `http://127.0.0.1:5173` | `.local/dev-data/` |
+| 日常使用 | `npm run build` 后 `npm start` | `http://127.0.0.1:4317` | `data/` |
+| Mac 日常使用 | 双击 `启动纸间.command` | `http://127.0.0.1:4317` | `data/` |
+
+开发命令同时管理 Vite 界面和 4318 端口上的 API，结束时按 Control+C。界面固定使用严格端口 5173，冲突时停止并提示。不要为了消除报错随意终止不明进程。
+
+| 环境变量 | 适用入口 | 含义 |
+| --- | --- | --- |
+| `DEV_API_PORT` | `npm run dev` | 修改开发 API 端口，默认 4318 |
+| `DEV_DATA_DIR` | `npm run dev` | 修改开发文献库，默认 `.local/dev-data/` |
+| `PORT` | `npm start` / Mac 启动器 | 修改日常使用端口，默认 4317 |
+| `PAPERDESK_DATA_DIR` | `npm start` / Mac 启动器 | 修改正式文献库，默认 `data/` |
+
+开发入口不继承生产 `PAPERDESK_DATA_DIR`，避免误写正式库。自定义库应位于项目的忽略目录或仓库外，不能放在 `src/`、`public/`、`dist/` 等源码或静态资源位置。按启动输出访问对应地址。
+
+Mac 启动器会在缺少依赖或构建产物时准备运行；已有 `dist/` 时不会自动判断源码是否更新，因此修改代码后应重新 `npm run build`。跨平台入口为 npm 命令；Mac 的一键启动脚本不代表 Windows/Linux 已完成验收。
+
+## 检查
+
+| 命令 | 范围 |
+| --- | --- |
+| `npm test` / `npm run test:api` | API 集成测试 |
+| `npm run build` | 准备本地 PDF 资源并构建生产界面 |
+| `npm run test:browser` | Chromium 浏览器回归；需要已有生产构建 |
+| `npm run check` | 依次执行 API 测试、生产构建和浏览器回归 |
+
+API 与浏览器测试使用自有临时文献库和随机端口，不连接常驻正式库。自动浏览器检查包括 17 项选文回归，以及示例导入、双语笔记保存、导出与刷新恢复。CI 使用 Node.js 24，并安装 Chromium 后运行完整检查；工作流存在不等于当前提交已通过远端运行。
+
+开发服务启动后可打开 `/tests/selection-harness.html`，点击 “Run selection tests” 单独查看选文结果；此页不访问文献库。旧的 `tests/notes-race.browser.mjs` 属于特定浏览器工具环境的历史辅助脚本，不应直接对正式笔记运行。
+
+涉及视觉位置或复杂 PDF 的变更，还需用可共享材料人工核对实际引文和高亮位置。仅查看历史通过记录不能替代检查当前分支。
+
+## 目录与数据纪律
+
+```text
+src/                  界面与阅读交互
+server/               本地 API 和存储
+scripts/              启动与资源准备
+tests/                回归测试与测试材料
+public/examples/      可共享的原创阅读示例
+docs/                 项目背景、架构和开发说明
+data/                 正式文献库，不提交
+.local/               开发数据、迁移清单和备份，不提交
+dist/                 生成的生产界面，不提交
+public/pdf-assets/    生成的 PDF.js 资源，不提交
+```
+
+提交前检查暂存内容。Git 忽略规则不能阻止所有人为误操作，不要使用强制添加把私人文件带入版本历史。开发库和测试库只放可丢弃的材料。
+
+备份或恢复前正常停止使用该文献库的服务，再复制完整目录。若必须在服务运行时备份，使用 SQLite 在线备份机制并验证数据库与其引用的 PDF 一致。迁移细节和个人来源记录保存在 `.local/`。
+
+## 常见情况
+
+- **端口已被占用：** 确认端口由哪个项目使用；停止正确的旧实例后再启动，避免在旧代码或旧文献库上误操作。
+- **界面尚未构建：** 日常使用先运行 `npm run build`；开发使用 `npm run dev` 显示的地址。
+- **浏览器回归缺少 Chromium：** 运行 `npx playwright install chromium` 后重试。
+- **笔记保存失败：** 保留当前窗口，检查服务、磁盘空间和权限，恢复后确认“已保存到本机”；草稿提示不等于正式保存成功。
+- **选文不正确：** 保存前核对预览；报告可复现页码、缩放和选区，尽量提供可共享的最小材料。
