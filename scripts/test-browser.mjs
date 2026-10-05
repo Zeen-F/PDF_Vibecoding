@@ -120,8 +120,11 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
   }
 
   async function openContents() {
-    const toggle = page.getByRole('button', { name: '展开目录', exact: true });
-    if (await toggle.isVisible()) await toggle.click();
+    // A page load can finish before the saved document and Reader are restored.
+    // Read the mounted toggle's state instead of sampling a possibly absent one.
+    const toggle = page.getByRole('button', { name: /^(展开|收起)目录$/ });
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     const navigation = page.getByRole('complementary', { name: '目录面板', exact: true });
     await expect(navigation).toBeVisible();
     return navigation;
