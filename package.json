@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@napi-rs/canvas": "1.0.10",
     "express": "5.2.1",
     "lucide-react": "^0.577.0",
     "multer": "2.4.0",

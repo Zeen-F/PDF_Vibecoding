@@ -10,6 +10,7 @@ import { createApp } from '../server/app.mjs';
 import { bookmarkedPdf, unverifiedContentsPdf, verifiedContentsPdf, writeLargeUploadPdf } from '../tests/fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 import { pluginWorkflow } from '../tests/plugin.browser.mjs';
+import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -582,6 +583,7 @@ try {
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
+  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

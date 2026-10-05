@@ -1,13 +1,13 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "paperdesk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "连接本机纸间 PDF 阅读器，按需共享选区、读取单页和追加用户要求记录的笔记。",
   "author": { "name": "Paperdesk" },
   "extensions": { "com.openai": { "interface": {
     "displayName": "纸间 Paperdesk",
     "shortDescription": "本机 PDF 阅读与按需上下文共享",
-    "longDescription": "连接已配置的本机资料库，提供单页文字、主动共享的选区和单一笔记区。原生阅读面板为实验功能。",
+    "longDescription": "连接已配置的本机资料库，提供单页文字、主动共享的选区和单一笔记区。原生面板直接显示单页，不依赖嵌套网页；展示数据按需共享。",
     "developerName": "Paperdesk",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],

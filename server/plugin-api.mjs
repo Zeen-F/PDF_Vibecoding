@@ -114,7 +114,11 @@ export function registerPluginApi({ app, db, dataDir, documentOr404, serializeDo
     const body = objectBody(selection, ['kind', 'text', 'rects', 'preview']);
     if (!['text', 'region'].includes(body.kind)) throw new HttpError(400, '选区类型必须是 text 或 region。');
     const text = stringValue(body.text, '选区文字', 50_000, { nonempty: body.kind === 'text' });
-    const rects = rectanglesValue(body.rects);
+    // Plain page-text excerpts in a native component have no PDF geometry.
+    // Only transient text context may omit rectangles; saved annotations keep
+    // their existing geometry validation and regions still require one box.
+    const rects = body.kind === 'text' && Array.isArray(body.rects) && body.rects.length === 0
+      ? [] : rectanglesValue(body.rects);
     if (body.kind === 'region' && (text !== '' || rects.length !== 1)) throw new HttpError(400, '区域选区必须没有引文，且只包含一个矩形。');
     const result = { kind: body.kind, text, rects };
     if (Object.hasOwn(body, 'preview')) {

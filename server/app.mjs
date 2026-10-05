@@ -10,6 +10,7 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { extractToc } from './toc.mjs';
 import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
 import { notesRevision, revisionValue, registerPluginApi } from './plugin-api.mjs';
+import { createReaderRenderer, readerPageQuery, readerPageText, ReaderRenderError } from './reader-render.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -288,6 +289,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   const findAnnotation = db.prepare('SELECT * FROM annotations WHERE id = ? AND document_id = ?');
   const findAnnotations = db.prepare('SELECT * FROM annotations WHERE document_id = ? ORDER BY page, created_at, id');
   const touchDocument = db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?');
+  const readerRenderer = createReaderRenderer();
   const tocCache = new Map();
   function documentToc(doc) {
     if (tocCache.has(doc.id)) {
@@ -406,6 +408,18 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   });
   app.get('/api/documents/:id/toc', async (req, res) => {
     res.json(await documentToc(documentOr404(req.params.id)));
+  });
+  app.get('/api/documents/:id/reader-page', async (req, res) => {
+    const doc = documentOr404(req.params.id);
+    try {
+      const { page, width } = readerPageQuery(req.query, doc.page_count);
+      const text = db.prepare('SELECT text FROM pages WHERE document_id = ? AND page = ?').get(doc.id, page)?.text ?? '';
+      const rendered = await readerRenderer.render(path.join(pdfDir, `${doc.id}.pdf`), page, width);
+      res.json({ documentId: doc.id, page, ...rendered, ...readerPageText(text) });
+    } catch (error) {
+      if (error instanceof ReaderRenderError) throw new HttpError(error.status, error.message);
+      throw error;
+    }
   });
   app.patch('/api/documents/:id', (req, res) => {
     const body = objectBody(req.body, ['title', 'notesZh', 'notesEn', 'lastPage', 'expectedNotesRevision']);
@@ -542,5 +556,5 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   let closed = false;
-  return { app, close() { if (!closed) { pluginApi.close(); tocCache.clear(); db.close(); closed = true; } } };
+  return { app, close() { if (!closed) { closed = true; pluginApi.close(); tocCache.clear(); db.close(); } return readerRenderer.close(); } };
 }

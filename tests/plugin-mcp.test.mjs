@@ -8,7 +8,6 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
-import { runInNewContext } from 'node:vm';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createApp } from '../server/app.mjs';
@@ -79,7 +78,7 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes'].sort());
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close'].sort());
     assert.equal(tools.find(tool => tool.name === 'paperdesk_append_note').annotations.readOnlyHint, false);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_get_notes').annotations.readOnlyHint, true);
     const open = tools.find(tool => tool.name === 'paperdesk_open_reader');
@@ -88,7 +87,12 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
     assert.equal((await client.listResources()).resources[0].uri, READER_RESOURCE);
     resource = (await client.readResource({ uri: READER_RESOURCE })).contents[0];
     assert.equal(resource.mimeType, 'text/html;profile=mcp-app');
-    assert.deepEqual(resource._meta.ui.csp.frameDomains, [baseUrl]);
+    assert.deepEqual(resource._meta.ui.csp, { frameDomains: [], resourceDomains: [], connectDomains: [] });
+    assert.ok(!/<iframe\b|fetch\(/.test(resource.text), 'Native component must not embed or fetch a loopback website');
+    for (const tool of tools.filter(tool => tool.name.startsWith('paperdesk_reader_'))) {
+      assert.deepEqual(tool._meta.ui.visibility, ['app']);
+      assert.equal(tool._meta['openai/widgetAccessible'], true);
+    }
     assert.ok(resource.text.includes(baseUrl));
     assert.ok(!resource.text.includes(root), 'resource must not expose workspace filesystem paths');
     assert.equal(value(await call(client, 'paperdesk_status')).libraryId, status.libraryId);
@@ -159,6 +163,44 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
     assert.ok(saved.notes.includes('### 第 2 页\n\nExplicitly requested saved answer.'));
     assert.notEqual(saved.notesRevision, notes.notesRevision);
   });
+  await t.test('native display data stays private and app sessions/notes use the real SDK', async () => {
+    const rendered = await call(client, 'paperdesk_reader_page', { documentId: doc.id, page: 2, width: 1200 });
+    assert.deepEqual(value(rendered), { ok: true });
+    const image = rendered._meta.readerPage;
+    assert.equal(image.documentId, doc.id); assert.equal(image.page, 2);
+    assert.equal(image.mimeType, 'image/png');
+    assert.ok(Buffer.from(image.image, 'base64').subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
+    assert.ok(image.width > 0 && image.width <= 1600 && image.height > 0 && image.height <= 2400);
+    assert.ok(image.text.length > 0);
+    assert.ok(!JSON.stringify({ content: rendered.content, structuredContent: rendered.structuredContent }).includes(image.image));
+    const notesResult = await call(client, 'paperdesk_reader_get_notes', { documentId: doc.id });
+    assert.ok(notesResult._meta.notes.notes.includes('PRIVATE'));
+    assert.ok(!JSON.stringify({ content: notesResult.content, structuredContent: notesResult.structuredContent }).includes('PRIVATE'));
+    const toc = await call(client, 'paperdesk_reader_toc', { documentId: doc.id });
+    assert.deepEqual(value(toc), { ok: true }); assert.ok(Array.isArray(toc._meta.toc.entries));
+    const saved = await call(client, 'paperdesk_reader_save_notes', {
+      documentId: doc.id, notes: 'MANUAL native note', expectedNotesRevision: notesResult._meta.notes.notesRevision,
+    });
+    assert.equal(saved._meta.notes.notes, 'MANUAL native note');
+    assert.ok(!JSON.stringify({ content: saved.content, structuredContent: saved.structuredContent }).includes('MANUAL'));
+    const conflict = await call(client, 'paperdesk_reader_save_notes', {
+      documentId: doc.id, notes: 'STALE replacement', expectedNotesRevision: notesResult._meta.notes.notesRevision,
+    });
+    assert.equal(conflict.isError, true); assert.equal(conflict.structuredContent.status, 409);
+    assert.equal((await api(`/api/documents/${doc.id}`)).document.notesZh, 'MANUAL native note');
+    const nativeId = randomUUID();
+    const args = { sessionId: nativeId, ...session(null) };
+    const receipt = await call(client, 'paperdesk_reader_session', args);
+    assert.equal(receipt._meta.session.sessionId, nativeId);
+    assert.ok(!JSON.stringify(receipt).includes('MANUAL'));
+    assert.equal(value(await call(client, 'paperdesk_get_context', { sessionId: nativeId })).selection, null);
+    await call(client, 'paperdesk_reader_session', { ...args, selection: { kind: 'text', text: 'Explicit text excerpt', rects: [] } });
+    const shared = value(await call(client, 'paperdesk_get_context', { sessionId: nativeId }));
+    assert.equal(shared.selection.text, 'Explicit text excerpt'); assert.deepEqual(shared.selection.rects, []);
+    assert.equal((await call(client, 'paperdesk_reader_session', { ...args, selection: { kind: 'region', text: '', rects: [] } })).isError, true);
+    value(await call(client, 'paperdesk_reader_close', { sessionId: nativeId }));
+    assert.equal((await call(client, 'paperdesk_get_context', { sessionId: nativeId })).isError, true);
+  });
 });
 
 test('each operation rejects another service/library before requesting private endpoints', async t => {
@@ -179,6 +221,8 @@ test('each operation rejects another service/library before requesting private e
   assert.equal(value(await call(client, 'paperdesk_status')).service, 'paperdesk');
   identity.libraryId = 'b'.repeat(64);
   assert.equal((await call(client, 'paperdesk_append_note', { documentId, text: 'do not write', expectedNotesRevision: 'c'.repeat(64), requestId: randomUUID() })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_page', { documentId, page: 1 })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_save_notes', { documentId, notes: 'do not write', expectedNotesRevision: 'c'.repeat(64) })).isError, true);
   await assert.rejects(client.readResource({ uri: READER_RESOURCE }));
   assert.deepEqual(privatePaths, []);
 });
@@ -200,83 +244,4 @@ test('tiny text windows advance across astral characters without splitting them'
     combined += part.text; offset = part.nextOffset;
   } while (offset !== null);
   assert.equal(combined, '😀文𠮷');
-});
-
-test('MCP wrapper validates message sources and sends only negotiated modalities', async () => {
-  const baseUrl = 'http://127.0.0.1:4317';
-  const html = (await readFile(new URL('../plugins/paperdesk/ui/reader.html', import.meta.url), 'utf8')).replace('__PAPERDESK_CONFIG__', JSON.stringify({ baseUrl }));
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  const sent = [], handlers = {}, child = {}, parent = { postMessage(message) { sent.push(message); } };
-  const nodes = Object.fromEntries(['reader', 'status', 'external', 'share'].map(name => [name, { contentWindow: child, addEventListener(type, fn) { this[type] = fn; } }]));
-  const timers = new Set();
-  runInNewContext(script, {
-    window: { parent, addEventListener(type, fn) { handlers[type] = fn; } },
-    document: { referrer: 'https://host.example/conversation', getElementById(id) { return nodes[id]; } },
-    location: { protocol: 'https:', origin: 'https://app.example' }, crypto: { randomUUID }, URL, console,
-    setTimeout(fn, ms) { const timer = setTimeout(fn, ms); timers.add(timer); return timer; }, clearTimeout(timer) { clearTimeout(timer); timers.delete(timer); },
-  });
-  const flush = () => new Promise(resolve => setImmediate(resolve));
-  const reply = (message, result) => handlers.message({ source: parent, origin: 'https://host.example', data: { jsonrpc: '2.0', id: message.id, result } });
-  try {
-    const init = sent[0]; assert.equal(init.method, 'ui/initialize');
-    reply(init, { hostCapabilities: { serverTools: {}, updateModelContext: { text: {} } } }); await flush();
-    const sessionId = new URL(nodes.reader.src).searchParams.get('readerSession');
-    assert.ok(sessionId); assert.equal(new URL(nodes.reader.src).searchParams.get('parentOrigin'), 'https://app.example');
-    const notification = { type: 'paperdesk-context', context: { sessionId, sharedSelection: true, shareId: randomUUID() } };
-    handlers.message({ source: child, origin: 'https://evil.example', data: notification });
-    handlers.message({ source: {}, origin: baseUrl, data: notification });
-    assert.equal(sent.filter(item => item.method === 'tools/call').length, 0);
-    handlers.message({ source: child, origin: baseUrl, data: notification });
-    handlers.message({ source: child, origin: baseUrl, data: notification });
-    assert.equal(sent.filter(item => item.method === 'tools/call').length, 1, 'heartbeat must not trigger another tool call');
-    const getContext = sent.find(item => item.method === 'tools/call');
-    assert.equal(getContext.params.arguments.sessionId, sessionId);
-    reply(getContext, { content: [{ type: 'text', text: 'selected' }, { type: 'image', data: 'png', mimeType: 'image/png' }], structuredContent: { selection: {} } }); await flush();
-    const update = sent.find(item => item.method === 'ui/update-model-context');
-    assert.deepEqual(JSON.parse(JSON.stringify(update.params)), { content: [{ type: 'text', text: 'selected' }] });
-    handlers.message({ source: child, origin: baseUrl, data: { type: 'paperdesk-context', context: { sessionId, sharedSelection: false, shareId: null } } });
-    assert.equal(sent.filter(item => item.method === 'ui/update-model-context').length, 1, 'clear waits for pending injection');
-    reply(update, {}); await flush();
-    const clear = sent.filter(item => item.method === 'ui/update-model-context')[1];
-    assert.deepEqual(JSON.parse(JSON.stringify(clear.params)), { content: [] });
-    reply(clear, {}); await flush();
-    const original = nodes.reader.src;
-    handlers.message({ source: {}, origin: 'https://host.example', data: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { url: `${baseUrl}/?document=forged` } } } });
-    assert.equal(nodes.reader.src, original);
-    handlers.message({ source: parent, origin: 'https://host.example', data: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { url: 'https://evil.example/' } } } });
-    assert.equal(nodes.reader.src, original);
-  } finally { for (const timer of timers) clearTimeout(timer); }
-});
-
-test('opaque-origin wrapper disables injection even when the host advertises full support', async () => {
-  const baseUrl = 'http://127.0.0.1:4317';
-  const html = (await readFile(new URL('../plugins/paperdesk/ui/reader.html', import.meta.url), 'utf8')).replace('__PAPERDESK_CONFIG__', JSON.stringify({ baseUrl }));
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  const sent = [], handlers = {}, child = {}, parent = { postMessage(message) { sent.push(message); } };
-  const nodes = Object.fromEntries(['reader', 'status', 'external', 'share'].map(name => [name, { contentWindow: child, addEventListener(type, fn) { this[type] = fn; } }]));
-  const timers = new Set();
-  runInNewContext(script, {
-    window: { parent, addEventListener(type, fn) { handlers[type] = fn; } },
-    document: { referrer: 'https://host.example/conversation', getElementById(id) { return nodes[id]; } },
-    location: { protocol: 'https:', origin: 'null' }, crypto: { randomUUID }, URL, console,
-    setTimeout(fn, ms) { const timer = setTimeout(fn, ms); timers.add(timer); return timer; }, clearTimeout(timer) { clearTimeout(timer); timers.delete(timer); },
-  });
-  try {
-    handlers.message({ source: parent, origin: 'https://host.example', data: {
-      jsonrpc: '2.0', id: sent[0].id, result: { hostCapabilities: { serverTools: {}, updateModelContext: { text: {}, image: {}, structuredContent: {} } } },
-    } });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(nodes.share.disabled, true);
-    assert.match(nodes.status.textContent, /已停用上下文注入/);
-    const url = new URL(nodes.reader.src);
-    assert.equal(url.searchParams.has('parentOrigin'), false);
-    handlers.message({ source: child, origin: baseUrl, data: { type: 'paperdesk-context', context: {
-      sessionId: url.searchParams.get('readerSession'), sharedSelection: true, shareId: randomUUID(),
-    } } });
-    // Programmatic dispatch must not bypass the disabled button's guard.
-    nodes.share.click();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(sent.some(message => ['tools/call', 'ui/update-model-context'].includes(message.method)), false);
-    assert.match(nodes.status.textContent, /普通工具读取共享选区/);
-  } finally { for (const timer of timers) clearTimeout(timer); }
 });
