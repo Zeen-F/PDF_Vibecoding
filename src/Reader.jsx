@@ -148,7 +148,7 @@ export default function Reader({ document, page, onPage, annotations, selection,
         {ready&&<div className="highlight-layer" aria-hidden="true">{annotations.filter(a=>a.page===page).flatMap(a=>a.rects.map((r,i)=><span key={`${a.id}-${i}`} className={`highlight-rect ${a.color} ${a.kind==='region'?'region-annotation':''} ${focusedAnnotation===a.id?'focused':''}`} data-annotation={a.id} style={{left:`${r.x*100}%`,top:`${r.y*100}%`,width:`${r.width*100}%`,height:`${r.height*100}%`}}/>))}</div>}
         {ready && regionMode && <RegionSelection key={`${document.id}:${page}`} enabled={!selectionLocked && !busy} documentId={document.id} page={page} canvasRef={canvasRef} selection={selection} onSelection={onSelection}/>}
       </div>
-      {!document.textAvailable&&<p className="scan-notice">这份 PDF 没有可提取的文字。点击“区域批注”，拖动框选图片、公式或文字区域并添加评论；仍可写双语笔记。区域批注不会识别图片中的文字。</p>}
+      {!document.textAvailable&&<p className="scan-notice">这份 PDF 没有可提取的文字。点击“区域批注”，拖动框选图片、公式或文字区域并添加评论；仍可写笔记。区域批注不会识别图片中的文字。</p>}
       <div className="page-footer">{document.filename} <span>·</span> {page} / {document.pageCount}</div>
     </div>
     </div>
