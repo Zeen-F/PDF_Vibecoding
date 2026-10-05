@@ -8,6 +8,7 @@ import { chromium, expect } from '@playwright/test';
 import { createServer as createViteServer } from 'vite';
 import { createApp } from '../server/app.mjs';
 import { bookmarkedPdf, unverifiedContentsPdf, verifiedContentsPdf, writeLargeUploadPdf } from '../tests/fixtures/toc-browser.mjs';
+import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -96,7 +97,30 @@ async function readingWorkflow(context) {
   saved = (await (await fetch(`${base}/api/documents/${document.id}`)).json()).document;
   assert.equal(saved.notesZh, notesZh);
   assert.equal(saved.notesEn, notesEn);
-  console.log('PASS: isolated PDF import, rendered page, bilingual note save, Markdown download and reload');
+
+  // Exercise the real text-selection modal as well as the isolated DOM harness.
+  const text = page.locator('.textLayer span').filter({ hasText: /^Reading with intention$/ });
+  await expect(text).toBeVisible();
+  const box = await text.boundingBox();
+  await page.mouse.move(box.x + 1, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.getByRole('button', { name: '高亮并批注', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: /高亮与批注/ });
+  await expect(dialog.locator('blockquote')).toHaveText('Reading with intention');
+  await dialog.getByRole('textbox', { name: '批注评论', exact: true }).fill('文字批注回归，保留真实引文。');
+  const annotationResponse = page.waitForResponse(result => result.url() === `${base}/api/documents/${document.id}/annotations` && result.request().method() === 'POST');
+  await dialog.getByRole('button', { name: '保存批注', exact: true }).click();
+  const created = await annotationResponse;
+  assert.equal(created.status(), 201);
+  assert.equal(Object.hasOwn(created.request().postDataJSON(), 'preview'), false);
+  const { annotation } = await created.json();
+  assert.equal(annotation.kind, 'text');
+  assert.equal(annotation.quote, 'Reading with intention');
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator(`[data-annotation="${annotation.id}"]`).first()).toBeVisible();
+  console.log('PASS: isolated PDF import, rendered page, bilingual note save, Markdown download, reload and real text annotation');
   await page.close();
   return document;
 }
@@ -262,6 +286,191 @@ async function largeUploadWorkflow(context) {
   await page.close();
 }
 
+async function scanRegionWorkflow(context) {
+  const page = await context.newPage();
+  page.on('pageerror', error => pageErrors.push(`Scan regions: ${error.message}`));
+  const base = `http://127.0.0.1:${appServer.address().port}`;
+  const bytes = graphicsOnlyPdf();
+  await page.goto(base);
+  const imported = page.waitForResponse(response => response.url() === `${base}/api/documents` && response.request().method() === 'POST');
+  await page.getByLabel('选择 PDF 文件').setInputFiles({ name: 'original-scan-region-exercise.pdf', mimeType: 'application/pdf', buffer: bytes });
+  const response = await imported;
+  assert.equal(response.status(), 201);
+  const { document } = await response.json();
+  assert.equal(document.pageCount, 2);
+  assert.equal(document.textAvailable, false, 'Region workflow must not depend on hidden text or OCR');
+  await expect(page.getByRole('heading', { name: document.title, exact: true })).toBeVisible();
+  await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+  await expect(page.locator('.textLayer span')).toHaveCount(0);
+
+  const paper = page.locator('.pdf-paper');
+  const regionMode = page.getByRole('button', { name: '区域批注', exact: true });
+  const addRegion = page.getByRole('button', { name: '添加区域批注', exact: true });
+  const documentState = async () => (await (await fetch(`${base}/api/documents/${document.id}`)).json());
+  await regionMode.click();
+  await expect(regionMode).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('拖动框选批注区域', { exact: true })).toBeVisible();
+
+  async function dragRegion(from, to, { escape = false } = {}) {
+    const bounds = await paper.boundingBox();
+    assert.ok(bounds);
+    await page.mouse.move(bounds.x + from[0] * bounds.width, bounds.y + from[1] * bounds.height);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + to[0] * bounds.width, bounds.y + to[1] * bounds.height, { steps: 5 });
+    if (escape) await page.keyboard.press('Escape');
+    await page.mouse.up();
+    return { x: Math.min(from[0], to[0]), y: Math.min(from[1], to[1]), width: Math.abs(to[0] - from[0]), height: Math.abs(to[1] - from[1]) };
+  }
+
+  async function saveRegion(comment) {
+    await addRegion.click();
+    const dialog = page.getByRole('dialog', { name: /区域批注/ });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('img', { name: '第 1 页框选区域预览', exact: true })).toBeVisible();
+    await dialog.getByRole('textbox', { name: '批注评论', exact: true }).fill(comment);
+    const pending = page.waitForResponse(result => result.url() === `${base}/api/documents/${document.id}/annotations` && result.request().method() === 'POST');
+    await dialog.getByRole('button', { name: '保存批注', exact: true }).click();
+    const result = await pending;
+    assert.equal(result.status(), 201);
+    assert.equal(Object.hasOwn(result.request().postDataJSON(), 'preview'), false, 'Canvas preview must not enter the annotation API');
+    await expect(dialog).not.toBeVisible();
+    const { annotation } = await result.json();
+    assert.equal(annotation.kind, 'region');
+    assert.equal(annotation.quote, '');
+    assert.equal(annotation.rects.length, 1);
+    return annotation;
+  }
+
+  function assertCoordinates(actual, expected) {
+    for (const key of ['x', 'y', 'width', 'height']) {
+      assert.ok(Math.abs(actual[key] - expected[key]) < 0.004, `${key} coordinate changed: ${actual[key]} vs ${expected[key]}`);
+    }
+  }
+
+  async function assertOverlay(annotation) {
+    const overlay = page.locator(`[data-annotation="${annotation.id}"]`);
+    await expect(overlay).toBeVisible();
+    const actual = await overlay.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      const parent = element.closest('.pdf-paper').getBoundingClientRect();
+      return { x: (box.x - parent.x) / parent.width, y: (box.y - parent.y) / parent.height, width: box.width / parent.width, height: box.height / parent.height };
+    });
+    assertCoordinates(actual, annotation.rects[0]);
+  }
+
+  // A near-click and an interrupted drag must not create accidental regions.
+  const bounds = await paper.boundingBox();
+  await dragRegion([0.15, 0.2], [0.15 + 2 / bounds.width, 0.2 + 2 / bounds.height]);
+  await expect(addRegion).not.toBeVisible();
+  await dragRegion([0.16, 0.2], [0.44, 0.34], { escape: true });
+  await expect(addRegion).not.toBeVisible();
+  assert.deepEqual((await documentState()).annotations, []);
+
+  // Esc first dismisses the dialog, then cancels the remaining draft if present.
+  await dragRegion([0.16, 0.2], [0.44, 0.34]);
+  await expect(addRegion).toBeVisible();
+  const draft = page.locator('.region-draft-rect');
+  const originalWidth = (await paper.boundingBox()).width;
+  await page.getByRole('button', { name: '收起文献栏', exact: true }).click();
+  await expect.poll(async () => Math.abs((await paper.boundingBox()).width - originalWidth)).toBeGreaterThan(20);
+  await expect(draft).toBeVisible();
+  await expect(addRegion).toBeVisible();
+  await page.getByRole('button', { name: '展开文献栏', exact: true }).click();
+  await expect.poll(async () => (await paper.boundingBox()).width).toBeCloseTo(originalWidth, 0);
+  await page.getByRole('combobox', { name: '阅读缩放', exact: true }).selectOption('1.25');
+  await expect.poll(async () => (await paper.boundingBox()).width).toBeCloseTo(750, 0);
+  await expect(draft).toBeVisible();
+  await expect(addRegion).toBeVisible();
+  await page.getByRole('combobox', { name: '阅读缩放', exact: true }).selectOption('fit');
+  await expect.poll(async () => (await paper.boundingBox()).width).toBeCloseTo(originalWidth, 0);
+  await addRegion.click();
+  await expect(page.getByRole('dialog', { name: /区域批注/ })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: /区域批注/ })).not.toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(addRegion).not.toBeVisible();
+  assert.deepEqual((await documentState()).annotations, []);
+
+  const forwardRect = await dragRegion([0.16, 0.2], [0.44, 0.34]);
+  const first = await saveRegion('扫描区域回归：图中几何框。');
+  assertCoordinates(first.rects[0], forwardRect);
+  const reverseRect = await dragRegion([0.6, 0.44], [0.32, 0.28]);
+  const second = await saveRegion('区域反向拖选验收。');
+  assertCoordinates(second.rects[0], reverseRect);
+  await assertOverlay(first);
+  await assertOverlay(second);
+
+  const updatedComment = '扫描区域回归：已修改的局部图形说明。';
+  const firstCard = page.locator('.annotation-card').filter({ hasText: first.comment });
+  await expect(firstCard.getByRole('button', { name: /^框选区域/ })).toBeVisible();
+  await firstCard.getByRole('button', { name: '编辑批注', exact: true }).click();
+  await page.getByRole('textbox', { name: '编辑批注内容', exact: true }).fill(updatedComment);
+  await page.locator('.annotation-edit').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.locator('.annotation-card').filter({ hasText: updatedComment })).toBeVisible();
+  assert.equal((await documentState()).annotations.find(annotation => annotation.id === first.id).comment, updatedComment);
+
+  const pendingDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 Markdown', exact: true }).click();
+  const markdown = await readFile(await (await pendingDownload).path(), 'utf8');
+  assert.ok(markdown.includes(updatedComment));
+  assert.match(markdown, /区域批注/);
+  assert.match(markdown, /区域坐标.*x=.*y=.*width=.*height=/);
+  assert.ok(!/^> /m.test(markdown), 'A region must not fabricate a text quotation');
+
+  // A saved rectangle retains the same PDF-relative geometry as layout changes.
+  const widthBefore = (await paper.boundingBox()).width;
+  const library = page.getByRole('complementary', { name: '文献栏', exact: true, includeHidden: true });
+  await page.getByRole('button', { name: '收起文献栏', exact: true }).click();
+  await expect(library).not.toBeVisible();
+  await expect(library).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '展开文献栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect.poll(async () => Math.abs((await paper.boundingBox()).width - widthBefore)).toBeGreaterThan(20);
+  await assertOverlay(first);
+  await page.getByRole('combobox', { name: '阅读缩放', exact: true }).selectOption('1.5');
+  await expect.poll(async () => (await paper.boundingBox()).width).toBeCloseTo(900, 0);
+  await assertOverlay(first);
+  await assertOverlay(second);
+
+  await page.reload();
+  await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '展开文献栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect(library).not.toBeVisible();
+  await expect(regionMode).toHaveAttribute('aria-pressed', 'false');
+  await assertOverlay(first);
+  assert.equal((await documentState()).annotations.length, 2);
+
+  await page.keyboard.press('ControlOrMeta+k');
+  const search = page.getByRole('textbox', { name: '全文搜索', exact: true });
+  await expect(library).toBeVisible();
+  await expect(search).toBeFocused();
+  await search.fill('扫描区域回归');
+  await page.locator('.search-result').filter({ hasText: '批注' }).click();
+  await expect(page.locator('.annotation-card').filter({ hasText: updatedComment })).toBeVisible();
+  await search.fill('');
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  await expect(page.getByLabel('PDF 第 2 页', { exact: true })).toBeVisible();
+  await expect(page.locator(`[data-annotation="${first.id}"]`)).toHaveCount(0);
+  await page.locator('.annotation-card').filter({ hasText: updatedComment }).getByRole('button', { name: '第 1 页', exact: true }).click();
+  await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+  await expect(page.locator(`[data-annotation="${first.id}"]`)).toHaveClass(/focused/);
+
+  // Returning to an annotation on a narrow window must expose the original page.
+  await page.setViewportSize({ width: 760, height: 900 });
+  const tocToggle = page.getByRole('button', { name: /^(展开|收起)目录$/ });
+  if (await tocToggle.getAttribute('aria-expanded') === 'false') await tocToggle.click();
+  await search.fill('区域反向拖选验收');
+  await page.locator('.search-result').filter({ hasText: '批注' }).click();
+  const notesPanel = page.getByRole('complementary', { name: '笔记与批注', exact: true });
+  await expect(notesPanel).toBeVisible();
+  await expect(page.getByRole('complementary', { name: '目录面板', exact: true })).not.toBeVisible();
+  await page.locator('.annotation-card').filter({ hasText: second.comment }).getByRole('button', { name: /^框选区域/ }).click();
+  await expect(notesPanel).not.toBeVisible();
+  await expect(page.locator(`[data-annotation="${second.id}"]`)).toHaveClass(/focused/);
+  assert.deepEqual(Buffer.from(await (await fetch(`${base}/api/documents/${document.id}/file`)).arrayBuffer()), bytes);
+  console.log('PASS: graphics-only PDF region drag/cancel/save/edit/export, geometry across zoom and library collapse, persisted layout, keyboard search and page return');
+  await page.close();
+}
+
 try {
   try { await access(join(root, 'dist/index.html')); }
   catch { throw new Error('Build the application first with npm run build, or run npm run check.'); }
@@ -285,6 +494,7 @@ try {
   const sampleDocument = await readingWorkflow(context);
   await tableOfContentsWorkflow(context, sampleDocument);
   await largeUploadWorkflow(context);
+  await scanRegionWorkflow(context);
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

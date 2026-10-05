@@ -14,6 +14,7 @@ const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
 const MAX_PAGES = 2000;
 const MAX_TEXT = 20_000_000;
 const COLORS = new Set(['yellow', 'green', 'pink']);
+const ANNOTATION_KINDS = new Set(['text', 'region']);
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -47,6 +48,11 @@ function pageValue(value, count) {
 
 function colorValue(value) {
   if (!COLORS.has(value)) throw new HttpError(400, '高亮颜色必须是 yellow、green 或 pink。');
+  return value;
+}
+
+function annotationKind(value) {
+  if (!ANNOTATION_KINDS.has(value)) throw new HttpError(400, '批注类型必须是 text 或 region。');
   return value;
 }
 
@@ -90,7 +96,7 @@ function serializeDocument(row) {
 
 function serializeAnnotation(row) {
   return {
-    id: row.id, documentId: row.document_id, page: row.page,
+    id: row.id, documentId: row.document_id, page: row.page, kind: row.kind,
     quote: row.quote, comment: row.comment, color: row.color,
     rects: JSON.parse(row.rects), createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -207,28 +213,43 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   const incomingDir = path.join(pdfDir, '.incoming');
   mkdirSync(incomingDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path.join(dataDir, 'paperdesk.sqlite'));
-  db.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
-    PRAGMA busy_timeout = 5000;
-    CREATE TABLE IF NOT EXISTS documents (
-      id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
-      filename TEXT NOT NULL, page_count INTEGER NOT NULL, byte_size INTEGER NOT NULL,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, text_available INTEGER NOT NULL,
-      notes_zh TEXT NOT NULL DEFAULT '', notes_en TEXT NOT NULL DEFAULT '', last_page INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS pages (
-      document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-      page INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(document_id, page)
-    );
-    CREATE TABLE IF NOT EXISTS annotations (
-      id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-      page INTEGER NOT NULL, quote TEXT NOT NULL, comment TEXT NOT NULL, color TEXT NOT NULL,
-      rects TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS annotations_document ON annotations(document_id, page);
-    PRAGMA user_version = 1;
-  `);
+  let migrating = false;
+  try {
+    db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    if (db.prepare('PRAGMA user_version').get().user_version > 2) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
+    db.exec('PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;');
+    migrating = true;
+    // Recheck under the write lock in case another process migrated first.
+    if (db.prepare('PRAGMA user_version').get().user_version > 2) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+        filename TEXT NOT NULL, page_count INTEGER NOT NULL, byte_size INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, text_available INTEGER NOT NULL,
+        notes_zh TEXT NOT NULL DEFAULT '', notes_en TEXT NOT NULL DEFAULT '', last_page INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE IF NOT EXISTS pages (
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        page INTEGER NOT NULL, text TEXT NOT NULL, PRIMARY KEY(document_id, page)
+      );
+      CREATE TABLE IF NOT EXISTS annotations (
+        id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        page INTEGER NOT NULL, quote TEXT NOT NULL, comment TEXT NOT NULL, color TEXT NOT NULL,
+        rects TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'region'))
+      );
+      CREATE INDEX IF NOT EXISTS annotations_document ON annotations(document_id, page);
+    `);
+    if (!db.prepare('PRAGMA table_info(annotations)').all().some(column => column.name === 'kind')) {
+      db.exec("ALTER TABLE annotations ADD COLUMN kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'region'));");
+    }
+    db.exec('PRAGMA user_version = 2; COMMIT;');
+    migrating = false;
+  } catch (error) {
+    if (migrating) db.exec('ROLLBACK');
+    db.close();
+    throw error;
+  }
   const app = express();
   app.disable('x-powered-by');
   app.use(localRequestOnly);
@@ -381,16 +402,19 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   });
   app.post('/api/documents/:id/annotations', (req, res) => {
     const doc = documentOr404(req.params.id);
-    const body = objectBody(req.body, ['page', 'quote', 'comment', 'color', 'rects']);
+    const body = objectBody(req.body, ['page', 'kind', 'quote', 'comment', 'color', 'rects']);
     const page = pageValue(body.page, doc.page_count);
-    const quote = stringValue(body.quote, '选中文字', 50_000, { nonempty: true });
-    const comment = stringValue(body.comment, '批注评论', 20_000);
+    const kind = Object.hasOwn(body, 'kind') ? annotationKind(body.kind) : 'text';
+    const quote = kind === 'region' && !Object.hasOwn(body, 'quote') ? '' : stringValue(body.quote, '选中文字', 50_000, { nonempty: kind === 'text' });
+    if (kind === 'region' && quote !== '') throw new HttpError(400, '区域批注不包含选中文字，请省略 quote 或传入空字符串。');
+    const comment = Object.hasOwn(body, 'comment') ? stringValue(body.comment, '批注评论', 20_000) : '';
     const color = colorValue(body.color);
     const rects = rectanglesValue(body.rects);
+    if (kind === 'region' && rects.length !== 1) throw new HttpError(400, '区域批注必须包含恰好一个页面内的矩形区域。');
     const id = randomUUID();
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO annotations(id, document_id, page, quote, comment, color, rects, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, doc.id, page, quote, comment, color, JSON.stringify(rects), now, now);
+    db.prepare(`INSERT INTO annotations(id, document_id, page, kind, quote, comment, color, rects, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, doc.id, page, kind, quote, comment, color, JSON.stringify(rects), now, now);
     touchDocument.run(now, doc.id);
     res.status(201).json({ annotation: serializeAnnotation(findAnnotation.get(id, doc.id)) });
   });
@@ -454,8 +478,14 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     ];
     if (!annotations.length) parts.push('（暂无批注）');
     annotations.forEach((annotation, index) => {
-      parts.push(`### ${index + 1}. 第 ${annotation.page} 页 · ${annotation.color}`);
-      parts.push(blockquote(annotation.quote));
+      if (annotation.kind === 'region') {
+        const rect = JSON.parse(annotation.rects)[0];
+        parts.push(`### ${index + 1}. 第 ${annotation.page} 页 · 区域批注 · ${annotation.color}`);
+        parts.push(`区域坐标（归一化 0–1）：x=${rect.x}, y=${rect.y}, width=${rect.width}, height=${rect.height}`);
+      } else {
+        parts.push(`### ${index + 1}. 第 ${annotation.page} 页 · ${annotation.color}`);
+        parts.push(blockquote(annotation.quote));
+      }
       parts.push(annotation.comment ? `评论：\n\n${markdownText(annotation.comment)}` : '（无评论）');
     });
     const safeTitle = doc.title.replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, '_').slice(0, 100) || 'paper';
