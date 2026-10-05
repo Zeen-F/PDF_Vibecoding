@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { extractToc } from './toc.mjs';
+import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -393,8 +394,9 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     const body = objectBody(req.body, ['title', 'notesZh', 'notesEn', 'lastPage']);
     if (Object.keys(body).length === 0) return res.json({ document: serializeDocument(doc) });
     const title = Object.hasOwn(body, 'title') ? stringValue(body.title, '文献标题', 500, { nonempty: true, trim: true }) : doc.title;
-    const zh = Object.hasOwn(body, 'notesZh') ? stringValue(body.notesZh, '中文笔记', 250_000) : doc.notes_zh;
+    const zh = Object.hasOwn(body, 'notesZh') ? stringValue(body.notesZh, '笔记', MAX_NOTE_LENGTH) : doc.notes_zh;
     const en = Object.hasOwn(body, 'notesEn') ? stringValue(body.notesEn, '英文笔记', 250_000) : doc.notes_en;
+    if ((Object.hasOwn(body, 'notesZh') || Object.hasOwn(body, 'notesEn')) && mergeNotes(zh, en).length > MAX_NOTE_LENGTH) throw new HttpError(400, `笔记内容最多 ${MAX_NOTE_LENGTH.toLocaleString('en-US')} 个字符。`);
     const lastPage = Object.hasOwn(body, 'lastPage') ? pageValue(body.lastPage, doc.page_count) : doc.last_page;
     db.prepare('UPDATE documents SET title = ?, notes_zh = ?, notes_en = ?, last_page = ?, updated_at = ? WHERE id = ?')
       .run(title, zh, en, lastPage, new Date().toISOString(), doc.id);
@@ -472,8 +474,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     const parts = [
       `# ${markdownText(doc.title.replace(/[\r\n]+/g, ' '))}`,
       `原始文件：${markdownText(doc.filename)}  \n页数：${doc.page_count}  \n导出时间：${new Date().toISOString()}`,
-      '## 中文笔记', doc.notes_zh || '（暂无中文笔记）',
-      '## English notes', doc.notes_en || '(No English notes yet.)',
+      '## 笔记', mergeNotes(doc.notes_zh, doc.notes_en) || '（暂无笔记）',
       '## 阅读批注',
     ];
     if (!annotations.length) parts.push('（暂无批注）');

@@ -70,33 +70,31 @@ async function readingWorkflow(context) {
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
   await expect(page.locator('.textLayer span').first()).toBeVisible();
 
-  const notesZh = '## 浏览器验收\n\n相位裕度需要结合工作条件。';
-  const notesEn = '## Browser verification\n\nCompare the claim with the evidence.';
-  await page.getByRole('textbox', { name: '中文笔记', exact: true }).fill(notesZh);
-  await page.getByRole('textbox', { name: 'English notes', exact: true }).fill(notesEn);
+  const notes = '## 浏览器验收\n\n相位裕度需要结合工作条件。\n\nCompare the claim with the evidence.';
+  const editor = page.getByRole('textbox', { name: '笔记', exact: true });
+  await expect(page.locator('.notes-body textarea')).toHaveCount(1);
+  await editor.fill(notes);
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到本机');
   let saved = (await (await fetch(`${base}/api/documents/${document.id}`)).json()).document;
-  assert.equal(saved.notesZh, notesZh);
-  assert.equal(saved.notesEn, notesEn);
+  assert.equal(saved.notesZh, notes);
+  assert.equal(saved.notesEn, '');
 
   const pendingDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出 Markdown', exact: true }).click();
   const download = await pendingDownload;
   assert.match(download.suggestedFilename(), /\.md$/);
   const exported = await readFile(await download.path(), 'utf8');
-  assert.ok(exported.includes(notesZh), 'Export must contain the Chinese note');
-  assert.ok(exported.includes(notesEn), 'Export must contain the English note');
+  assert.ok(exported.includes(notes), 'Export must preserve the complete mixed-language note');
   assert.ok(exported.includes('reading-demo.pdf'), 'Export must identify the imported source');
 
   // Reload after a successful save, with no recovery draft masking server persistence.
   assert.equal(await page.evaluate(id => localStorage.getItem(`paperdesk-draft-${id}`), document.id), null);
   await page.reload();
-  await expect(page.getByRole('textbox', { name: '中文笔记', exact: true })).toHaveValue(notesZh);
-  await expect(page.getByRole('textbox', { name: 'English notes', exact: true })).toHaveValue(notesEn);
+  await expect(editor).toHaveValue(notes);
   saved = (await (await fetch(`${base}/api/documents/${document.id}`)).json()).document;
-  assert.equal(saved.notesZh, notesZh);
-  assert.equal(saved.notesEn, notesEn);
+  assert.equal(saved.notesZh, notes);
+  assert.equal(saved.notesEn, '');
 
   // Exercise the real text-selection modal as well as the isolated DOM harness.
   const text = page.locator('.textLayer span').filter({ hasText: /^Reading with intention$/ });
@@ -120,9 +118,83 @@ async function readingWorkflow(context) {
   assert.equal(annotation.quote, 'Reading with intention');
   await expect(dialog).not.toBeVisible();
   await expect(page.locator(`[data-annotation="${annotation.id}"]`).first()).toBeVisible();
-  console.log('PASS: isolated PDF import, rendered page, bilingual note save, Markdown download, reload and real text annotation');
+  console.log('PASS: isolated PDF import, rendered page, single note save, Markdown download, reload and real text annotation');
   await page.close();
   return document;
+}
+
+async function legacyNotesWorkflow(context, sampleDocument) {
+  const page = await context.newPage();
+  page.on('pageerror', error => pageErrors.push(`Legacy notes: ${error.message}`));
+  const base = `http://127.0.0.1:${appServer.address().port}`;
+  const endpoint = `${base}/api/documents/${sampleDocument.id}`;
+  const editor = page.getByRole('textbox', { name: '笔记', exact: true });
+  const readDocument = async () => (await (await fetch(endpoint)).json()).document;
+  await page.goto(base);
+  await expect(editor).toBeVisible();
+
+  const legacyZh = '## 浏览器验收\n\n旧笔记甲：先核对工作条件。';
+  const legacyEn = '## Legacy evidence\n\nKeep the original second field intact until editing.';
+  const combined = `${legacyZh}\n\n---\n\n${legacyEn}`;
+  const setup = await fetch(endpoint, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notesZh: legacyZh, notesEn: legacyEn }) });
+  assert.equal(setup.status, 200);
+  const noteWrites = [];
+  page.on('request', request => {
+    if (request.url() !== endpoint || request.method() !== 'PATCH') return;
+    const body = request.postDataJSON();
+    if (Object.hasOwn(body, 'notesZh') || Object.hasOwn(body, 'notesEn')) noteWrites.push(body);
+  });
+  await page.reload();
+  await expect(page.locator('.notes-body textarea')).toHaveCount(1);
+  await expect(editor).toHaveValue(combined);
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到本机');
+  const pendingDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 Markdown', exact: true }).click();
+  const exported = await readFile(await (await pendingDownload).path(), 'utf8');
+  assert.ok(exported.includes(combined));
+  assert.equal(exported.split(legacyZh).length - 1, 1);
+  assert.equal(exported.split(legacyEn).length - 1, 1);
+  let raw = await readDocument();
+  assert.equal(raw.notesZh, legacyZh);
+  assert.equal(raw.notesEn, legacyEn);
+  assert.deepEqual(noteWrites, [], 'Reading, a no-op save and export must not rewrite legacy fields');
+
+  const edited = `${combined}\n\n补充：统一编辑后保留两段旧内容。`;
+  await editor.fill(edited);
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到本机');
+  raw = await readDocument();
+  assert.equal(raw.notesZh, edited);
+  assert.equal(raw.notesEn, '');
+  assert.ok(noteWrites.some(body => body.notesZh === edited && body.notesEn === ''));
+  await page.reload();
+  await expect(editor).toHaveValue(edited);
+  assert.equal((await editor.inputValue()).split(legacyEn).length - 1, 1, 'Reload must not append the old second field again');
+
+  // Seed the old two-field draft shape before React starts, after the previous
+  // document's unload cleanup. Seed only once so the next reload tests persistence.
+  const draft = { notesZh: '## 浏览器验收\n\n恢复旧草稿甲。', notesEn: 'Recovered draft: keep this second paragraph.' };
+  const draftKey = `paperdesk-draft-${sampleDocument.id}`;
+  const draftValue = `${draft.notesZh}\n\n---\n\n${draft.notesEn}`;
+  await page.addInitScript(({ key, value }) => {
+    const seedKey = `${key}-seeded`;
+    if (!sessionStorage.getItem(seedKey)) {
+      localStorage.setItem(key, JSON.stringify(value));
+      sessionStorage.setItem(seedKey, 'true');
+    }
+  }, { key: draftKey, value: draft });
+  await page.reload();
+  await expect(editor).toHaveValue(draftValue);
+  await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到本机');
+  raw = await readDocument();
+  assert.equal(raw.notesZh, draftValue);
+  assert.equal(raw.notesEn, '');
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), draftKey), null);
+  await page.reload();
+  await expect(editor).toHaveValue(draftValue);
+  console.log('PASS: single-editor legacy fields display/export without writes, edit consolidation and old draft recovery without duplication');
+  await page.close();
 }
 
 async function tableOfContentsWorkflow(context, sampleDocument) {
@@ -208,7 +280,7 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
   await page.locator('.search-result').filter({ hasText: '笔记' }).click();
   await expect(notesPanel).toBeVisible();
   await expect(navigation).not.toBeVisible();
-  await expect(page.getByRole('textbox', { name: '中文笔记', exact: true })).toHaveValue(/浏览器验收/);
+  await expect(page.getByRole('textbox', { name: '笔记', exact: true })).toHaveValue(/浏览器验收/);
   await page.getByRole('textbox', { name: '全文搜索', exact: true }).fill('');
   await page.setViewportSize({ width: 1800, height: 1000 });
 
@@ -492,6 +564,7 @@ try {
   context.setDefaultTimeout(15000);
   await selectionRegression(context);
   const sampleDocument = await readingWorkflow(context);
+  await legacyNotesWorkflow(context, sampleDocument);
   await tableOfContentsWorkflow(context, sampleDocument);
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
