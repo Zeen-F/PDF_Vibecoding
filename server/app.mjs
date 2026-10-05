@@ -2,15 +2,15 @@ import express from 'express';
 import multer from 'multer';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, existsSync } from 'node:fs';
-import { writeFile, rename, unlink } from 'node:fs/promises';
+import { createReadStream, mkdirSync, existsSync } from 'node:fs';
+import { chmod, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { extractToc } from './toc.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
-const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_PAGES = 2000;
 const MAX_TEXT = 20_000_000;
 const COLORS = new Set(['yellow', 'green', 'pink']);
@@ -108,11 +108,11 @@ function extractText(items) {
   return text;
 }
 
-async function parsePdf(buffer) {
+async function parsePdf(filePath) {
   let task;
   try {
     task = getDocument({
-      data: new Uint8Array(buffer), isEvalSupported: false,
+      url: pathToFileURL(filePath).href, disableStream: true, disableAutoFetch: true, isEvalSupported: false,
       disableFontFace: true, useSystemFonts: false, useWorkerFetch: false,
       cMapUrl: `${path.join(pdfPackageDir, 'cmaps')}${path.sep}`, cMapPacked: true,
       standardFontDataUrl: `${path.join(pdfPackageDir, 'standard_fonts')}${path.sep}`,
@@ -149,6 +149,20 @@ async function parsePdf(buffer) {
   } finally {
     if (task) await task.destroy().catch(() => {});
   }
+}
+
+async function hashUpload(filePath) {
+  const hash = createHash('sha256');
+  const header = Buffer.alloc(1024);
+  let headerLength = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+    if (headerLength < header.length) {
+      headerLength += chunk.copy(header, headerLength, 0, Math.min(chunk.length, header.length - headerLength));
+    }
+  }
+  if (!header.subarray(0, headerLength).includes(Buffer.from('%PDF-'))) throw new HttpError(400, '请选择有效的 PDF 文件。');
+  return hash.digest('hex');
 }
 
 function localRequestOnly(req, res, next) {
@@ -190,6 +204,8 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   dataDir = path.resolve(dataDir);
   const pdfDir = path.join(dataDir, 'pdfs');
   mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
+  const incomingDir = path.join(pdfDir, '.incoming');
+  mkdirSync(incomingDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path.join(dataDir, 'paperdesk.sqlite'));
   db.exec(`
     PRAGMA foreign_keys = ON;
@@ -223,12 +239,50 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     next();
   });
   app.use(express.json({ limit: '2mb' }));
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_SIZE, files: 1, fields: 0 } });
+  const upload = multer({
+    storage: multer.diskStorage({ destination: incomingDir, filename: (_req, _file, callback) => callback(null, `${randomUUID()}.upload`) }),
+    limits: { files: 1, fields: 0, parts: 1 },
+  }).single('file');
+  function receiveUpload(req, res, next) {
+    upload(req, res, error => {
+      if (!error || error instanceof multer.MulterError) return next(error);
+      if (['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EIO', 'EROFS'].includes(error.code)) {
+        return next(new HttpError(500, '无法写入临时 PDF，请检查数据目录权限和剩余磁盘空间后重试。'));
+      }
+      next(new HttpError(400, '上传内容不完整或格式不正确，请重新选择一个 PDF 文件后重试。'));
+    });
+  }
+  let importQueue = Promise.resolve();
+  function queueImport(work) {
+    const pending = importQueue.then(work);
+    importQueue = pending.catch(() => {});
+    return pending;
+  }
   const findDocument = db.prepare('SELECT * FROM documents WHERE id = ?');
   const findHash = db.prepare('SELECT * FROM documents WHERE sha256 = ?');
   const findAnnotation = db.prepare('SELECT * FROM annotations WHERE id = ? AND document_id = ?');
   const findAnnotations = db.prepare('SELECT * FROM annotations WHERE document_id = ? ORDER BY page, created_at, id');
   const touchDocument = db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?');
+  const tocCache = new Map();
+  function documentToc(doc) {
+    if (tocCache.has(doc.id)) {
+      const cached = tocCache.get(doc.id);
+      tocCache.delete(doc.id);
+      tocCache.set(doc.id, cached);
+      return cached;
+    }
+    const pending = (async () => {
+      try {
+        return await extractToc(pathToFileURL(path.join(pdfDir, `${doc.id}.pdf`)), { getPageTexts: () => db.prepare('SELECT page, text FROM pages WHERE document_id = ? ORDER BY page').all(doc.id) });
+      } catch {
+        throw new HttpError(422, '暂时无法读取这份 PDF 的目录，请检查原始文件后重试。');
+      }
+    })();
+    tocCache.set(doc.id, pending);
+    if (tocCache.size > 8) tocCache.delete(tocCache.keys().next().value);
+    void pending.catch(() => { if (tocCache.get(doc.id) === pending) tocCache.delete(doc.id); });
+    return pending;
+  }
   function documentOr404(id) {
     const row = findDocument.get(id);
     if (!row) throw new HttpError(404, '没有找到这篇文献。');
@@ -244,48 +298,52 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   app.get('/api/documents', (_req, res) => {
     res.json({ documents: db.prepare('SELECT * FROM documents ORDER BY updated_at DESC, id').all().map(serializeDocument) });
   });
-  app.post('/api/documents', upload.single('file'), async (req, res) => {
+  app.post('/api/documents', receiveUpload, async (req, res) => {
     if (!req.file) throw new HttpError(400, '请选择一个 PDF 文件。');
-    const { buffer } = req.file;
-    if (!buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
-      throw new HttpError(400, '请选择有效的 PDF 文件。');
-    }
-    const sha256 = createHash('sha256').update(buffer).digest('hex');
-    const existing = findHash.get(sha256);
-    if (existing) return res.json({ document: serializeDocument(existing), duplicate: true });
-    const parsed = await parsePdf(buffer);
-    const duplicate = findHash.get(sha256);
-    if (duplicate) return res.json({ document: serializeDocument(duplicate), duplicate: true });
-    const id = randomUUID();
-    const filename = originalFilename(req.file.originalname);
-    const title = parsed.title || filename.replace(/\.pdf$/i, '').slice(0, 500) || '未命名文献';
-    const now = new Date().toISOString();
-    const temporaryPath = path.join(pdfDir, `${id}.tmp`);
-    const pdfPath = path.join(pdfDir, `${id}.pdf`);
-    let transactionOpen = false;
+    const temporaryPath = req.file.path;
+    let result;
     try {
-      await writeFile(temporaryPath, buffer, { flag: 'wx', mode: 0o600 });
-      await rename(temporaryPath, pdfPath);
-      // No await between BEGIN and COMMIT: concurrent requests cannot share a transaction.
-      db.exec('BEGIN IMMEDIATE');
-      transactionOpen = true;
-      db.prepare(`INSERT INTO documents(id, sha256, title, filename, page_count, byte_size,
-        created_at, updated_at, text_available) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        id, sha256, title, filename, parsed.pages.length, buffer.length, now, now, Number(parsed.textAvailable),
-      );
-      const insertPage = db.prepare('INSERT INTO pages(document_id, page, text) VALUES (?, ?, ?)');
-      parsed.pages.forEach((text, index) => insertPage.run(id, index + 1, text));
-      db.exec('COMMIT');
-      transactionOpen = false;
-    } catch (error) {
-      if (transactionOpen) db.exec('ROLLBACK');
-      await Promise.allSettled([unlink(temporaryPath), unlink(pdfPath)]);
-      // Two equal uploads can both finish parsing before their file writes complete.
-      const committedDuplicate = findHash.get(sha256);
-      if (committedDuplicate) return res.json({ document: serializeDocument(committedDuplicate), duplicate: true });
-      throw error;
+      result = await queueImport(async () => {
+        await chmod(temporaryPath, 0o600);
+        const sha256 = await hashUpload(temporaryPath);
+        const duplicate = findHash.get(sha256);
+        if (duplicate) return { document: serializeDocument(duplicate), duplicate: true };
+        // One parser per app runtime; large concurrent uploads wait on disk.
+        const parsed = await parsePdf(temporaryPath);
+        const id = randomUUID();
+        const filename = originalFilename(req.file.originalname);
+        const title = parsed.title || filename.replace(/\.pdf$/i, '').slice(0, 500) || '未命名文献';
+        const now = new Date().toISOString();
+        const pdfPath = path.join(pdfDir, `${id}.pdf`);
+        let transactionOpen = false;
+        let moved = false;
+        try {
+          await rename(temporaryPath, pdfPath);
+          moved = true;
+          // No await between BEGIN and COMMIT: concurrent requests cannot share a transaction.
+          db.exec('BEGIN IMMEDIATE');
+          transactionOpen = true;
+          db.prepare(`INSERT INTO documents(id, sha256, title, filename, page_count, byte_size,
+            created_at, updated_at, text_available) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+            id, sha256, title, filename, parsed.pages.length, req.file.size, now, now, Number(parsed.textAvailable),
+          );
+          const insertPage = db.prepare('INSERT INTO pages(document_id, page, text) VALUES (?, ?, ?)');
+          parsed.pages.forEach((text, index) => insertPage.run(id, index + 1, text));
+          db.exec('COMMIT');
+          transactionOpen = false;
+        } catch (error) {
+          if (transactionOpen) db.exec('ROLLBACK');
+          if (moved) await unlink(pdfPath).catch(() => {});
+          const committedDuplicate = findHash.get(sha256);
+          if (committedDuplicate) return { document: serializeDocument(committedDuplicate), duplicate: true };
+          throw error;
+        }
+        return { document: serializeDocument(findDocument.get(id)), duplicate: false };
+      });
+    } finally {
+      await unlink(temporaryPath).catch(error => { if (error.code !== 'ENOENT') console.error('Cannot remove temporary PDF:', error.message); });
     }
-    res.status(201).json({ document: serializeDocument(findDocument.get(id)), duplicate: false });
+    res.status(result.duplicate ? 200 : 201).json(result);
   });
 
   app.get('/api/documents/:id', (req, res) => {
@@ -295,9 +353,19 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     const doc = documentOr404(req.params.id);
     res.type('application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="paper.pdf"');
-    res.sendFile(path.join(pdfDir, `${doc.id}.pdf`), (error) => {
-      if (error && !res.headersSent) next(new HttpError(404, '原始 PDF 文件已丢失，请检查本地数据目录。'));
+    // The library may live under .local; only this DB-selected PDF route may
+    // traverse a hidden parent directory. Global static routes remain restricted.
+    res.sendFile(`${doc.id}.pdf`, { root: pdfDir, dotfiles: 'allow' }, (error) => {
+      if (!error || res.headersSent) return;
+      if (['ENOENT', 'ENOTDIR'].includes(error.code)) {
+        return next(new HttpError(404, '原始 PDF 文件已丢失，请检查本地数据目录。'));
+      }
+      if (error.status === 416) return next(new HttpError(416, '请求的 PDF 字节范围无效。'));
+      next(new HttpError(500, '暂时无法读取原始 PDF，请检查数据目录权限和文件状态后重试。'));
     });
+  });
+  app.get('/api/documents/:id/toc', async (req, res) => {
+    res.json(await documentToc(documentOr404(req.params.id)));
   });
   app.patch('/api/documents/:id', (req, res) => {
     const doc = documentOr404(req.params.id);
@@ -408,8 +476,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   app.use((error, _req, res, _next) => {
     if (res.headersSent) return;
     if (error instanceof multer.MulterError) {
-      const message = error.code === 'LIMIT_FILE_SIZE' ? 'PDF 不能超过 50 MiB。' : '请仅上传一个 PDF，文件字段名应为 file。';
-      return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: message });
+      return res.status(400).json({ error: '请仅上传一个 PDF，文件字段名应为 file，不要附加其他文件或字段。' });
     }
     if (error.type === 'entity.too.large') return res.status(413).json({ error: '请求内容过大，请缩短笔记或批注。' });
     if (error instanceof SyntaxError && error.status === 400) return res.status(400).json({ error: 'JSON 格式不正确。' });
@@ -418,5 +485,5 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   let closed = false;
-  return { app, close() { if (!closed) { db.close(); closed = true; } } };
+  return { app, close() { if (!closed) { tocCache.clear(); db.close(); closed = true; } } };
 }

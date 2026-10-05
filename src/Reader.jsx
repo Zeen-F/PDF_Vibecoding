@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { ChevronLeft, ChevronRight, Highlighter, LoaderCircle, FileWarning } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Highlighter, LoaderCircle, FileWarning, ListTree } from 'lucide-react';
 import { prepareTextLayer, readPdfSelection } from './selection.js';
+import Contents from './Contents.jsx';
 GlobalWorkerOptions.workerSrc = workerUrl;
 
 function markMatches(container, query) {
@@ -16,11 +17,11 @@ function markMatches(container, query) {
   first?.scrollIntoView({block:'nearest', inline:'nearest'});
 }
 
-export default function Reader({ document, page, onPage, annotations, onSelection, selectionLocked, find, focusedAnnotation, focusTick }) {
+export default function Reader({ document, page, onPage, annotations, onSelection, selectionLocked, find, focusedAnnotation, focusTick, tocOpen, onToggleToc }) {
   const [pdf, setPdf] = useState(null), [zoom, setZoom] = useState('fit');
   const [width, setWidth] = useState(650), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [rendered, setRendered] = useState(null), [pageInput,setPageInput] = useState(String(page));
-  const scrollRef = useRef(null), paperRef = useRef(null), canvasRef = useRef(null), textRef = useRef(null), latestFind = useRef(find);
+  const scrollRef = useRef(null), paperRef = useRef(null), canvasRef = useRef(null), textRef = useRef(null), latestFind = useRef(find), readerRef = useRef(null), tocButtonRef = useRef(null);
   const selectionLockedRef = useRef(selectionLocked);
   selectionLockedRef.current = selectionLocked;
   latestFind.current = find;
@@ -114,12 +115,16 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
   };
   const gotoInput = () => {const next=Number(pageInput);if(Number.isInteger(next)&&next>=1&&next<=document.pageCount) onPage(next);else setPageInput(String(page));};
   const ready=rendered?.id===document.id && rendered.page===page;
-  return <section className="reader" aria-label="PDF 阅读器">
+  const closeToc = () => { onToggleToc(false); tocButtonRef.current?.focus(); };
+  const jumpFromToc = next => { onPage(next); if (readerRef.current.clientWidth <= 700) closeToc(); };
+  return <section className="reader" aria-label="PDF 阅读器" ref={readerRef}>
     <div className="reader-toolbar">
-      <div className="pager"><button className="icon-button" aria-label="上一页" disabled={page<=1||busy} onClick={()=>onPage(page-1)}><ChevronLeft size={17}/></button><input aria-label="页码" type="number" min="1" max={document.pageCount} value={pageInput} onChange={e=>setPageInput(e.target.value)} onBlur={gotoInput} onKeyDown={e=>{if(e.key==='Enter')gotoInput();}}/><span>/ {document.pageCount}</span><button className="icon-button" aria-label="下一页" disabled={page>=document.pageCount||busy} onClick={()=>onPage(page+1)}><ChevronRight size={17}/></button></div>
+      <div className="reader-navigation"><button ref={tocButtonRef} className={`contents-toggle ${tocOpen ? 'selected' : ''}`} aria-label={tocOpen ? '收起目录' : '展开目录'} aria-expanded={tocOpen} onClick={() => onToggleToc(!tocOpen)}><ListTree size={16}/><span>目录</span></button><div className="pager"><button className="icon-button" aria-label="上一页" disabled={page<=1||busy} onClick={()=>onPage(page-1)}><ChevronLeft size={17}/></button><input aria-label="页码" type="number" min="1" max={document.pageCount} value={pageInput} onChange={e=>setPageInput(e.target.value)} onBlur={gotoInput} onKeyDown={e=>{if(e.key==='Enter')gotoInput();}}/><span>/ {document.pageCount}</span><button className="icon-button" aria-label="下一页" disabled={page>=document.pageCount||busy} onClick={()=>onPage(page+1)}><ChevronRight size={17}/></button></div></div>
       <span className="reader-hint"><Highlighter size={14}/> 选中文字，留下想法</span>
       <select aria-label="阅读缩放" value={zoom} onChange={e=>setZoom(e.target.value)}><option value="fit">适合宽度</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select>
     </div>
+    <div className="reader-body">
+      {tocOpen && <Contents key={document.id} document={document} page={page} onJump={jumpFromToc} onClose={closeToc}/>}
     <div className="pdf-scroll" ref={scrollRef}>
       {busy&&<div className="reader-status" role="status"><LoaderCircle className="spin" size={17}/> 正在排版页面…</div>}
       {error&&<div className="reader-error" role="alert"><FileWarning/><p>{error}</p><button onClick={()=>window.location.reload()}>重新加载</button></div>}
@@ -129,6 +134,7 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
       </div>
       {!document.textAvailable&&<p className="scan-notice">这份 PDF 没有可提取的文字。你仍可阅读和写笔记；搜索与文字高亮需要可选中的文字层。</p>}
       <div className="page-footer">{document.filename} <span>·</span> {page} / {document.pageCount}</div>
+    </div>
     </div>
   </section>;
 }
