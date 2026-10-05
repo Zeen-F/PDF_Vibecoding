@@ -1,8 +1,8 @@
 # Paperdesk local API contract
 
-All routes same origin, JSON error `{error: string}`. Node >=24.0.0, Express, node:sqlite, pdfjs-dist legacy. PORT defaults 4317, bind 127.0.0.1. PAPERDESK_DATA_DIR overrides default ./data. No external requests during app use.
+All routes same origin, JSON error `{error: string}`. Node >=24.0.0, Express, node:sqlite, pdfjs-dist legacy. PORT defaults 4317, bind 127.0.0.1. PAPERDESK_DATA_DIR overrides default ./data. Ordinary reading/editing uses no external service. The optional MCP bridge can provide the user's requested document data or explicitly shared selection to Codex.
 
-Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,lastPage}`; id is UUID. Annotation: `{id,documentId,page,kind,quote,comment,color,rects,createdAt,updatedAt}`. `kind` is `text` or `region`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
+Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,notesRevision,lastPage}`; id is UUID. `notesRevision` is lowercase SHA-256 of `JSON.stringify([raw notesZh, raw notesEn])`. Annotation: `{id,documentId,page,kind,quote,comment,color,rects,createdAt,updatedAt}`. `kind` is `text` or `region`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
 
 - GET /api/health => `{ok:true}`
 - GET /api/documents => `{documents: Document[]}` (notes may be included)
@@ -10,7 +10,7 @@ Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailab
 - GET /api/documents/:id => `{document,annotations: Annotation[]}`
 - GET /api/documents/:id/file => PDF bytes
 - GET /api/documents/:id/toc => `TableOfContents` (see below). Extracted locally on demand for existing or newly imported PDFs; no reimport or database migration required.
-- PATCH /api/documents/:id JSON partial `{title?,notesZh?,notesEn?,lastPage?}` => `{document}`. Updates only supplied fields; strict bounded validation.
+- PATCH /api/documents/:id JSON partial `{title?,notesZh?,notesEn?,lastPage?,expectedNotesRevision?}` => `{document}`. Updates only supplied fields; strict bounded validation. When changing notes, a supplied revision must match the current raw fields or the whole request returns 409 without writing. New UI clients always supply it; omitting it remains compatible with old clients. Title/page-only updates do not compare note revisions.
 - POST /api/documents/:id/annotations JSON `{page,kind?,quote?,comment?,color,rects}` => 201 `{annotation}`. Omitted `kind` defaults to `text` for existing clients. Text annotations require a nonempty `quote` and 1–200 rectangles. Regions require exactly one rectangle and an omitted or empty `quote`; any nonempty region quote is rejected. Omitted `comment` defaults to an empty string. Canvas preview data is not an API field and is never persisted.
 - PATCH /api/documents/:id/annotations/:annotationId JSON `{comment?,color?}` => `{annotation}`
 - DELETE /api/documents/:id/annotations/:annotationId => `{ok:true}`
@@ -20,6 +20,23 @@ Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailab
 The document API retains `notesZh` and `notesEn` for storage compatibility; they are not two editors in the current UI. `shared/notes.mjs` combines two nonempty values with exactly `\n\n---\n\n`, retaining their original contents and order. With one empty value it returns the other without a separator. Opening, unchanged saving and exporting a legacy document do not consolidate its raw fields. An actual single-editor edit saves the complete displayed text to `notesZh` and clears `notesEn`; existing two-field local drafts are recovered into the same editor. The schema remains version 2. The combined note is capped at 500,007 UTF-16 code units, retaining the previous two-field capacity plus the separator; the legacy `notesEn` field remains capped at 250,000. Over-limit updates reject the whole request without changing either field.
 
 Region exports identify `区域批注`, physical page, color, comment and the `x`, `y`, `width`, `height` coordinates normalized to 0–1. They do not fabricate quotation text or include a screenshot. Region comments participate in annotation search; words contained only in page images do not become searchable. PATCH cannot change an annotation's `kind`, page, quote or geometry.
+
+## Local Codex bridge
+
+These routes keep the existing Host/Origin validation and schema 2. They add no cloud account, filesystem access or model API. The bridge verifies `service`, `apiVersion` and the configured `libraryId` before every MCP operation.
+
+- GET /api/plugin/status => `{service:'paperdesk',apiVersion:1,instanceId,libraryId}`. `instanceId` is a UUID regenerated at service startup. `libraryId` hashes the resolved data directory; it identifies the local binding without returning a filesystem path. It is not an authentication secret.
+- GET /api/documents/:id/pages/:page => `{documentId,page,text,textAvailable}`. Page must be a canonical positive integer within this document. `textAvailable` describes that page, and false does not trigger OCR. The MCP reader bounds/paginates the returned text.
+- POST /api/reader-sessions/:UUID JSON `{documentId,page,selection,notesDirty,visible}` => `{session:{sessionId,documentId,page,updatedAt},document}`. All fields are required. Selection is null until the user shares it, or `{kind:'text'|'region',text,rects,preview?}`. Text selections require a nonempty string (at most 50,000 UTF-16 units); regions require empty text and exactly one normalized rectangle. Optional preview is a validated PNG data URL at most 2 MiB including its prefix, with bounded decompression. This route alone accepts a 2.5 MiB JSON body.
+- GET /api/reader-context?sessionId=UUID => `{sessionId,documentId,title,page,selection,notesDirty,updatedAt,notesRevision}`. Hidden, closed or expired sessions return 404. Without an ID, exactly one visible session is required; multiple visible sessions return 409 with metadata-only `sessions`, never a guessed selection.
+- DELETE /api/reader-sessions/:UUID => `{ok:true}`. Idempotently forgets the transient session.
+- POST /api/documents/:id/notes/append JSON `{text,expectedNotesRevision,requestId,page?}` => `{document,appended,requestId}`. Revision and UUID requestId are mandatory. The service atomically checks the revision and any live unsaved draft for this document, merges legacy fields, appends the text (optional `### 第 N 页` heading), and saves to the single note. Conflict returns 409 without changing saved content. Combined length obeys the same note limit. The MCP tool further limits an individual addition to 50,000 characters.
+
+Sessions live only in memory, expire after 30 seconds without a heartbeat, and are limited to 8. The browser refreshes them every 3 seconds; previews never enter SQLite, annotations or exports. Page/document/selection changes or cancelling sharing clear the shared selection. Hidden sessions cannot supply current context but still block note append while a live draft is dirty.
+
+Append idempotency remembers up to 512 successful request IDs for 10 minutes in the current service process. Retry an uncertain request with its **original complete payload**, including its revision, and the same request ID. A matching retry returns `appended:false` without another write; reusing the ID for different content returns 409. Capacity returns 429 instead of discarding a still-valid record. Restart/expiry clears this protection; re-read saved notes and reconcile an uncertain result before making a new request.
+
+The UI uses revision checks for ordinary note saves and receives clean external additions through heartbeat responses. A conflicting draft remains in the editor/local recovery storage with autosave paused. An old draft without a known base revision cannot automatically overwrite a different saved note. Draft slots are independent per window; losing the session pointer still leaves a read-only historical recovery entry. Explicit preservation uses individual UUID archive keys (with legacy-array compatibility), avoiding cross-window archive overwrites. The user can preserve a draft and load saved notes; loading never silently discards the draft. A session is advisory coordination for this single local service, not multi-user authentication or a global lock across other processes.
 
 ## Storage version
 

@@ -1,0 +1,18 @@
+{
+  "name": "paperdesk",
+  "version": "0.1.0",
+  "description": "连接本机纸间 PDF 阅读器，按需共享选区、读取单页和追加用户要求记录的笔记。",
+  "author": { "name": "Paperdesk" },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "纸间 Paperdesk",
+    "shortDescription": "本机 PDF 阅读与按需上下文共享",
+    "longDescription": "连接已配置的本机资料库，提供单页文字、主动共享的选区和单一笔记区。原生阅读面板为实验功能。",
+    "developerName": "Paperdesk",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": ["打开纸间阅读器", "解释我在纸间共享的选区", "把刚才的回答记到这篇文献的笔记里"],
+    "brandColor": "#687C60"
+  }
+}

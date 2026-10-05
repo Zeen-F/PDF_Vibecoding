@@ -9,6 +9,7 @@ import { createServer as createViteServer } from 'vite';
 import { createApp } from '../server/app.mjs';
 import { bookmarkedPdf, unverifiedContentsPdf, verifiedContentsPdf, writeLargeUploadPdf } from '../tests/fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
+import { pluginWorkflow } from '../tests/plugin.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -181,11 +182,23 @@ async function legacyNotesWorkflow(context, sampleDocument) {
     const seedKey = `${key}-seeded`;
     if (!sessionStorage.getItem(seedKey)) {
       localStorage.setItem(key, JSON.stringify(value));
+      sessionStorage.removeItem(key.replace('paperdesk-draft-', 'paperdesk-draft-slot-'));
       sessionStorage.setItem(seedKey, 'true');
     }
   }, { key: draftKey, value: draft });
   await page.reload();
   await expect(editor).toHaveValue(draftValue);
+  await expect(page.locator('.notes-conflict')).toBeVisible();
+  raw = await readDocument();
+  assert.equal(raw.notesZh, edited, 'An old draft without a base revision must not overwrite newer saved notes');
+  await page.getByRole('button', { name: '保留草稿并载入已保存笔记', exact: true }).click();
+  await expect(editor).toHaveValue(edited);
+  await page.locator('.preserved-drafts summary').click();
+  await expect(page.getByRole('textbox', { name: '保留的笔记草稿 1', exact: true })).toHaveValue(draftValue);
+  // Choosing this recovered text in the editor is now an explicit edit, with
+  // the current saved revision as its base and the old draft archived safely.
+  await editor.fill(draftValue);
+  await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到本机');
   raw = await readDocument();
   assert.equal(raw.notesZh, draftValue);
@@ -193,7 +206,7 @@ async function legacyNotesWorkflow(context, sampleDocument) {
   assert.equal(await page.evaluate(key => localStorage.getItem(key), draftKey), null);
   await page.reload();
   await expect(editor).toHaveValue(draftValue);
-  console.log('PASS: single-editor legacy fields display/export without writes, edit consolidation and old draft recovery without duplication');
+  console.log('PASS: legacy fields without writes, edit consolidation and unknown-base draft conflict/recovery without duplication');
   await page.close();
 }
 
@@ -568,6 +581,7 @@ try {
   await tableOfContentsWorkflow(context, sampleDocument);
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
+  await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

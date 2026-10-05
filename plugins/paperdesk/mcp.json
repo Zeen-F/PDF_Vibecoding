@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "paperdesk": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["scripts/start.mjs"],
+      "cwd": "./",
+      "env": {}
+    }
+  }
+}
