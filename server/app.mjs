@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { extractToc } from './toc.mjs';
 import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
+import { notesRevision, revisionValue, registerPluginApi } from './plugin-api.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -91,7 +92,7 @@ function serializeDocument(row) {
     pageCount: row.page_count, byteSize: row.byte_size,
     createdAt: row.created_at, updatedAt: row.updated_at,
     textAvailable: Boolean(row.text_available), notesZh: row.notes_zh,
-    notesEn: row.notes_en, lastPage: row.last_page,
+    notesEn: row.notes_en, lastPage: row.last_page, notesRevision: notesRevision(row),
   };
 }
 
@@ -260,6 +261,8 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
     next();
   });
+  // Only reader snapshots carry a transient PNG. Keep the existing note limit.
+  app.use('/api/reader-sessions', express.json({ limit: '2.5mb' }));
   app.use(express.json({ limit: '2mb' }));
   const upload = multer({
     storage: multer.diskStorage({ destination: incomingDir, filename: (_req, _file, callback) => callback(null, `${randomUUID()}.upload`) }),
@@ -315,6 +318,21 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     if (!row) throw new HttpError(404, '没有找到这条批注。');
     return row;
   }
+  function transaction(work) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = work();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  const pluginApi = registerPluginApi({
+    app, db, dataDir, documentOr404, serializeDocument, transaction,
+    HttpError, objectBody, stringValue, pageValue, rectanglesValue,
+  });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/documents', (_req, res) => {
@@ -390,17 +408,25 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     res.json(await documentToc(documentOr404(req.params.id)));
   });
   app.patch('/api/documents/:id', (req, res) => {
-    const doc = documentOr404(req.params.id);
-    const body = objectBody(req.body, ['title', 'notesZh', 'notesEn', 'lastPage']);
-    if (Object.keys(body).length === 0) return res.json({ document: serializeDocument(doc) });
-    const title = Object.hasOwn(body, 'title') ? stringValue(body.title, '文献标题', 500, { nonempty: true, trim: true }) : doc.title;
-    const zh = Object.hasOwn(body, 'notesZh') ? stringValue(body.notesZh, '笔记', MAX_NOTE_LENGTH) : doc.notes_zh;
-    const en = Object.hasOwn(body, 'notesEn') ? stringValue(body.notesEn, '英文笔记', 250_000) : doc.notes_en;
-    if ((Object.hasOwn(body, 'notesZh') || Object.hasOwn(body, 'notesEn')) && mergeNotes(zh, en).length > MAX_NOTE_LENGTH) throw new HttpError(400, `笔记内容最多 ${MAX_NOTE_LENGTH.toLocaleString('en-US')} 个字符。`);
-    const lastPage = Object.hasOwn(body, 'lastPage') ? pageValue(body.lastPage, doc.page_count) : doc.last_page;
-    db.prepare('UPDATE documents SET title = ?, notes_zh = ?, notes_en = ?, last_page = ?, updated_at = ? WHERE id = ?')
-      .run(title, zh, en, lastPage, new Date().toISOString(), doc.id);
-    res.json({ document: serializeDocument(findDocument.get(doc.id)) });
+    const body = objectBody(req.body, ['title', 'notesZh', 'notesEn', 'lastPage', 'expectedNotesRevision']);
+    if (Object.hasOwn(body, 'expectedNotesRevision')) revisionValue(body.expectedNotesRevision, HttpError);
+    const document = transaction(() => {
+      const doc = documentOr404(req.params.id);
+      if (!Object.keys(body).some(key => key !== 'expectedNotesRevision')) return serializeDocument(doc);
+      const changesNotes = Object.hasOwn(body, 'notesZh') || Object.hasOwn(body, 'notesEn');
+      if (changesNotes && Object.hasOwn(body, 'expectedNotesRevision') && body.expectedNotesRevision !== notesRevision(doc)) {
+        throw new HttpError(409, '笔记已在其他窗口或插件中更新，请先读取最新笔记再合并保存。');
+      }
+      const title = Object.hasOwn(body, 'title') ? stringValue(body.title, '文献标题', 500, { nonempty: true, trim: true }) : doc.title;
+      const zh = Object.hasOwn(body, 'notesZh') ? stringValue(body.notesZh, '笔记', MAX_NOTE_LENGTH) : doc.notes_zh;
+      const en = Object.hasOwn(body, 'notesEn') ? stringValue(body.notesEn, '英文笔记', 250_000) : doc.notes_en;
+      if (changesNotes && mergeNotes(zh, en).length > MAX_NOTE_LENGTH) throw new HttpError(400, `笔记内容最多 ${MAX_NOTE_LENGTH.toLocaleString('en-US')} 个字符。`);
+      const lastPage = Object.hasOwn(body, 'lastPage') ? pageValue(body.lastPage, doc.page_count) : doc.last_page;
+      db.prepare('UPDATE documents SET title = ?, notes_zh = ?, notes_en = ?, last_page = ?, updated_at = ? WHERE id = ?')
+        .run(title, zh, en, lastPage, new Date().toISOString(), doc.id);
+      return serializeDocument(findDocument.get(doc.id));
+    });
+    res.json({ document });
   });
   app.post('/api/documents/:id/annotations', (req, res) => {
     const doc = documentOr404(req.params.id);
@@ -516,5 +542,5 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   let closed = false;
-  return { app, close() { if (!closed) { tocCache.clear(); db.close(); closed = true; } } };
+  return { app, close() { if (!closed) { pluginApi.close(); tocCache.clear(); db.close(); closed = true; } } };
 }

@@ -14,15 +14,19 @@
     "test:api": "node --test tests/*.test.mjs",
     "test:browser": "node scripts/test-browser.mjs",
     "check": "npm run test:api && npm run build && npm run test:browser",
-    "predev": "node scripts/prepare-assets.mjs"
+    "predev": "node scripts/prepare-assets.mjs",
+    "plugin:setup": "node scripts/setup-plugin.mjs",
+    "plugin:install": "node scripts/setup-plugin.mjs --install"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "express": "5.2.1",
     "lucide-react": "^0.577.0",
     "multer": "2.4.0",
     "pdfjs-dist": "6.4.299",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
