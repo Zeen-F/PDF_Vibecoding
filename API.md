@@ -2,7 +2,7 @@
 
 All routes same origin, JSON error `{error: string}`. Node >=24.0.0, Express, node:sqlite, pdfjs-dist legacy. PORT defaults 4317, bind 127.0.0.1. PAPERDESK_DATA_DIR overrides default ./data. No external requests during app use.
 
-Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,lastPage}`; id is UUID. Annotation: `{id,documentId,page,quote,comment,color,rects,createdAt,updatedAt}`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
+Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,lastPage}`; id is UUID. Annotation: `{id,documentId,page,kind,quote,comment,color,rects,createdAt,updatedAt}`. `kind` is `text` or `region`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
 
 - GET /api/health => `{ok:true}`
 - GET /api/documents => `{documents: Document[]}` (notes may be included)
@@ -11,11 +11,17 @@ Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailab
 - GET /api/documents/:id/file => PDF bytes
 - GET /api/documents/:id/toc => `TableOfContents` (see below). Extracted locally on demand for existing or newly imported PDFs; no reimport or database migration required.
 - PATCH /api/documents/:id JSON partial `{title?,notesZh?,notesEn?,lastPage?}` => `{document}`. Updates only supplied fields; strict bounded validation.
-- POST /api/documents/:id/annotations JSON `{page,quote,comment,color,rects}` => 201 `{annotation}`
+- POST /api/documents/:id/annotations JSON `{page,kind?,quote?,comment?,color,rects}` => 201 `{annotation}`. Omitted `kind` defaults to `text` for existing clients. Text annotations require a nonempty `quote` and 1–200 rectangles. Regions require exactly one rectangle and an omitted or empty `quote`; any nonempty region quote is rejected. Omitted `comment` defaults to an empty string. Canvas preview data is not an API field and is never persisted.
 - PATCH /api/documents/:id/annotations/:annotationId JSON `{comment?,color?}` => `{annotation}`
 - DELETE /api/documents/:id/annotations/:annotationId => `{ok:true}`
 - GET /api/search?q=... => `{results:[{documentId,title,page,snippet,source}]}`. source = text|title|notes|annotation. Case-insensitive literal substring, Unicode CJK supported; excerpts near match; maximum 100 results. Return pages across all docs, cap/snippet behavior documented.
 - GET /api/documents/:id/export => text/markdown UTF-8 download containing title, original filename, Chinese/English notes, all annotations with page, quote, comment, color. Escape metadata and quote text as appropriate; user note bodies preserve Markdown. Ensure safe Content-Disposition.
+
+Region exports identify `区域批注`, physical page, color, comment and the `x`, `y`, `width`, `height` coordinates normalized to 0–1. They do not fabricate quotation text or include a screenshot. Region comments participate in annotation search; words contained only in page images do not become searchable. PATCH cannot change an annotation's `kind`, page, quote or geometry.
+
+## Storage version
+
+Schema 2 adds `annotations.kind` with a `text` default and `text`/`region` validation. Startup upgrades existing records in a transaction without rewriting their IDs, quotes, comments or rectangles; repeated startup is idempotent and migration errors roll back. A database with `user_version > 2` is rejected rather than downgraded. Back up the complete library before first opening it with this version; reverting to an older application requires restoring the pre-migration backup.
 
 ## Table of contents
 

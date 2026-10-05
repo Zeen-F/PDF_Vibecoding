@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { ChevronLeft, ChevronRight, Highlighter, LoaderCircle, FileWarning, ListTree } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Highlighter, LoaderCircle, FileWarning, ListTree, ScanLine } from 'lucide-react';
 import { prepareTextLayer, readPdfSelection } from './selection.js';
 import Contents from './Contents.jsx';
+import RegionSelection from './RegionSelection.jsx';
+import './regions.css';
 GlobalWorkerOptions.workerSrc = workerUrl;
 
 function markMatches(container, query) {
@@ -17,15 +19,18 @@ function markMatches(container, query) {
   first?.scrollIntoView({block:'nearest', inline:'nearest'});
 }
 
-export default function Reader({ document, page, onPage, annotations, onSelection, selectionLocked, find, focusedAnnotation, focusTick, tocOpen, onToggleToc }) {
+export default function Reader({ document, page, onPage, annotations, selection, onSelection, selectionLocked, find, focusedAnnotation, focusTick, tocOpen, onToggleToc }) {
   const [pdf, setPdf] = useState(null), [zoom, setZoom] = useState('fit');
   const [width, setWidth] = useState(650), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [rendered, setRendered] = useState(null), [pageInput,setPageInput] = useState(String(page));
+  const [regionMode, setRegionMode] = useState(false);
   const scrollRef = useRef(null), paperRef = useRef(null), canvasRef = useRef(null), textRef = useRef(null), latestFind = useRef(find), readerRef = useRef(null), tocButtonRef = useRef(null);
-  const selectionLockedRef = useRef(selectionLocked);
+  const selectionLockedRef = useRef(selectionLocked), selectionRef = useRef(selection);
   selectionLockedRef.current = selectionLocked;
+  selectionRef.current = selection;
   latestFind.current = find;
   useEffect(() => { setPageInput(String(page)); },[page]);
+  useEffect(() => { setRegionMode(false); }, [document.id]);
   useEffect(() => {
     const el = scrollRef.current;
     const observer = new ResizeObserver(entries => setWidth(Math.max(240, entries[0].contentRect.width)));
@@ -42,7 +47,9 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
     if(!pdf) return;
     let cancelled = false, renderTask, textLayer;
     setBusy(true); setError(''); setRendered(null);
-    if(!selectionLockedRef.current) onSelection(null);
+    const draft = selectionRef.current;
+    const keepRegion = draft?.kind === 'region' && draft.documentId === document.id && draft.page === page;
+    if(!selectionLockedRef.current && !keepRegion) onSelection(null);
     (async()=>{
       const p = await pdf.getPage(page);
       if(cancelled) return;
@@ -83,13 +90,13 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
     target?.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
   },[focusedAnnotation,focusTick,rendered]);
   useEffect(()=>{
-    if(busy || rendered?.id!==document.id || rendered?.page!==page || selectionLocked) return;
+    if(busy || rendered?.id!==document.id || rendered?.page!==page || selectionLocked || regionMode) return;
     const owner=window.document,layer=textRef.current;
     let frame=0;
     const capture=()=>{
       frame=0;
       const result=readPdfSelection(layer,paperRef.current);
-      onSelection(result ? {documentId:document.id,page,...result} : null);
+      onSelection(result ? {documentId:document.id,page,kind:'text',...result} : null);
     };
     const schedule=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(capture);};
     const down=event=>{if(layer.contains(event.target))layer.classList.add('selecting');};
@@ -108,8 +115,9 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
       owner.removeEventListener('keyup',finish);
       window.removeEventListener('blur',finish);
     };
-  },[busy,rendered,selectionLocked,document.id,page,onSelection]);
+  },[busy,rendered,selectionLocked,regionMode,document.id,page,onSelection]);
   const copySelection=event=>{
+    if(regionMode) return;
     const result=readPdfSelection(textRef.current,paperRef.current);
     if(result && event.clipboardData){event.clipboardData.setData('text/plain',result.quote);event.preventDefault();}
   };
@@ -117,11 +125,18 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
   const ready=rendered?.id===document.id && rendered.page===page;
   const closeToc = () => { onToggleToc(false); tocButtonRef.current?.focus(); };
   const jumpFromToc = next => { onPage(next); if (readerRef.current.clientWidth <= 700) closeToc(); };
-  return <section className="reader" aria-label="PDF 阅读器" ref={readerRef}>
+  const toggleRegion = () => {
+    if(busy || selectionLocked) return;
+    window.getSelection()?.removeAllRanges();
+    textRef.current?.classList.remove('selecting');
+    onSelection(null);
+    setRegionMode(value => !value);
+  };
+  return <section className={`reader ${regionMode ? 'region-mode' : ''}`} aria-label="PDF 阅读器" ref={readerRef}>
     <div className="reader-toolbar">
       <div className="reader-navigation"><button ref={tocButtonRef} className={`contents-toggle ${tocOpen ? 'selected' : ''}`} aria-label={tocOpen ? '收起目录' : '展开目录'} aria-expanded={tocOpen} onClick={() => onToggleToc(!tocOpen)}><ListTree size={16}/><span>目录</span></button><div className="pager"><button className="icon-button" aria-label="上一页" disabled={page<=1||busy} onClick={()=>onPage(page-1)}><ChevronLeft size={17}/></button><input aria-label="页码" type="number" min="1" max={document.pageCount} value={pageInput} onChange={e=>setPageInput(e.target.value)} onBlur={gotoInput} onKeyDown={e=>{if(e.key==='Enter')gotoInput();}}/><span>/ {document.pageCount}</span><button className="icon-button" aria-label="下一页" disabled={page>=document.pageCount||busy} onClick={()=>onPage(page+1)}><ChevronRight size={17}/></button></div></div>
-      <span className="reader-hint"><Highlighter size={14}/> 选中文字，留下想法</span>
-      <select aria-label="阅读缩放" value={zoom} onChange={e=>setZoom(e.target.value)}><option value="fit">适合宽度</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select>
+      <span className="reader-hint">{regionMode ? <><ScanLine size={14}/> 拖动框选区域 · Esc 取消</> : <><Highlighter size={14}/> 选中文字，留下想法</>}</span>
+      <div className="reader-tools"><button className="region-toggle" aria-label="区域批注" aria-pressed={regionMode} disabled={busy || selectionLocked} onClick={toggleRegion}><ScanLine size={16}/><span>区域批注</span></button><select aria-label="阅读缩放" value={zoom} onChange={e=>setZoom(e.target.value)}><option value="fit">适合宽度</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></div>
     </div>
     <div className="reader-body">
       {tocOpen && <Contents key={document.id} document={document} page={page} onJump={jumpFromToc} onClose={closeToc}/>}
@@ -130,9 +145,10 @@ export default function Reader({ document, page, onPage, annotations, onSelectio
       {error&&<div className="reader-error" role="alert"><FileWarning/><p>{error}</p><button onClick={()=>window.location.reload()}>重新加载</button></div>}
       <div className={`pdf-paper ${busy?'is-loading':''}`} ref={paperRef} data-page={page}>
         <div ref={canvasRef}/><div className="textLayer" ref={textRef} tabIndex={0} aria-label="PDF 本页文字" onCopy={copySelection}/>
-        {ready&&<div className="highlight-layer" aria-hidden="true">{annotations.filter(a=>a.page===page).flatMap(a=>a.rects.map((r,i)=><span key={`${a.id}-${i}`} className={`highlight-rect ${a.color} ${focusedAnnotation===a.id?'focused':''}`} data-annotation={a.id} style={{left:`${r.x*100}%`,top:`${r.y*100}%`,width:`${r.width*100}%`,height:`${r.height*100}%`}}/>))}</div>}
+        {ready&&<div className="highlight-layer" aria-hidden="true">{annotations.filter(a=>a.page===page).flatMap(a=>a.rects.map((r,i)=><span key={`${a.id}-${i}`} className={`highlight-rect ${a.color} ${a.kind==='region'?'region-annotation':''} ${focusedAnnotation===a.id?'focused':''}`} data-annotation={a.id} style={{left:`${r.x*100}%`,top:`${r.y*100}%`,width:`${r.width*100}%`,height:`${r.height*100}%`}}/>))}</div>}
+        {ready && regionMode && <RegionSelection key={`${document.id}:${page}`} enabled={!selectionLocked && !busy} documentId={document.id} page={page} canvasRef={canvasRef} selection={selection} onSelection={onSelection}/>}
       </div>
-      {!document.textAvailable&&<p className="scan-notice">这份 PDF 没有可提取的文字。你仍可阅读和写笔记；搜索与文字高亮需要可选中的文字层。</p>}
+      {!document.textAvailable&&<p className="scan-notice">这份 PDF 没有可提取的文字。点击“区域批注”，拖动框选图片、公式或文字区域并添加评论；仍可写双语笔记。区域批注不会识别图片中的文字。</p>}
       <div className="page-footer">{document.filename} <span>·</span> {page} / {document.pageCount}</div>
     </div>
     </div>
