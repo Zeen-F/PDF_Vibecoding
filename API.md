@@ -74,3 +74,12 @@ type TableOfContents = {
 Missing document IDs return 404 through the same document lookup as other endpoints. Other errors use the existing JSON error shape.
 
 Integration clarification: normalized rectangles refer to the intrinsic/default PDF.js viewport (including the PDF's intrinsic rotation); UI offers zoom but no extra rotation. Title/notes results use page 1; annotation results use their own page. Empty rectangle lists and rectangles extending beyond page bounds are invalid. Frontend uses q to mark matching PDF text spans after navigation (for text hits), and focuses notes/annotations for their respective source.
+
+
+## Native component single-page rendering
+
+`GET /api/documents/:id/reader-page?page=N&width=1200` renders one database-known document page on the local server. `page` is required and must be a positive physical PDF page; `width` is optional, integer 600–1600. Unknown arguments and malformed values are rejected. The response is `{ documentId, page, width, height, mimeType: 'image/png', image: '<base64>', text, textTruncated }`. `width`/`height` are actual pixels, scaled proportionally within 1600×2400. Text is limited to 12000 UTF-16 units without splitting a surrogate pair. No PDF file-byte limit is added.
+
+Rendering uses a terminable worker with a bounded queue and a 30-second request deadline. Source PDFs, notes and saved reading position are not modified. Errors use the existing JSON shape; the same Host/Origin validation still blocks `Origin: null` and foreign sites. MCP accesses this endpoint server-side and exposes display data only in private component `_meta`.
+
+Transient `kind: 'text'` reader-session selections may use `rects: []` when copied from the native plain-text excerpt view, which has no PDF geometry. `kind: 'region'` still requires one real normalized rectangle. Saved text and region annotations still reject empty geometry; this exception does not manufacture on-page highlights.

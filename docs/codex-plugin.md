@@ -65,15 +65,23 @@ npm run plugin:install
 
 每次工具操作及 UI resource 读取前都会重新确认 loopback 地址、`service: paperdesk`、API 版本和配置中的 `libraryId`。连接不符即停止，不跟随 HTTP 重定向、不尝试其他库。
 
-## 原生 UI：实验性
+## 原生阅读面板（0.2.0）
 
-`paperdesk_open_reader` 关联 `ui://paperdesk/reader.html`，MIME 为 `text/html;profile=mcp-app`，同时声明 OpenAI 的 global/thread 入口。两类入口都接受空参数；尚未注册 PDF 文件查看器入口，因为宿主文件资源还没有安全导入和映射流程。
+`paperdesk_open_reader` 关联新的 `ui://paperdesk/reader-v2.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 避免宿主复用旧 iframe 面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
 
-wrapper 内嵌已有本机阅读器，CSP 只列出配置的精确 loopback origin。它生成独立 `readerSession` 并固定读取此会话，避免和外部浏览器窗口混淆。iframe 通知只接受既定子窗口及 origin；阅读器也核对 parentOrigin 与 referrer。opaque/null origin 无法可靠接收撤回通知，因此同时禁用子窗口消息桥、面板读取按钮与 `ui/update-model-context`。这种环境只通过对话里的普通 MCP 工具按需读取主动共享内容，不使用通配来源传送选区。
+面板直接绘制单页 PNG、页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
 
-共享时先通过 `tools/call` 从后端读取会话，再按宿主 `hostCapabilities.updateModelContext` 声明的 text/image/structuredContent 能力调用 `ui/update-model-context`。心跳不会反复调用工具。上下文写入串行化，取消共享排在进行中的注入之后清空，避免延迟响应恢复旧选区。
+6 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`。文献列表与共享读取复用已有公共工具。
 
-自动化测试验证了资源内容、来源校验、能力协商与延迟取消协议，**不代表当前 Codex/ChatGPT 桌面客户端已实际渲染原生面板或接收模型上下文**。宿主版本、CSP、内嵌本机网络访问和支持的扩展都可能影响显示。若面板不可用，使用返回的本机链接与普通工具；不放宽 API Origin、不创建公网隧道，也不自动更改宿主信任设置。
+完整页面图片、页文字、目录及笔记只放在结果 `_meta`，不放进 `content` 或 `structuredContent`。专用工具声明 `_meta.ui.visibility: ["app"]`，模型只使用前述 8 个普通文献工具。界面显示和模型共享是两个独立动作。
+
+面板生成自己的 UUID 会话，切页、换书、取消共享时清除选区。扫描区域在页面上拖框，预览 PNG 后点“交给 Codex”；文字页可在“本页文字”区选择短段，确认引文预览后共享。这里没有 PDF 坐标的文字选段使用空 `rects`，不会伪造高亮位置；保存批注的矩形约束保持不变。
+
+共享先写入对应阅读会话，再读取 `paperdesk_get_context`，按宿主声明的文字／图片上下文能力注入。页面、会话及注入请求均须排队和检查版本，避免延迟响应恢复已撤回的选区。没有图片能力时明确提示区域图不能交给对话，不能把坐标回执当作图片成功。null/opaque origin 不再因嵌套窗口通信而被禁用；来源仍固定检查为宿主父窗口。
+
+笔记停止输入不会自动保存；用户点击“保存笔记”后按版本号保存。未保存草稿阻止换书，409 冲突保留当前草稿，并可核对独立只读的最新笔记、自行合并后明确保存。面板隐藏时撤回共享，继续保留未保存笔记的保护状态；恢复可见不会重新共享。浏览器版继续提供导入、完整高亮/区域批注、搜索与 Markdown 导出。
+
+宿主是否实际保留私密 `_meta`、允许 app-only 工具及图片上下文，仍须在真实客户端验收；严格 sandbox 浏览器测试不能替代这一点。旧面板需要关闭后重新打开，旧会话若仍保留原工具清单，需在新会话启用更新后的插件。服务错误会显示可重试的说明和准确备用链接，不创建公网隧道、不修改宿主信任设置。
 
 ## 开发与验证
 
@@ -82,6 +90,8 @@ node --test tests/plugin-mcp.test.mjs
 npm run check
 ```
 
-协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。另用消息模拟检查 wrapper 的来源过滤、能力降级、心跳去重、延迟取消与 opaque origin 禁用注入；模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
+协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个公共工具及 6 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突；模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
 
 包同时提供 portable `plugin.json`/typed `mcp.json` 与旧客户端的 `.codex-plugin/plugin.json`/`.mcp.json`。依据 [OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[OpenAI UI 扩展](https://developers.openai.com/plugins/build/extensions) 与 [MCP Apps 规范](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)。
+
+本次修复和验证见 [0.2.0 打开流程验收](history/codex-plugin-0.2.0.md)。

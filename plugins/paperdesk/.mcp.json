@@ -6,7 +6,7 @@
       "cwd": ".",
       "env_vars": ["PAPERDESK_PLUGIN_CONFIG"],
       "startup_timeout_sec": 30,
-      "tool_timeout_sec": 30
+      "tool_timeout_sec": 60
     }
   }
 }
