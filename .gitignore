@@ -1,0 +1,17 @@
+node_modules/
+dist/
+public/pdf-assets/
+data/
+.local/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+.DS_Store
+coverage/
+playwright-report/
+test-results/

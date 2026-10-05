@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paperdesk selection regression harness</title>
+  <style>
+    :root { color-scheme: light; font: 15px/1.5 system-ui, sans-serif; color: #203731; background: #f5f5ef; }
+    body { max-width: 1000px; margin: 28px auto; padding: 0 24px 48px; }
+    h1 { font-size: 25px; margin-bottom: 8px; }
+    p { max-width: 850px; }
+    button { border: 0; border-radius: 6px; padding: 12px 20px; background: #285743; color: white; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .6; }
+    #status { margin-left: 12px; font-weight: 650; }
+    #results { white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #ccd8cb; padding: 18px; min-height: 80px; }
+    #fixture-host { border: 1px dashed #87978a; padding: 16px; overflow: auto; }
+    .fixture-paper { position: relative; width: 620px; height: 380px; background: white; }
+    .fixture-layer { position: absolute; inset: 0; overflow: visible; font-family: Arial, sans-serif; font-size: 18px; line-height: 22px; }
+    .fixture-layer span { position: absolute; display: inline-block; white-space: pre; margin: 0; padding: 0; }
+    .outside-copy { font: 13px/1.2 monospace; color: #925c32; }
+  </style>
+</head>
+<body>
+  <h1>PDF text selection: real DOM regressions</h1>
+  <p>This isolated harness uses positioned PDF-like text spans, actual browser selections and measured DOM rectangles. It imports the application selection helpers directly. It makes no API requests and does not modify the document library.</p>
+  <button id="run-tests" type="button">Run selection tests</button>
+  <span id="status" role="status" aria-live="polite">Not run</span>
+  <pre id="results">Press “Run selection tests”.</pre>
+  <details open>
+    <summary>Last test fixture</summary>
+    <div id="fixture-host"></div>
+  </details>
+  <script type="module" src="./selection.browser.mjs"></script>
+</body>
+</html>
