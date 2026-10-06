@@ -1,18 +1,28 @@
 {
   "name": "paperdesk",
-  "version": "0.2.0",
-  "description": "连接本机纸间 PDF 阅读器，按需共享选区、读取单页和追加用户要求记录的笔记。",
-  "author": { "name": "Paperdesk" },
+  "version": "0.3.0",
+  "description": "连接本机纸间 PDF 阅读器，按需共享选区并在当前 Codex 对话中提问，明确要求后追加笔记。",
+  "author": {
+    "name": "Paperdesk"
+  },
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "纸间 Paperdesk",
-    "shortDescription": "本机 PDF 阅读与按需上下文共享",
-    "longDescription": "连接已配置的本机资料库，提供单页文字、主动共享的选区和单一笔记区。原生面板直接显示单页，不依赖嵌套网页；展示数据按需共享。",
+    "shortDescription": "本机 PDF 阅读、选区讨论与笔记",
+    "longDescription": "在原生面板阅读本机文献，预览后选择解释、提炼要点或自定义提问。只共享不会启动回答；聊天内容仅在明确要求时追加到单一笔记区。",
     "developerName": "Paperdesk",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
-    "defaultPrompt": ["打开纸间阅读器", "解释我在纸间共享的选区", "把刚才的回答记到这篇文献的笔记里"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "打开纸间阅读器",
+      "解释我在纸间共享的选区",
+      "提炼我共享选区的要点",
+      "把刚才的回答记到这篇文献的笔记里"
+    ],
     "brandColor": "#687C60"
   }
 }
