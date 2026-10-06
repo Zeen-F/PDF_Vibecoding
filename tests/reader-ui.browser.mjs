@@ -7,11 +7,13 @@ import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { EmbeddedResourceSchema } from '@modelcontextprotocol/sdk/types.js';
 import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
+import { assertHandoffPrompt, assertCropPng } from './chatgpt-handoff.browser.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const fullCapabilities = { serverTools: {}, updateModelContext: { text: {}, image: {}, structuredContent: {} }, message: { text: {}, image: {} }, openLinks: {} };
+const fullCapabilities = { serverTools: {}, updateModelContext: { text: {}, image: {}, structuredContent: {} }, message: { text: {}, image: {} }, openLinks: {}, downloadFile: {} };
 const hasContext = value => Boolean(value?.content?.length || value?.structuredContent);
 
 function deferred() {
@@ -22,7 +24,7 @@ function deferred() {
 
 // Real MCP transport, real isolated API, and a browser sandbox that cannot fetch
 // the local service. Only the parent host's tools/call bridge crosses that gap.
-export async function nativeReaderWorkflow({ context, base, onQuestionPreview }) {
+export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onChatGPTPreview }) {
   const tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-native-reader-'));
   const harnesses = [];
   let client;
@@ -57,12 +59,20 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
     const privateNotes = 'NATIVE_PRIVATE_NOTE：这段笔记只应在阅读界面显示。';
     assert.equal((await request(`/documents/${book.id}`, { notesZh: privateNotes, notesEn: '' }, 'PATCH')).status, 200);
 
-    async function harness({ documentId = book.id, pageNumber = 1, capabilities = fullCapabilities, failOpenLink = false, libraryOnly = false, useClock = false, holdInitialNotes = false } = {}) {
+    async function harness({ documentId = book.id, pageNumber = 1, capabilities = fullCapabilities, failOpenLink = false, libraryOnly = false, useClock = false, holdInitialNotes = false, failClipboard = false } = {}) {
       const page = await context.newPage(); await page.setViewportSize({ width: 1500, height: 1100 });
       if (useClock) await page.clock.install();
+      if (failClipboard) await page.addInitScript(() => {
+        window.handoffClipboard = { mode: 'reject', calls: [], pending: [] };
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => {
+          window.handoffClipboard.calls.push(text);
+          if (window.handoffClipboard.mode === 'hold') return new Promise(resolve => window.handoffClipboard.pending.push(resolve));
+          throw new Error('Isolated clipboard rejection fixture');
+        } } });
+      });
       const item = { page, close: () => page.close() }; harnesses.push(item);
-      const calls = [], updates = [], messages = [], links = [], errors = [], network = [], holds = [];
-      let initialized = false, messageResult = { isError: false };
+      const calls = [], updates = [], messages = [], downloads = [], links = [], errors = [], network = [], holds = [];
+      let initialized = false, messageResult = { isError: false }, downloadResult = { isError: false };
       const holdNext = (predicate, phase = 'after') => {
         const hold = { predicate, phase, used: false, entered: deferred(), release: deferred(), finished: deferred() }; holds.push(hold);
         return { entered: hold.entered.promise, finished: hold.finished.promise, release: () => hold.release.resolve() };
@@ -84,6 +94,11 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
         else if (message.method === 'ui/message') {
           assert.equal(message.params.role, 'user'); assert.ok(Array.isArray(message.params.content));
           messages.push(message.params); result = messageResult;
+        }
+        else if (message.method === 'ui/download-file') {
+          assert.deepEqual(Object.keys(message.params), ['contents']); assert.equal(message.params.contents.length, 1);
+          for (const resource of message.params.contents) EmbeddedResourceSchema.parse(resource);
+          downloads.push(message.params); result = downloadResult;
         }
         else if (message.method === 'ui/open-link') { links.push(message.params); if (failOpenLink) throw new Error('模拟宿主拒绝打开链接'); result = {}; }
         else if (message.method === 'ui/notifications/size-changed') return;
@@ -117,8 +132,9 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
       await expect.poll(() => initialized).toBe(true);
       await page.evaluate(result => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: result }, '*'), opened);
       const frame = page.frameLocator('#native-panel');
-      Object.assign(item, { page, frame, calls, updates, messages, links, errors, network, url, holdNext, initialNotesHold,
+      Object.assign(item, { page, frame, calls, updates, messages, downloads, links, errors, network, url, holdNext, initialNotesHold,
         setMessageResult(value) { messageResult = value; },
+        setDownloadResult(value) { downloadResult = value; },
         sessionId: () => calls.filter(call => call.method === 'tools/call' && call.params.name === 'paperdesk_reader_session').at(-1)?.params.arguments.sessionId,
         async notify(result) { await page.evaluate(value => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: value }, '*'), result); },
         async close() { for (const hold of holds) hold.release.resolve(); if (!page.isClosed()) { await page.evaluate(() => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', id: 'test-teardown', method: 'ui/resource-teardown', params: {} }, '*')).catch(() => {}); await expect.poll(() => page.evaluate(() => window.nativeMessages.some(message => message.id === 'test-teardown' && !message.method)), { timeout: 5000 }).toBe(true).catch(() => {}); await page.close(); } },
@@ -127,7 +143,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
     }
     const image = (h, number) => h.frame.getByRole('img', { name: `PDF 第 ${number} 页`, exact: true });
     async function ready(h, number) {
-      await expect(image(h, number)).toBeVisible();
+      await expect(image(h, number)).toBeVisible({ timeout: 20000 });
       await expect.poll(() => image(h, number).evaluate(element => element.complete && element.naturalWidth > 0 && element.naturalHeight > 0)).toBe(true);
       await expect.poll(h.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     }
@@ -511,6 +527,124 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
     assert.equal(initialNotes.calls.some(call => call.params?.name === 'paperdesk_reader_save_notes'), false);
     await initialNotes.close();
     console.log('PASS: late note reads cannot roll back a newer manual save or an append received during initial loading');
+
+    const prepareChatGPT = async h => {
+      await h.frame.getByRole('button', { name: '交给 ChatGPT', exact: true }).click();
+      const section = h.frame.getByRole('region', { name: 'ChatGPT 提问准备', exact: true });
+      await expect(section).toBeVisible();
+      return section;
+    };
+    const assertHandoffPrivate = async h => {
+      assert.equal(h.messages.length, 0, 'Manual ChatGPT handoff must never start a Codex reply');
+      assert.equal(h.updates.length, 0, 'Manual ChatGPT handoff must not inject anything into Codex context');
+      assert.equal((await currentContext(h)).selection, null);
+      assert.ok(h.calls.filter(call => call.params?.name === 'paperdesk_reader_session').every(call => call.params.arguments.selection === null));
+      assert.deepEqual(h.network, [h.url], 'No document context may be carried in a remote network request');
+      assert.equal(h.calls.some(call => /save_notes|append_note/.test(call.params?.name || '')), false);
+    };
+    const handoffText = await harness({ pageNumber: 2, failClipboard: true }); await ready(handoffText, 2); await selectText(handoffText);
+    let handoffSection = await prepareChatGPT(handoffText);
+    let portablePrompt = handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true });
+    let portableQuestion = handoffSection.getByRole('textbox', { name: '向 ChatGPT 提问', exact: true });
+    await expect(portablePrompt).toHaveAttribute('readonly', '');
+    await expect(portableQuestion).toHaveAttribute('maxlength', '4000');
+    assertHandoffPrompt(await portablePrompt.inputValue(), { title: book.title, page: 2, quote: 'A short introduction', excluded: [book.id, handoffText.sessionId(), privateNotes, 'for navigation checks.'] });
+    await portableQuestion.fill(' \n ');
+    await expect(handoffSection.getByRole('button', { name: '复制 ChatGPT 提问', exact: true })).toBeDisabled();
+    const handoffQuestion = '只解释选区中的条件 α < β，不读取其他资料。';
+    await portableQuestion.fill(handoffQuestion);
+    assert.ok((await portablePrompt.inputValue()).includes(handoffQuestion));
+    await handoffSection.getByRole('button', { name: '复制 ChatGPT 提问', exact: true }).click();
+    await expect(handoffText.frame.locator('#chatgpt-status')).toContainText(/手动复制/);
+    assert.equal(await portablePrompt.evaluate(element => element.selectionStart === 0 && element.selectionEnd === element.value.length), true);
+    await handoffSection.getByRole('button', { name: '打开 ChatGPT', exact: true }).click();
+    await expect.poll(() => handoffText.links.length).toBe(1);
+    assert.deepEqual(handoffText.links[0], { url: 'https://chatgpt.com/' }, 'Opening ChatGPT must not append a prompt, document ID, query or fragment to the URL');
+    await assertHandoffPrivate(handoffText);
+    await handoffText.page.frames()[1].evaluate(() => { window.handoffClipboard.mode = 'hold'; });
+    await handoffSection.getByRole('button', { name: '复制 ChatGPT 提问', exact: true }).click();
+    await expect.poll(() => handoffText.page.frames()[1].evaluate(() => window.handoffClipboard.pending.length)).toBe(1);
+    const clipboardCalls = await handoffText.page.frames()[1].evaluate(() => window.handoffClipboard.calls.length);
+    await handoffText.frame.getByRole('button', { name: '取消共享', exact: true }).click();
+    await expect(handoffSection).toBeHidden();
+    await handoffText.frame.getByRole('button', { name: '下一页', exact: true }).click(); await ready(handoffText, 3);
+    await selectText(handoffText, 'Scope is a child of Introduction.');
+    handoffSection = await prepareChatGPT(handoffText);
+    portableQuestion = handoffSection.getByRole('textbox', { name: '向 ChatGPT 提问', exact: true });
+    await expect(portableQuestion).not.toHaveValue(handoffQuestion);
+    assertHandoffPrompt(await handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true }).inputValue(), { title: book.title, page: 3, quote: 'Scope is a child of Introduction.', excluded: [handoffQuestion, 'A short introduction'] });
+    await expect(handoffSection.getByRole('button', { name: '复制 ChatGPT 提问', exact: true })).toBeDisabled();
+    const pendingStatus = await handoffText.frame.locator('#chatgpt-status').textContent();
+    const pendingPrompt = await handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true }).inputValue();
+    await handoffText.page.frames()[1].evaluate(() => { window.handoffClipboard.pending.shift()(); window.handoffClipboard.mode = 'reject'; });
+    await expect(handoffSection.getByRole('button', { name: '复制 ChatGPT 提问', exact: true })).toBeEnabled();
+    assert.match(pendingStatus, /等待上次复制/);
+    await expect(handoffText.frame.locator('#chatgpt-status')).toHaveText('');
+    await expect(handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true })).toHaveValue(pendingPrompt);
+    assert.equal(await handoffText.page.frames()[1].evaluate(() => window.handoffClipboard.calls.length), clipboardCalls, 'A new page cannot overlap clipboard writes or be overwritten by an old completion');
+    await assertHandoffPrivate(handoffText); await handoffText.close();
+
+    const handoffRegion = await harness({ documentId: scan.id, failClipboard: true }); await ready(handoffRegion, 1);
+    await handoffRegion.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(handoffRegion, [.5, .36], [.15, .18]);
+    const handoffPng = await handoffRegion.frame.getByRole('img', { name: '选区预览', exact: true }).getAttribute('src');
+    const handoffPageSize = await image(handoffRegion, 1).evaluate(element => ({ width: element.naturalWidth, height: element.naturalHeight }));
+    handoffSection = await prepareChatGPT(handoffRegion);
+    assertHandoffPrompt(await handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true }).inputValue(), { title: scan.title, page: 1, excluded: [scan.id, handoffRegion.sessionId(), privateNotes] });
+    handoffRegion.setDownloadResult({ isError: true });
+    await handoffSection.getByRole('button', { name: '保存选区图片', exact: true }).click();
+    await expect.poll(() => handoffRegion.downloads.length).toBe(1);
+    await expect(handoffRegion.frame.locator('#chatgpt-status')).toContainText(/拒绝|取消|未.*保存|未.*下载/);
+    await expect(handoffSection).toBeVisible();
+    await expect(handoffRegion.frame.getByRole('img', { name: '选区预览', exact: true })).toHaveAttribute('src', handoffPng);
+    handoffRegion.setDownloadResult({ isError: false });
+    await handoffSection.getByRole('button', { name: '保存选区图片', exact: true }).click();
+    await expect.poll(() => handoffRegion.downloads.length).toBe(2);
+    const downloadedResource = handoffRegion.downloads[1].contents[0].resource;
+    assert.equal(downloadedResource.uri, 'file:///paperdesk-page-1-selection.png');
+    assert.equal(downloadedResource.mimeType, 'image/png');
+    assertCropPng(Buffer.from(downloadedResource.blob, 'base64'), handoffPng, handoffPageSize);
+    await expect(handoffRegion.frame.locator('#chatgpt-status')).toContainText('宿主已接受');
+    await expect(handoffRegion.frame.locator('#chatgpt-status')).toContainText('确认文件已保存');
+    await expect(handoffRegion.frame.locator('#chatgpt-image-fallback')).toBeHidden();
+    await onChatGPTPreview?.(handoffRegion.page);
+    await assertHandoffPrivate(handoffRegion);
+    const portableBeforeHide = await handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true }).inputValue();
+    const handoffVisibility = value => handoffRegion.page.frames()[1].evaluate(state => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, value);
+    // Sandbox lifecycle simulation: opening another app must not discard the
+    // local handoff snapshot, although no model-shared selection may survive.
+    await handoffVisibility('hidden');
+    await expect.poll(async () => (await currentContext(handoffRegion)).status).toBe(404);
+    await handoffVisibility('visible');
+    await expect.poll(async () => (await currentContext(handoffRegion)).status).toBe(200);
+    await expect(handoffSection).toBeVisible();
+    await expect(handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true })).toHaveValue(portableBeforeHide);
+    await expect(handoffRegion.frame.getByRole('img', { name: '选区预览', exact: true })).toHaveAttribute('src', handoffPng);
+    await assertHandoffPrivate(handoffRegion);
+    await handoffRegion.frame.getByRole('button', { name: '取消共享', exact: true }).click();
+    await handoffRegion.frame.getByRole('button', { name: '下一页', exact: true }).click(); await ready(handoffRegion, 2);
+    await drag(handoffRegion, [.2, .25], [.65, .45]); handoffSection = await prepareChatGPT(handoffRegion);
+    assert.notEqual(await handoffRegion.frame.getByRole('img', { name: '选区预览', exact: true }).getAttribute('src'), handoffPng);
+    assertHandoffPrompt(await handoffSection.getByRole('textbox', { name: '准备给 ChatGPT 的问题', exact: true }).inputValue(), { title: scan.title, page: 2, excluded: [scan.id] });
+    await assertHandoffPrivate(handoffRegion); await handoffRegion.close();
+    console.log('PASS: native ChatGPT handoff stays private, opens only the fixed URL and downloads the exact preview through the SDK resource schema');
+
+    const { downloadFile: _downloadCapability, openLinks: _openCapability, ...noExportCapabilities } = fullCapabilities;
+    const noExport = await harness({ documentId: scan.id, capabilities: noExportCapabilities }); await ready(noExport, 1);
+    await noExport.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(noExport, [.15, .18], [.5, .36]);
+    handoffSection = await prepareChatGPT(noExport);
+    await handoffSection.getByRole('button', { name: '保存选区图片', exact: true }).click();
+    await expect(noExport.frame.locator('#chatgpt-status')).toContainText('尚未保存');
+    await expect(noExport.frame.getByRole('button', { name: '在浏览器保存图片', exact: true })).toBeVisible();
+    await expect(noExport.frame.getByRole('img', { name: '选区预览', exact: true })).toBeVisible();
+    assert.equal(noExport.downloads.length, 0);
+    await handoffSection.getByRole('button', { name: '打开 ChatGPT', exact: true }).click();
+    await expect(noExport.frame.getByRole('textbox', { name: 'ChatGPT 网址', exact: true })).toHaveValue('https://chatgpt.com/');
+    assert.equal(noExport.links.length, 0);
+    await assertHandoffPrivate(noExport); await noExport.close();
+    console.log('PASS: absent native download/open capabilities retain the preview and offer truthful manual browser fallbacks');
 
     for (const item of harnesses) assert.deepEqual(item.errors, [], 'Native reader must not raise uncaught browser exceptions');
     assert.equal(stderr, '', 'Native MCP transport must keep stderr quiet');

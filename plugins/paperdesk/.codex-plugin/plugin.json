@@ -1,7 +1,7 @@
 {
   "name": "paperdesk",
-  "version": "0.3.0",
-  "description": "连接本机纸间 PDF 阅读器，按需共享选区并在当前 Codex 对话中提问，明确要求后追加笔记。",
+  "version": "0.4.0",
+  "description": "连接本机纸间 PDF 阅读器，准备问题与选区交给普通 ChatGPT，也可在当前 Codex 对话讨论并按明确要求追加笔记。",
   "author": {
     "name": "Paperdesk"
   },
@@ -9,8 +9,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "纸间 Paperdesk",
-    "shortDescription": "本机 PDF 阅读、选区讨论与笔记",
-    "longDescription": "在原生面板阅读本机文献，预览后选择解释、提炼要点或自定义提问。只共享不会启动回答；聊天内容仅在明确要求时追加到单一笔记区。",
+    "shortDescription": "本机 PDF 阅读与 ChatGPT 提问准备",
+    "longDescription": "在本机阅读并预览选区，准备问题和图片后手动交给普通 ChatGPT；也可选择在当前 Codex 对话讨论。回答不自动保存到笔记。",
     "developerName": "Paperdesk",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +19,8 @@
     ],
     "defaultPrompt": [
       "打开纸间阅读器",
-      "解释我在纸间共享的选区",
-      "提炼我共享选区的要点",
+      "打开纸间，准备把选区交给普通 ChatGPT",
+      "在当前 Codex 对话解释我共享的选区",
       "把刚才的回答记到这篇文献的笔记里"
     ],
     "brandColor": "#687C60"

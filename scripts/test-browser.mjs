@@ -11,6 +11,7 @@ import { bookmarkedPdf, unverifiedContentsPdf, verifiedContentsPdf, writeLargeUp
 import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 import { pluginWorkflow } from '../tests/plugin.browser.mjs';
 import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
+import { chatgptHandoffWorkflow } from '../tests/chatgpt-handoff.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -584,6 +585,7 @@ try {
   await scanRegionWorkflow(context);
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
+  await chatgptHandoffWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {
