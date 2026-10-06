@@ -6,12 +6,68 @@ import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { createManagedBrowser } from './chatgpt-browser.mjs';
+import { runBridge } from './chatgpt-ego.mjs';
 
 const implementation = pathToFileURL(fileURLToPath(new URL('./chatgpt-ego.mjs', import.meta.url))).href;
 const prefix = 'PAPERDESK_CHATGPT_EVENT ';
 const uuid = /^[a-f0-9-]{36}$/i;
 
-export function createChatgptRunner({ stateDir, command = process.env.PAPERDESK_EGO_COMMAND }) {
+export function createChatgptRunner(options) {
+  const engine = options.engine || (options.command ? 'ego' : process.env.PAPERDESK_CHATGPT_ENGINE || 'managed-browser');
+  if (engine === 'ego') return createEgoChatgptRunner(options);
+  if (engine !== 'managed-browser') throw new Error('Unknown ChatGPT connection engine');
+  return createManagedChatgptRunner(options);
+}
+
+export function createManagedChatgptRunner({ stateDir, profileDir = process.env.PAPERDESK_CHATGPT_PROFILE_DIR || path.join(homedir(), '.config', 'paperdesk', 'chatgpt-browser'), browserFactory = createManagedBrowser } = {}) {
+  const browser = browserFactory({ profileDir });
+  let closed = false, active = false;
+  const activeDirectories = new Set();
+  return {
+    connectionStatus: () => browser.status(),
+    openConnection: () => browser.open(),
+    closeConnection() { if (active) throw new Error('Question active'); return browser.disconnect(); },
+    async run(job, emit, { resume = false } = {}) {
+      if (closed) return { state: 'failed', dispatchInvoked: false, message: '纸间服务已停止，问题未发送。' };
+      if (active || !uuid.test(job.id)) throw new Error('Invalid or concurrent browser question');
+      active = true;
+      const jobDir = path.join(stateDir, job.id), inputPath = path.join(jobDir, 'input.json');
+      let dispatchInvoked = Boolean(job.dispatchInvoked);
+      const durableDispatch = async () => { try { dispatchInvoked ||= Boolean(JSON.parse(await readFile(path.join(jobDir, 'ledger.json'), 'utf8')).dispatchInvoked); } catch {} };
+      try {
+        await mkdir(jobDir, { recursive: true, mode: 0o700 });
+        activeDirectories.add(jobDir);
+        const values = [job.documentId, job.page, job.question, job.selection];
+        if (job.followupContext) values.push(job.followupContext);
+        const payloadHash = createHash('sha256').update(JSON.stringify(values)).digest('hex');
+        await writeFile(inputPath, JSON.stringify({ job, payloadHash, resume, jobDir }), { mode: 0o600 });
+        if (closed) return { state: 'failed', dispatchInvoked, message: '纸间服务已停止，未启动新的连接。' };
+        const api = Object.create(browser);
+        api.emit = async patch => { dispatchInvoked ||= patch.dispatchInvoked === true; await emit(patch); };
+        const result = await runBridge(api, inputPath);
+        await durableDispatch();
+        if (result?.state === 'failed' && !dispatchInvoked) await browser.discardUnsent?.('paperdesk-question-' + job.id);
+        if (!result) return { state: dispatchInvoked ? 'uncertain' : 'failed', dispatchInvoked, message: '连接结果未能确认，不会自动重新发送。' };
+        if (result.state === 'failed' && dispatchInvoked) return { state: 'uncertain', dispatchInvoked: true, canResume: false, message: '问题已到达发送边界，不会自动重新发送。' };
+        return { ...result, dispatchInvoked };
+      } catch {
+        await durableDispatch();
+        if (!dispatchInvoked) await Promise.resolve(browser.discardUnsent?.('paperdesk-question-' + job.id)).catch(() => {});
+        return { state: dispatchInvoked ? 'uncertain' : 'failed', dispatchInvoked, canResume: false, message: '纸间 ChatGPT 连接未完成。请检查连接窗口；不会自动改用其他渠道或重发。' };
+      } finally { active = false; activeDirectories.delete(jobDir); }
+    },
+    async close() { closed = true; for (const directory of activeDirectories) { try { writeFileSync(path.join(directory, 'close-requested'), '', { mode: 0o600 }); } catch {} } await browser.close(); },
+    async forget(id) {
+      if (!uuid.test(id)) return;
+      const directory = path.join(stateDir, id);
+      for (const name of ['input.json', 'selection.png', 'transport.png']) await unlink(path.join(directory, name)).catch(() => {});
+      try { const file = path.join(directory, 'ledger.json'), ledger = JSON.parse(await readFile(file, 'utf8')); if (Object.hasOwn(ledger, 'response')) { delete ledger.response; await writeFile(file, JSON.stringify(ledger), { mode: 0o600 }); } } catch {}
+    },
+  };
+}
+
+export function createEgoChatgptRunner({ stateDir, command = process.env.PAPERDESK_EGO_COMMAND }) {
   command ||= existsSync(path.join(homedir(),'.local/bin/ego-browser'))?path.join(homedir(),'.local/bin/ego-browser'):'ego-browser';
   let closed = false;
   const activeDirectories=new Set();
@@ -24,7 +80,9 @@ export function createChatgptRunner({ stateDir, command = process.env.PAPERDESK_
       if(closed)return {state:'failed',dispatchInvoked:false,message:'纸间服务已停止，问题未发送。'};
       activeDirectories.add(jobDir);
       const inputPath = path.join(jobDir, 'input.json');
-      const payloadHash = createHash('sha256').update(JSON.stringify([job.documentId, job.page, job.question, job.selection])).digest('hex');
+      const values = [job.documentId, job.page, job.question, job.selection];
+      if (job.followupContext) values.push(job.followupContext);
+      const payloadHash = createHash('sha256').update(JSON.stringify(values)).digest('hex');
       await writeFile(inputPath, JSON.stringify({ job, payloadHash, resume, jobDir }), { mode: 0o600 });
       if(closed){activeDirectories.delete(jobDir);return {state:'failed',dispatchInvoked:Boolean(job.dispatchInvoked),message:'纸间服务已停止，未启动新的连接。'};}
       const source = `const {runBridge}=await import(${JSON.stringify(implementation)});await runBridge({taskSpace,listTaskSpaces,takeOverTaskSpace},${JSON.stringify(inputPath)});`;

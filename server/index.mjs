@@ -18,7 +18,7 @@ let stopping = false;
 function shutdown() {
   if (stopping) return;
   stopping = true;
-  server.close(() => { close(); process.exit(0); });
+  server.close(async () => { await close(); process.exit(0); });
   setTimeout(() => { server.closeAllConnections(); }, 5000).unref();
 }
 process.on('SIGINT', shutdown);

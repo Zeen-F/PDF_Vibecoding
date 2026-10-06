@@ -32,3 +32,13 @@
 .chatgpt-answer-card { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
 .chatgpt-answer-question { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.8; margin:12px 0; }
 .chatgpt-answer-card > .secondary-button { margin-top:10px; }
+
+.chatgpt-connection { position:relative; margin:12px 0; }
+.chatgpt-connection-panel { padding:14px; margin-top:8px; background:#eef0e5; border:1px solid var(--line); border-radius:5px; }
+.chatgpt-connection-panel p { font-size:11px; line-height:1.8; margin:4px 0; overflow-wrap:anywhere; }
+.chatgpt-connection-panel [role="status"] { font-size:12px; color:var(--forest); }
+.chatgpt-connection-panel .chatgpt-handoff-actions { margin-top:10px; }
+.header-actions > .chatgpt-connection { margin:0; }
+.header-actions .chatgpt-connection-panel { position:absolute; right:0; top:100%; width:min(390px,calc(100vw - 30px)); z-index:30; box-shadow:0 12px 35px #20352226; }
+.chatgpt-followup { margin-top:15px; }
+.chatgpt-followup > button { margin-top:10px; }

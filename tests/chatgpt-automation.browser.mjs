@@ -7,8 +7,13 @@ import { assertCropPng } from './chatgpt-handoff.browser.mjs';
 // No browser account or external execution is involved. The real queue/API/MCP
 // call this controllable executor; tests decide when an original reply arrives.
 export function createChatgptRunnerFixture() {
-  const runs = [];
+  const runs = [], connectionCalls = [];
+  let connectionState = 'closed';
+  const connection = () => ({ engine: 'managed-browser', state: connectionState, message: connectionState === 'ready' ? '连接窗口已打开。' : '连接窗口已关闭。' });
   const runner = {
+    async connectionStatus() { connectionCalls.push('get'); return connection(); },
+    async openConnection() { connectionCalls.push('open'); connectionState = 'ready'; return connection(); },
+    async closeConnection() { connectionCalls.push('close'); connectionState = 'closed'; return connection(); },
     async run(job, emit, { resume = false } = {}) {
       let finish;
       const result = new Promise(resolve => { finish = resolve; });
@@ -18,7 +23,7 @@ export function createChatgptRunnerFixture() {
     close() { for (const run of runs) run.finish({ state: 'failed', message: 'Isolated test executor closed.' }); },
   };
   return {
-    runner, runs,
+    runner, runs, connectionCalls,
     async runFor(id, { resume = false } = {}) {
       await expect.poll(() => runs.some(run => run.job.id === id && run.resume === resume)).toBe(true);
       return runs.find(run => run.job.id === id && run.resume === resume);
@@ -97,7 +102,20 @@ export async function chatgptAutomationWorkflow({ context, base, fixture }) {
     await expect(answers(page)).toBeVisible();
   }
   try {
-    const page = await open(book, 2), quote = await selectText(page);
+    const page = await open(book, 2);
+    const connectionStart = fixture.connectionCalls.length;
+    await page.getByRole('button', { name: '连接 ChatGPT', exact: true }).click();
+    const connectionPanel = page.getByRole('region', { name: 'ChatGPT 连接', exact: true });
+    await expect(connectionPanel).toBeVisible();
+    await connectionPanel.getByRole('button', { name: '打开连接窗口', exact: true }).click();
+    await expect(connectionPanel.getByLabel('ChatGPT 连接状态', { exact: true })).toContainText('连接窗口已打开');
+    await connectionPanel.getByRole('button', { name: '刷新连接状态', exact: true }).click();
+    await connectionPanel.getByRole('button', { name: '关闭连接', exact: true }).click();
+    await expect(connectionPanel.getByLabel('ChatGPT 连接状态', { exact: true })).toContainText('连接窗口已关闭');
+    assert.equal(fixture.connectionCalls.slice(connectionStart).filter(action => action === 'open').length, 1);
+    assert.equal(fixture.connectionCalls.slice(connectionStart).filter(action => action === 'close').length, 1);
+    await page.getByRole('button', { name: '连接 ChatGPT', exact: true }).click();
+    const quote = await selectText(page);
     await dialog(page).getByRole('textbox', { name: '向 ChatGPT 提问', exact: true }).fill(' \n ');
     await expect(dialog(page).getByRole('button', { name: '向 ChatGPT 提问', exact: true })).toBeDisabled();
     const body = await submit(page, '只解释这个原创标题。'), run = await fixture.runFor(body.requestId);
@@ -121,8 +139,25 @@ export async function chatgptAutomationWorkflow({ context, base, fixture }) {
     await expect(jobCard(page, body.requestId)).toContainText('PDF 第 2 页');
     assert.equal(await page.evaluate(() => window.replyExecuted), undefined);
     assert.equal(postRequests().filter(request => request.body.requestId === body.requestId).length, 1);
+    const followupInput = jobCard(page, body.requestId).getByRole('textbox', { name: '继续向 ChatGPT 提问', exact: true });
+    const followupButton = jobCard(page, body.requestId).getByRole('button', { name: '继续提问', exact: true });
+    await expect(followupButton).toBeDisabled(); await followupInput.fill('只继续解释这个标题的用途。');
+    const beforeFollowup = postRequests().length; await followupButton.click();
+    await expect.poll(() => postRequests().length).toBe(beforeFollowup + 1);
+    await expect(followupInput).toBeDisabled(); await expect(followupInput).toHaveValue('只继续解释这个标题的用途。');
+    const followupBody = postRequests().at(-1).body;
+    assert.deepEqual(followupBody, { ...body, requestId: followupBody.requestId, parentJobId: body.requestId, question: '只继续解释这个标题的用途。' });
+    assert.notEqual(followupBody.requestId, body.requestId); assert.ok(!JSON.stringify(followupBody).includes(reply));
+    const followupRun = await fixture.runFor(followupBody.requestId);
+    assert.equal(followupRun.job.page, 2); assert.equal(followupRun.job.documentId, book.id); assert.deepEqual(followupRun.job.selection, body.selection);
+    assert.equal(followupRun.job.followupContext.at(-1).response, reply);
+    followupRun.finish({ state: 'completed', response: '模拟追问回答：仍然绑定原始第 2 页。', dispatchInvoked: true });
+    const childReply = jobCard(page, followupBody.requestId).getByRole('textbox', { name: 'ChatGPT 回答', exact: true });
+    await expect(childReply).toHaveValue('模拟追问回答：仍然绑定原始第 2 页。'); await expect(childReply).toHaveAttribute('readonly', '');
+    await expect(jobCard(page, followupBody.requestId)).toContainText('PDF 第 2 页');
+    assert.equal((await api(`/documents/${book.id}`)).document.notesRevision, before.notesRevision);
     await answers(page).getByRole('button', { name: '关闭 ChatGPT 回答', exact: true }).click();
-    console.log('PASS: automatic text uses the actual mouse quote, freezes source identity and keeps late answers with their original document');
+    console.log('PASS: managed connection controls and actual mouse quote/follow-up preserve the original source, private notes and late-answer identity');
 
     const regionPage = await open(scan, 1), preview = await selectRegion(regionPage, true);
     const imageSize = await regionPage.getByLabel('PDF 第 1 页', { exact: true }).evaluate(canvas => ({ width: canvas.width, height: canvas.height }));

@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "paperdesk",
-  "version": "0.5.0",
-  "description": "连接本机纸间 PDF 阅读器，自动向普通 ChatGPT 提问并显示回答，也可在当前 Codex 对话讨论选区。",
+  "version": "0.6.0",
+  "description": "连接本机纸间 PDF 阅读器，使用专用浏览器向普通 ChatGPT 提问、追问并查看回答，也可选择 Codex 讨论。",
   "author": {
     "name": "Paperdesk"
   },
@@ -11,7 +11,7 @@
       "interface": {
         "displayName": "纸间 Paperdesk",
         "shortDescription": "本机 PDF 阅读与 ChatGPT 问答",
-        "longDescription": "预览选区后向普通 ChatGPT 提问，连接、上传并在纸间查看回答；登录或验证由用户完成。保留手动备用方式和 Codex 讨论，回答不自动写入笔记。",
+        "longDescription": "预览选区后向普通 ChatGPT 提问，纸间管理专用浏览器，无需独立 EGO。首次登录或验证在连接窗口完成；可沿用原选区和上一问答继续提问。Codex 讨论可选，回答不自动写入笔记。",
         "developerName": "Paperdesk",
         "category": "Productivity",
         "capabilities": [

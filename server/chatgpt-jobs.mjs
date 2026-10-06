@@ -9,11 +9,13 @@ const STATES = new Set(['queued', 'connecting', 'uploading', 'sending', 'waiting
 const TERMINAL = new Set(['completed', 'failed', 'uncertain']);
 const MAX_JOBS = 8;
 const MAX_PREVIEW = 2 * 1024 * 1024;
-const PUBLIC_FIELDS = ['id', 'requestId', 'documentId', 'title', 'page', 'state', 'message', 'canResume', 'dispatchInvoked', 'response', 'chatUrl', 'modelLabel', 'depthLabel', 'createdAt', 'updatedAt', 'startedAt', 'completedAt'];
+const PUBLIC_FIELDS = ['id', 'requestId', 'parentJobId', 'documentId', 'title', 'page', 'state', 'message', 'canResume', 'dispatchInvoked', 'response', 'chatUrl', 'modelLabel', 'depthLabel', 'createdAt', 'updatedAt', 'startedAt', 'completedAt'];
 const WAITING_MESSAGE = '上次执行未能确认完成。请先在 ChatGPT 核对，任务不会自动重发。';
 
 function digest(payload) {
-  return createHash('sha256').update(JSON.stringify([payload.documentId, payload.page, payload.question, payload.selection])).digest('hex');
+  const input = [payload.documentId, payload.page, payload.question, payload.selection];
+  if (payload.parentJobId) input.push(payload.parentJobId);
+  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
 }
 
 function conversationUrl(value) {
@@ -113,6 +115,14 @@ export function registerChatgptJobs({ app, dataDir, chatgptRunner, documentOr404
         if (uuid(item.id, '任务 ID') !== item.id || item.id !== item.requestId || jobs.has(item.id) || receipts.has(item.id)
           || !STATES.has(item.state) || typeof item.title !== 'string' || typeof item.createdAt !== 'string' || typeof item.dispatchInvoked !== 'boolean') throw new Error('Invalid job');
         const job = { ...item, documentId: uuid(item.documentId, '文献 ID'), page: pageValue(item.page, 2000), question: stringValue(item.question, '问题', 4000, { nonempty: true }), selection: selectionValue(item.selection) };
+        if (job.parentJobId !== undefined) {
+          job.parentJobId = uuid(job.parentJobId, '上一任务 ID');
+          if (!Array.isArray(job.followupContext) || !job.followupContext.length || job.followupContext.length > 6 || JSON.stringify(job.followupContext).length > 100_000) throw new Error('Invalid discussion context');
+          job.followupContext = job.followupContext.map(turn => {
+            const fields = objectBody(turn, ['question', 'response']);
+            return { question: stringValue(fields.question, '先前问题', 4000, { nonempty: true }), response: stringValue(fields.response, '先前回答', 100_000, { nonempty: true }) };
+          });
+        } else if (job.followupContext !== undefined) throw new Error('Unexpected discussion context');
         if (job.digest !== digest(job)) throw new Error('Invalid job digest');
         jobs.set(job.id, TERMINAL.has(job.state) ? job : uncertain(job));
       }
@@ -192,14 +202,40 @@ export function registerChatgptJobs({ app, dataDir, chatgptRunner, documentOr404
     return job;
   }
 
+  const getRunner = () => runner ??= createChatgptRunner({ stateDir });
+  const connectionResult = async action => {
+    available();
+    const current = getRunner();
+    if (typeof current[action] !== 'function') return { engine: 'managed-browser', state: 'closed', message: '当前测试连接器未启动浏览器。' };
+    try { return await current[action](); }
+    catch (error) {
+      const message = error.message === 'BROWSER_PROFILE_BUSY' ? '另一个纸间连接器正在使用登录配置，请先结束该连接后重试。'
+        : '无法打开纸间 ChatGPT 连接窗口，请检查浏览器运行环境；不会自动改用其他回答渠道。';
+      throw new HttpError(503, message);
+    }
+  };
+  app.get('/api/chatgpt/connection', async (_req, res) => res.json({ connection: await connectionResult('connectionStatus') }));
+  app.post('/api/chatgpt/connection/open', async (req, res) => {
+    objectBody(req.body, []);
+    res.json({ connection: await connectionResult('openConnection') });
+  });
+  app.post('/api/chatgpt/connection/close', async (req, res) => {
+    available(); objectBody(req.body, []);
+    if (active || queue.length) throw new HttpError(409, '有问题正在执行或排队，请待任务结束后关闭连接窗口。');
+    const connection = await connectionResult('closeConnection');
+    for (const job of jobs.values()) if (job.state === 'needs_user' && !job.dispatchInvoked) applyPatch(job.id, { state: 'failed', canResume: false, message: '连接窗口已关闭，问题尚未发送。可以重新选择内容准备提问。' });
+    res.json({ connection });
+  });
+
   app.post('/api/chatgpt/jobs', (req, res) => {
     available();
-    const body = objectBody(req.body, ['requestId', 'documentId', 'page', 'question', 'selection']);
+    const body = objectBody(req.body, ['requestId', 'documentId', 'page', 'question', 'selection', 'parentJobId']);
     const requestId = uuid(body.requestId, '请求 ID'), documentId = uuid(body.documentId, '文献 ID');
     const question = stringValue(body.question, '问题', 4000, { nonempty: true });
     const selection = selectionValue(body.selection);
     const page = pageValue(body.page, 2000);
-    const fingerprint = digest({ documentId, page, question, selection });
+    const parentJobId = Object.hasOwn(body, 'parentJobId') ? uuid(body.parentJobId, '上一任务 ID') : undefined;
+    const fingerprint = digest({ documentId, page, question, selection, parentJobId });
     const previous = jobs.get(requestId) || receipts.get(requestId);
     if (previous) {
       if (previous.digest !== fingerprint) throw new HttpError(409, '这个请求 ID 已用于不同的问题或选区，请不要重复使用。');
@@ -208,6 +244,14 @@ export function registerChatgptJobs({ app, dataDir, chatgptRunner, documentOr404
     }
     if ([...jobs.values()].some(job => job.state === 'uncertain')) throw new HttpError(429, '有任务的发送结果尚未确认，请先在原 ChatGPT 对话核对；不会启动新的自动任务。');
     const doc = documentOr404(documentId); pageValue(page, doc.page_count);
+    let followupContext;
+    if (parentJobId) {
+      const parent = existing(parentJobId);
+      if (parent.state !== 'completed' || !parent.response?.trim()) throw new HttpError(409, '只能继续提问已经完成且回答仍保留的任务。');
+      if (parent.documentId !== documentId || parent.page !== page || JSON.stringify(parent.selection) !== JSON.stringify(selection)) throw new HttpError(409, '继续提问必须使用上一任务的原文献、页码和选区。');
+      followupContext = [...(parent.followupContext || []), { question: parent.question, response: parent.response }];
+      if (followupContext.length > 6 || JSON.stringify(followupContext).length > 100_000) throw new HttpError(400, '这组讨论已过长，请选择关键内容开始新的提问。');
+    }
     const next = new Map(jobs), nextReceipts = new Map(receipts);
     let evictedId;
     if (next.size >= MAX_JOBS) {
@@ -220,6 +264,7 @@ export function registerChatgptJobs({ app, dataDir, chatgptRunner, documentOr404
     }
     const now = new Date().toISOString();
     const job = { id: requestId, requestId, documentId, title: doc.title, page, question, selection, digest: fingerprint, state: 'queued', message: '任务已在本机排队。', canResume: false, dispatchInvoked: false, createdAt: now, updatedAt: now };
+    if (parentJobId) Object.assign(job, { parentJobId, selection: structuredClone(jobs.get(parentJobId).selection), followupContext });
     next.set(job.id, job); commit(next, nextReceipts);
     if (evictedId) forgetPayload(evictedId);
     enqueue(job.id, false);

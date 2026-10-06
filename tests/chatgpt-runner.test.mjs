@@ -4,7 +4,24 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createChatgptRunner } from '../server/chatgpt-runner.mjs';
+import { createChatgptRunner, createManagedChatgptRunner } from '../server/chatgpt-runner.mjs';
+
+test('managed failures before dispatch release their exact owned page and never launch EGO', async t => {
+  const directory=await mkdtemp(path.join(tmpdir(),'paperdesk-managed-runner-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const closed=[],created=[];
+  const runner=createManagedChatgptRunner({stateDir:directory,profileDir:path.join(directory,'profile'),browserFactory:()=>({
+    runParameter:'paperdesk_run',userBrowserLabel:'纸间连接窗口',
+    async taskSpace(name){created.push(name);return {spaceId:created.length,name,page(){return {async goto(){throw new Error('SYNTHETIC_NAVIGATION_FAILURE');}};}};},
+    async discardUnsent(name){closed.push(name);},async close(){},
+  })});
+  for(let attempt=0;attempt<2;attempt++){
+    const id=randomUUID(),job={id,requestId:id,documentId:randomUUID(),title:'原创',page:1,question:'测试',selection:{kind:'text',text:'原创材料'}};
+    const states=[],result=await runner.run(job,async patch=>states.push(patch.state));
+    assert.equal(result.state,'failed');assert.equal(result.dispatchInvoked,false);assert.deepEqual(states,['connecting','failed']);
+    assert.equal(closed.at(-1),'paperdesk-question-'+id);
+  }
+  assert.equal(created.length,2);await runner.close();
+});
 
 // This executable only writes controlled fixture output. It does not evaluate
 // the EGO source argument, import the browser bridge, or open a browser.

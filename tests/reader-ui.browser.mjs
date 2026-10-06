@@ -40,7 +40,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     const template = await readFile(join(root, 'plugins/paperdesk/ui/reader.html'), 'utf8');
     const html = template.replace('__PAPERDESK_CONFIG__', JSON.stringify({ baseUrl: base }).replaceAll('<', '\\u003c'));
     assert.ok(!html.includes('__PAPERDESK_CONFIG__'));
-    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_chatgpt_submit', 'paperdesk_reader_chatgpt_get', 'paperdesk_reader_chatgpt_resume']);
+    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_chatgpt_submit', 'paperdesk_reader_chatgpt_get', 'paperdesk_reader_chatgpt_resume', 'paperdesk_reader_chatgpt_connection_get', 'paperdesk_reader_chatgpt_connection_open', 'paperdesk_reader_chatgpt_connection_close']);
     const tools = (await client.listTools()).tools;
     for (const name of displayTools) assert.deepEqual(tools.find(tool => tool.name === name)?._meta?.ui?.visibility, ['app'], `${name} must be app-only`);
 
@@ -146,6 +146,10 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       await expect(image(h, number)).toBeVisible({ timeout: 20000 });
       await expect.poll(() => image(h, number).evaluate(element => element.complete && element.naturalWidth > 0 && element.naturalHeight > 0)).toBe(true);
       await expect.poll(h.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    async function openCodex(h) {
+      const summary = h.frame.locator('summary').filter({ hasText: /^在当前 Codex 对话讨论（可选）$/ });
+      if (!await summary.evaluate(element => element.parentElement.open)) await summary.click();
     }
     async function drag(h, from, to) {
       const layer = h.frame.getByLabel('拖动框选区域', { exact: true });
@@ -270,6 +274,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     await drag(region, [.15, .18], [.50, .36]);
     assert.equal((await currentContext(region)).selection, null);
     assert.equal(region.updates.some(hasContext), false);
+    await openCodex(region);
     await region.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
     await expect.poll(() => region.updates.some(update => update.content?.some(block => block.type === 'image'))).toBe(true);
     const shared = await currentContext(region);
@@ -281,12 +286,14 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     await expect.poll(() => hasContext(region.updates.at(-1))).toBe(false);
     await drag(region, [.5, .36], [.15, .18]);
     const delayedShare = region.holdNext(entry => entry.method === 'tools/call' && entry.params.name === 'paperdesk_reader_session' && entry.params.arguments.selection !== null);
+    await openCodex(region);
     await region.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click(); await delayedShare.entered;
     await region.frame.getByRole('button', { name: '取消共享', exact: true }).click(); delayedShare.release();
     await expect.poll(async () => (await currentContext(region)).selection).toBeNull();
     await expect.poll(() => hasContext(region.updates.at(-1))).toBe(false);
 
     await drag(region, [.15, .18], [.50, .36]);
+    await openCodex(region);
     await region.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
     await expect.poll(() => region.updates.at(-1)?.content?.some(block => block.type === 'image')).toBe(true);
     await region.frame.getByRole('button', { name: '展开笔记', exact: true }).click();
@@ -324,6 +331,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
 
     const noImage = await harness({ documentId: scan.id, capabilities: { ...fullCapabilities, updateModelContext: { text: {}, structuredContent: {} } } });
     await ready(noImage, 1); await noImage.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(noImage, [.15, .18], [.50, .36]);
+    await openCodex(noImage);
     await noImage.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
     await expect(noImage.frame.locator('#error-box')).toContainText(/图片|图像/);
     assert.equal(noImage.updates.some(hasContext), false, 'No-image host must not pretend a region was shared');
@@ -350,7 +358,8 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     for (const [index, action] of ['解释选区', '提炼要点'].entries()) {
       await selectText(questions);
       assert.equal(questions.messages.length, index, 'Selecting and previewing must not send a message');
-      await questions.frame.getByRole('button', { name: action, exact: true }).click();
+      await openCodex(questions);
+      await questions.frame.getByRole('button', { name: `用 Codex ${action}`, exact: true }).click();
       await expect.poll(() => questions.messages.length).toBe(index + 1);
       await expect(questions.frame.getByRole('dialog', { name: '共享预览', exact: true })).toBeHidden();
       const text = assertQuestion(questions.messages[index], questions, book, 2, 'A short introduction');
@@ -358,7 +367,8 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       assert.equal(questions.messages[index].content.length, 1, 'A quote message must not attach the whole page PNG');
     }
     await selectText(questions);
-    await questions.frame.getByRole('button', { name: '自定义提问', exact: true }).click();
+    await openCodex(questions);
+    await questions.frame.getByRole('button', { name: '用 Codex 自定义提问', exact: true }).click();
     const questionEditor = questions.frame.getByRole('textbox', { name: '向 Codex 提问', exact: true });
     const sendQuestion = questions.frame.getByRole('button', { name: '发送问题', exact: true });
     await expect(sendQuestion).toBeDisabled(); await questionEditor.fill('  \n  '); await expect(sendQuestion).toBeDisabled();
@@ -379,7 +389,8 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     await imageQuestion.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(imageQuestion, [.5, .36], [.15, .18]);
     const previewPng = await imageQuestion.frame.getByRole('img', { name: '选区预览', exact: true }).getAttribute('src');
     assert.notEqual(previewPng, await image(imageQuestion, 1).getAttribute('src'));
-    await imageQuestion.frame.getByRole('button', { name: '解释选区', exact: true }).click();
+    await openCodex(imageQuestion);
+    await imageQuestion.frame.getByRole('button', { name: '用 Codex 解释选区', exact: true }).click();
     await expect.poll(() => imageQuestion.messages.length).toBe(1);
     await expect(imageQuestion.frame.getByRole('dialog', { name: '共享预览', exact: true })).toBeHidden();
     assertQuestion(imageQuestion.messages[0], imageQuestion, scan, 1);
@@ -394,13 +405,15 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       await ready(unsupported, isRegion ? 1 : 2);
       if (isRegion) { await unsupported.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(unsupported, [.15, .18], [.5, .36]); }
       else await selectText(unsupported);
-      await unsupported.frame.getByRole('button', { name: '提炼要点', exact: true }).click();
+      await openCodex(unsupported);
+      await unsupported.frame.getByRole('button', { name: '用 Codex 提炼要点', exact: true }).click();
       const fallback = unsupported.frame.getByRole('textbox', { name: '待发送问题', exact: true });
       await expect(fallback).toBeVisible(); await expect(fallback).toHaveAttribute('readonly', '');
       assert.ok((await fallback.inputValue()).includes(isRegion ? scan.id : book.id));
       await expect(unsupported.frame.locator('#question-status')).toContainText('尚未发送');
       await expect(unsupported.frame.getByRole('dialog', { name: '共享预览', exact: true })).toBeVisible();
       assert.equal(unsupported.messages.length, 0);
+      await openCodex(unsupported);
       await unsupported.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
       await expect.poll(() => unsupported.updates.some(hasContext)).toBe(true);
       assert.equal(unsupported.messages.length, 0, 'The existing share action must remain share-only');
@@ -409,7 +422,8 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     console.log('PASS: region messages contain only the preview crop; unsupported message/image hosts retain explicit copy-and-share fallback');
 
     const rejected = await harness({ pageNumber: 2 }); await ready(rejected, 2); await selectText(rejected);
-    await rejected.frame.getByRole('button', { name: '自定义提问', exact: true }).click();
+    await openCodex(rejected);
+    await rejected.frame.getByRole('button', { name: '用 Codex 自定义提问', exact: true }).click();
     await rejected.frame.getByRole('textbox', { name: '向 Codex 提问', exact: true }).fill(customQuestion);
     rejected.setMessageResult({ isError: true });
     await rejected.frame.getByRole('button', { name: '发送问题', exact: true }).click();
@@ -426,8 +440,9 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
 
     const cancelled = await harness({ pageNumber: 2 }); await ready(cancelled, 2); await selectText(cancelled);
     const preparation = cancelled.holdNext(entry => entry.params?.name === 'paperdesk_reader_session' && entry.params.arguments.selection !== null);
-    await cancelled.frame.getByRole('button', { name: '解释选区', exact: true }).click(); await preparation.entered;
-    await expect(cancelled.frame.getByRole('button', { name: '解释选区', exact: true })).toBeDisabled();
+    await openCodex(cancelled);
+    await cancelled.frame.getByRole('button', { name: '用 Codex 解释选区', exact: true }).click(); await preparation.entered;
+    await expect(cancelled.frame.getByRole('button', { name: '用 Codex 解释选区', exact: true })).toBeDisabled();
     await cancelled.frame.getByRole('button', { name: '取消共享', exact: true }).click();
     preparation.release(); await preparation.finished;
     await expect.poll(async () => (await currentContext(cancelled)).selection).toBeNull();
@@ -436,13 +451,14 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
 
     const uncertain = await harness({ pageNumber: 2, useClock: true }); await ready(uncertain, 2); await selectText(uncertain);
     const acknowledgement = uncertain.holdNext(entry => entry.method === 'ui/message');
-    await uncertain.frame.getByRole('button', { name: '解释选区', exact: true }).click(); await acknowledgement.entered;
-    await expect(uncertain.frame.getByRole('button', { name: '解释选区', exact: true })).toBeDisabled();
-    await expect(uncertain.frame.getByRole('button', { name: '提炼要点', exact: true })).toBeDisabled();
+    await openCodex(uncertain);
+    await uncertain.frame.getByRole('button', { name: '用 Codex 解释选区', exact: true }).click(); await acknowledgement.entered;
+    await expect(uncertain.frame.getByRole('button', { name: '用 Codex 解释选区', exact: true })).toBeDisabled();
+    await expect(uncertain.frame.getByRole('button', { name: '用 Codex 提炼要点', exact: true })).toBeDisabled();
     assert.equal(uncertain.messages.length, 1);
     await uncertain.page.clock.fastForward(15001);
     await expect(uncertain.frame.locator('#question-status')).toContainText(/未能确认.*查看当前对话/);
-    await expect(uncertain.frame.getByRole('button', { name: '解释选区', exact: true })).toBeDisabled();
+    await expect(uncertain.frame.getByRole('button', { name: '用 Codex 解释选区', exact: true })).toBeDisabled();
     acknowledgement.release(); await acknowledgement.finished;
     await expect(uncertain.frame.locator('#question-status')).toContainText('未能确认');
     await uncertain.frame.getByRole('button', { name: '取消共享', exact: true }).click();
@@ -652,6 +668,18 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       // queue. Only its external executor is simulated; never start EGO here.
       const automatic = await harness({ documentId: book.id, pageNumber: 2 }); await ready(automatic, 2);
       const beforeNotes = (await request(`/documents/${book.id}`)).document.notesRevision;
+      await automatic.frame.getByRole('button', { name: '连接 ChatGPT', exact: true }).click();
+      const connectionPanel = automatic.frame.getByRole('region', { name: 'ChatGPT 连接', exact: true });
+      await connectionPanel.getByRole('button', { name: '打开连接窗口', exact: true }).click();
+      await expect(connectionPanel.getByLabel('ChatGPT 连接状态', { exact: true })).toContainText('连接窗口已打开');
+      await connectionPanel.getByRole('button', { name: '刷新连接状态', exact: true }).click();
+      await connectionPanel.getByRole('button', { name: '关闭连接', exact: true }).click();
+      await expect(connectionPanel.getByLabel('ChatGPT 连接状态', { exact: true })).toContainText('连接窗口已关闭');
+      const connectionCalls = automatic.calls.filter(call => call.params?.name?.startsWith('paperdesk_reader_chatgpt_connection_'));
+      assert.equal(connectionCalls.filter(call => call.params.name.endsWith('_open')).length, 1);
+      assert.equal(connectionCalls.filter(call => call.params.name.endsWith('_close')).length, 1);
+      for (const call of connectionCalls.filter(call => call.result)) { assert.deepEqual(call.result.structuredContent, { ok: true }); assert.ok(call.result._meta.chatgptConnection); }
+      await automatic.frame.getByRole('button', { name: '连接 ChatGPT', exact: true }).click();
       await selectText(automatic);
       const automaticSection = automatic.frame.getByRole('region', { name: 'ChatGPT 提问准备', exact: true });
       await automaticSection.getByRole('textbox', { name: '向 ChatGPT 提问', exact: true }).fill('模拟原生选文解释。');
@@ -674,7 +702,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       assert.equal(submitCalls().length, 1);
       await assertHandoffPrivate(automatic);
       assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, beforeNotes);
-      for (const call of automatic.calls.filter(call => call.params?.name?.startsWith('paperdesk_reader_chatgpt_') && call.result)) {
+      for (const call of automatic.calls.filter(call => /^paperdesk_reader_chatgpt_(submit|get|resume)$/.test(call.params?.name || '') && call.result)) {
         assert.deepEqual(call.result.structuredContent, { ok: true });
         assert.ok(call.result._meta.chatgptJob);
         const modelVisible = JSON.stringify({ content: call.result.content, structuredContent: call.result.structuredContent });
@@ -712,6 +740,23 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       (await chatgptFixture.runFor(inlineId)).finish({ state: 'completed', response: completeReply, dispatchInvoked: true });
       const inlineReply = inline.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('textbox', { name: 'ChatGPT 回答预览', exact: true });
       await expect(inlineReply).toBeVisible(); await expect(inlineReply).toHaveAttribute('readonly', ''); await expect(inlineReply).toHaveValue(completeReply);
+      assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, beforeNotes);
+      await inline.frame.locator('#preview-view-answers').click();
+      const inlineCard = inline.frame.locator(`[data-job-id="${inlineId}"]`);
+      const followupInput = inlineCard.getByRole('textbox', { name: '继续向 ChatGPT 提问', exact: true });
+      const followupAction = inlineCard.getByRole('button', { name: '继续提问', exact: true });
+      await expect(followupAction).toBeDisabled(); await followupInput.fill('继续说明这个原始选区。'); await followupAction.click();
+      await expect.poll(() => inline.calls.filter(call => call.params?.name === 'paperdesk_reader_chatgpt_submit').length).toBe(2);
+      await expect(followupInput).toBeDisabled();
+      const followupArgs = inline.calls.filter(call => call.params?.name === 'paperdesk_reader_chatgpt_submit').at(-1).params.arguments;
+      assert.equal(followupArgs.parentJobId, inlineId); assert.equal(followupArgs.documentId, book.id); assert.equal(followupArgs.page, 2);
+      assert.deepEqual(followupArgs.selection, { kind: 'text', text: 'A short introduction' });
+      assert.ok(!JSON.stringify(followupArgs).includes(completeReply));
+      const followupRun = await chatgptFixture.runFor(followupArgs.requestId);
+      assert.equal(followupRun.job.followupContext.at(-1).response, completeReply);
+      followupRun.finish({ state: 'completed', response: '模拟原生追问回答，完整留在阅读器内。', dispatchInvoked: true });
+      const followupReply = inline.frame.locator(`[data-job-id="${followupArgs.requestId}"]`).getByRole('textbox', { name: 'ChatGPT 回答', exact: true });
+      await expect(followupReply).toHaveValue('模拟原生追问回答，完整留在阅读器内。'); await expect(followupReply).toHaveAttribute('readonly', '');
       assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, beforeNotes);
       await assertHandoffPrivate(inline); await inline.close();
       console.log('PASS: opaque native automatic ChatGPT uses private MCP job results, exact text/crop snapshots and explicit resume without Codex messages or context');

@@ -562,5 +562,5 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   let closed = false;
-  return { app, close() { if (!closed) { closed = true; pluginApi.close(); void chatgptJobs.close(); tocCache.clear(); db.close(); } return readerRenderer.close(); } };
+  return { app, close() { let jobsClosing; if (!closed) { closed = true; pluginApi.close(); jobsClosing = chatgptJobs.close(); tocCache.clear(); db.close(); } return Promise.allSettled([jobsClosing, readerRenderer.close()]); } };
 }

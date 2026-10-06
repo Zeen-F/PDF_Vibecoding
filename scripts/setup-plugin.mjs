@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdir, readFile, writeFile, rename, access, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { prepareChatgptBrowser } from './prepare-chatgpt-browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const { values } = parseArgs({ options: {
@@ -44,6 +45,7 @@ try {
   if (values['dry-run']) {
     console.log(JSON.stringify({ ready: true, baseUrl: profile.baseUrl, existingProfile: Boolean(previous) }));
   } else {
+    if (values.install) await prepareChatgptBrowser();
     await mkdir(dirname(profilePath), { recursive: true, mode: 0o700 });
     const temporary = `${profilePath}.${randomUUID()}.tmp`;
     try {

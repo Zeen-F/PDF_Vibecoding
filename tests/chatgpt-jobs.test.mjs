@@ -55,6 +55,45 @@ function region() {
   return { kind: 'region', text: '', preview: `data:image/png;base64,${canvas.toBuffer('image/png').toString('base64')}` };
 }
 
+test('followups inherit bounded server-side discussions, keep frozen sources, and remain idempotent after eviction', async t => {
+  const received=[];
+  const {app,doc}=await fixture(t,{async run(job){received.push(job);return {state:'completed',response:'原创回答 '+received.length};}});
+  const original=payload(doc),parent=await submit(app,original);
+  await until(async()=> (await app.job(parent.id)).state==='completed');
+  const follow={...original,requestId:randomUUID(),parentJobId:parent.id,question:'解释上一回答的条件。'};
+  const next=await submit(app,follow);await until(async()=> (await app.job(next.id)).state==='completed');
+  assert.equal(next.parentJobId,parent.id);
+  assert.deepEqual(received[1].followupContext,[{question:original.question,response:'原创回答 1'}]);
+  assert.deepEqual(received[1].selection,original.selection);
+  assert.ok(!Object.hasOwn(await app.job(next.id),'followupContext'));
+  await submit(app,follow);assert.equal(received.length,2);
+  await reject(await app.request(URL_PATH,{...follow,parentJobId:next.id}),409);
+  for(const change of [{page:3},{selection:{kind:'text',text:'篡改选区'}},{parentJobId:randomUUID()}])await reject(await app.request(URL_PATH,{...follow,requestId:randomUUID(),...change}),change.parentJobId?404:409);
+  await reject(await app.request(URL_PATH,{...follow,requestId:randomUUID(),followupContext:[{question:'伪造',response:'不可信'}]}));
+  let previous=next;
+  for(let round=2;round<=6;round++){previous=await submit(app,{...original,requestId:randomUUID(),parentJobId:previous.id,question:'第 '+round+' 轮'});await until(async()=> (await app.job(previous.id)).state==='completed');}
+  await reject(await app.request(URL_PATH,{...original,requestId:randomUUID(),parentJobId:previous.id,question:'超过限制'}));
+});
+
+test('connection controls are explicit, closing cannot interrupt dispatch, and unsent handoff closes safely', async t => {
+  const calls=[],gate=deferred();let count=0;
+  const {app,doc}=await fixture(t,{
+    async connectionStatus(){calls.push('get');return {engine:'managed-browser',state:'closed',message:'自动管理'};},
+    async openConnection(){calls.push('open');return {engine:'managed-browser',state:'ready',message:'窗口已打开'};},
+    async closeConnection(){calls.push('close');return {engine:'managed-browser',state:'closed',message:'窗口已关闭'};},
+    async run(){if(++count===1){await gate.promise;return {state:'completed',response:'完成'};}return {state:'needs_user',canResume:true,dispatchInvoked:false,message:'请登录'};},
+  });
+  assert.equal((await app.get('/api/chatgpt/connection')).connection.state,'closed');
+  await app.request('/api/chatgpt/connection/open',{});assert.deepEqual(calls,['get','open']);
+  const first=await submit(app,payload(doc));await until(()=>count===1);
+  await reject(await app.request('/api/chatgpt/connection/close',{}),409);assert.deepEqual(calls,['get','open']);
+  gate.resolve();await until(async()=> (await app.job(first.id)).state==='completed');
+  const second=await submit(app,payload(doc));await until(async()=> (await app.job(second.id)).canResume);
+  assert.equal((await app.request('/api/chatgpt/connection/close',{})).status,200);
+  const closed=await app.job(second.id);assert.equal(closed.state,'failed');assert.equal(closed.dispatchInvoked,false);
+  await reject(await app.request('/api/chatgpt/connection/open',{profileDir:'/unrelated'}));
+});
+
 test('jobs freeze only selected text or PNG, redact internal fields, persist securely, and leave notes/PDF unchanged', async t => {
   const received = [];
   const lib = await fixture(t, { async run(job, emit) {
