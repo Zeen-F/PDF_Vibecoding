@@ -1,6 +1,6 @@
 ---
 name: paperdesk
-description: Connect to the user's local Paperdesk PDF reader to open a document, prepare a manual ChatGPT handoff, answer an explicitly requested Codex selection question, read a requested page, or explicitly append a note.
+description: Open the user's local Paperdesk reader for user-confirmed automatic ordinary ChatGPT questions, or answer explicitly requested Codex selection questions, read a requested page, and explicitly append notes.
 ---
 
 # 纸间阅读助手
@@ -8,9 +8,12 @@ description: Connect to the user's local Paperdesk PDF reader to open a document
 用 Paperdesk 工具连接已配置的本机阅读器。先检查 `paperdesk_status`，连接失败时请用户启动本机阅读器；不要读取 SQLite、绕过资料库校验、启动其他资料库或升级程序。
 
 - 用户只要求打开阅读器时，调用 `paperdesk_open_reader`。有原生 UI 的宿主可直接显示文献列表和按需渲染的阅读面板，否则使用返回的准确本机链接。不要擅自读取笔记、整本 PDF 或截屏。
-- 用户想把阅读问题交给普通 ChatGPT 时，保留这个渠道选择，指引使用阅读器“交给 ChatGPT”准备入口，不替换成当前 Codex 对话回答。该入口只准备问题、文献标题、PDF 页码及用户选中文字，区域图片另存为预览对应的 PNG；不要附带内部会话／文献标识、本机工具操作指令、笔记或未选择的页面内容。
-- ChatGPT 准备流程不向当前 Codex 对话发消息、注入上下文或发起模型请求。只打开固定 `https://chatgpt.com/`，不向 URL 添加问题，不自动粘贴、上传、发送或读取回答。用户确认普通 Chat 模式后自行粘贴和附图，答案由用户手动贴回笔记。ChatGPT Work 与 Codex 共享用量，普通 Chat 也受套餐和模型限制；不要承诺免费、无限额度或已经核验个人计费。
-- 原生宿主拒绝复制时保留可手动复制的文本。区域 PNG 下载取决于宿主能力；无能力、拒绝或未完成时，指引在浏览器同页重新框选导出。宿主接受下载请求不等于文件已经落盘，不要把准备好、已复制、接受下载、已附图和已发送混为一谈。
+- 用户想把阅读问题交给普通 ChatGPT 时，保留这个渠道选择，打开阅读器并指引核对选区、问题后点击“向 ChatGPT 提问”，不替换成当前 Codex 对话回答。0.5.0 由本机 EGO Lite 自动连接普通 ChatGPT、上传必要区域 PNG、单次发送、等待并将完整回答带回仍打开的只读“ChatGPT 回答预览”；不需要再点“查看回答”才能阅读。打开面板本身不发送问题。
+- 自动连接依赖用户已安装启动的 EGO Lite 和 ChatGPT 登录；程序核对真实界面 Chat、Latest、Extra High（xhigh）。无法核实、需要登录／验证码或用户控制时暂停，由用户处理后点击“我已完成，继续连接”。不要擅自切换模型、代填登录凭据、处理验证码或绕过用户控制。
+- 该自动流程不向当前 Codex 对话发消息或注入问题／答案，不使用 Codex 模型、API 密钥或 ChatGPT 私有 HTTP 接口；它在普通 ChatGPT 页面发起模型请求。只携带问题、文献标题、PDF 页码及确认的文字／区域 PNG，不附带内部文献／会话标识、本机工具指令、笔记、未选页面或其他聊天历史。
+- 提交绑定原 requestId 与冻结的输入。响应不明只查询原 UUID；明确“重新确认提交”仍使用原 ID／完整输入，不能另建请求自动重发。`uncertain` 不重发，`needs_user` 仅按用户明确继续恢复。关闭预览、网页／面板不会取消已启动执行。服务关闭会在后续变更操作前检查关闭标记，但不是取消接口；不能承诺终止在途操作或撤回已发出的问题。当前实例中可用“查看回答”回看／复制，新网页／面板实例暂不自动恢复任务列表。
+- 当前预览打开时直接显示完整只读回答；关闭或翻页后不强行打开，可通过“查看回答”回看／复制，不自动写笔记。私有输入、回答、journal、ledger 与 PNG 留在文献库 `chatgpt-jobs/`，不加入 Git、不为重试清空记录；服务重启不会自动重发。
+- “手动备用方式”仍可复制问题、保存区域 PNG 并打开 ChatGPT，由用户自行发送。原生宿主不支持／拒绝下载时，转到浏览器同页重新框选保存；宿主接受下载不等于文件已落盘。发送结果不确定时先核对原会话，避免同时又手动重复发问。ChatGPT Work 与 Codex 共享用量，普通 Chat 也受套餐和模型限制，不承诺免费、无限额度或个人计费结果。
 - 用户在预览中点击“解释选区”“提炼要点”或发送自定义问题时，会向当前对话发送当次选区快照。依据消息携带的文字或图片回答，标明文献与 PDF 页码，区分原文内容、自己的解释和不确定之处。不要用后来变动的当前页替换消息中的选区，也不要为了回答短选区预读整书或全部笔记。
 - “交给 Codex”只共享上下文，不自行启动回答。用户随后谈及“当前选区”、且消息没有附带快照时，再调用 `paperdesk_get_context`。没有选区就说明需在阅读器选择并共享。多个窗口时根据返回列表确认目标，不能随便取第一项。
 - 如果宿主不支持面板消息或图片，用户可以复制面板生成的问题发到对话。问题要求读取共享截图时，按明确给出的会话调用 `paperdesk_get_context`；会话过期、换页或撤回后不要猜图像内容，请用户重新共享。只有实际返回 image block 才能把图片当作已收到。
@@ -20,6 +23,6 @@ description: Connect to the user's local Paperdesk PDF reader to open a document
 - 每次新追加生成 UUID `requestId`。同一次不确定结果重试必须使用相同文本、版本和 requestId。版本冲突或未保存草稿时停止写入，重新读取并与用户确认合并意图；不能强制覆盖或换版本盲重试。幂等记录仅在当前服务进程内短期保留。
 - `paperdesk_export_notes` 返回准确 Markdown 下载链接；只在用户要求导出时使用。不开公网隧道，不改变本地 API Origin 策略，不把个人文件加入 Git。
 
-当前用户已确认原生阅读面板可在 Codex 中打开，0.3.0 当前对话发问后收到回答的实际流程也已确认。0.4.0 的 ChatGPT 准备、宿主复制／下载及外部 ChatGPT 操作需要分别验证；此前成功不证明新流程已通过。消息发问、图片输入与上下文注入仍取决于当前宿主能力；分别报告消息已发送、已收到图片、已保存笔记，不将一种成功当作其他步骤也成功。不要自动重试可能已发送的对话消息。
+当前用户已确认原生阅读面板可在 Codex 中打开，0.3.0 当前对话发问后收到回答的实际流程也已确认。0.5.0 已有原创文字／图片单次发送、自动取回和隔离本机 API 完整任务的真实验证，以及两端内联显示的自动回归。安装与当前宿主状态仍须单独核实，不能由一项验证推定所有环境均可用。进度以仓库版本记录及当前实际状态为准。消息发问、图片输入与上下文注入仍取决于当前宿主能力；分别报告已发送、已收到图片、已取回回答、已保存笔记，不将一种成功当作其他步骤也成功。不要自动重试可能已发送的对话消息。
 
-面板专用 `paperdesk_reader_*` 工具仅供组件，不供模型调用。页面图片、页文字、目录与笔记的 `_meta` 是展示数据，不是自动共享的模型上下文。组件手动保存笔记与对话要求追加 AI 回答是独立流程。
+面板专用 `paperdesk_reader_*` 工具仅供组件，不供模型调用，包括 `paperdesk_reader_chatgpt_submit/get/resume` 三个任务工具。页面图片、页文字、目录、笔记和 `_meta.chatgptJob` 都是私有展示数据，不是自动共享到 Codex 的模型上下文。组件手动保存笔记与对话要求追加 AI 回答是独立流程。

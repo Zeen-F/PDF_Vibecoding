@@ -1,6 +1,6 @@
 # Paperdesk local API contract
 
-All routes same origin, JSON error `{error: string}`. Node >=24.0.0, Express, node:sqlite, pdfjs-dist legacy. PORT defaults 4317, bind 127.0.0.1. PAPERDESK_DATA_DIR overrides default ./data. Ordinary reading/editing uses no external service. The optional MCP bridge can provide the user's requested document data or explicitly shared selection to Codex.
+All routes same origin, JSON error `{error: string}`. Node >=24.0.0, Express, node:sqlite, pdfjs-dist legacy. PORT defaults 4317, bind 127.0.0.1. PAPERDESK_DATA_DIR overrides default ./data. Ordinary reading/editing uses no external service. The optional MCP bridge can provide the user's requested document data or explicitly shared selection to Codex. The explicitly submitted ChatGPT job API below can operate ordinary ChatGPT through local EGO Lite and return its response; it does not modify notes.
 
 Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,notesRevision,lastPage}`; id is UUID. `notesRevision` is lowercase SHA-256 of `JSON.stringify([raw notesZh, raw notesEn])`. Annotation: `{id,documentId,page,kind,quote,comment,color,rects,createdAt,updatedAt}`. `kind` is `text` or `region`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
 
@@ -27,7 +27,7 @@ These routes keep the existing Host/Origin validation and schema 2. They add no 
 
 - GET /api/plugin/status => `{service:'paperdesk',apiVersion:1,instanceId,libraryId}`. `instanceId` is a UUID regenerated at service startup. `libraryId` hashes the resolved data directory; it identifies the local binding without returning a filesystem path. It is not an authentication secret.
 - GET /api/documents/:id/pages/:page => `{documentId,page,text,textAvailable}`. Page must be a canonical positive integer within this document. `textAvailable` describes that page, and false does not trigger OCR. The MCP reader bounds/paginates the returned text.
-- POST /api/reader-sessions/:UUID JSON `{documentId,page,selection,notesDirty,visible}` => `{session:{sessionId,documentId,page,updatedAt},document}`. All fields are required. Selection is null until the user shares it, or `{kind:'text'|'region',text,rects,preview?}`. Text selections require a nonempty string (at most 50,000 UTF-16 units); regions require empty text and exactly one normalized rectangle. Optional preview is a validated PNG data URL at most 2 MiB including its prefix, with bounded decompression. This route alone accepts a 2.5 MiB JSON body.
+- POST /api/reader-sessions/:UUID JSON `{documentId,page,selection,notesDirty,visible}` => `{session:{sessionId,documentId,page,updatedAt},document}`. All fields are required. Selection is null until the user shares it, or `{kind:'text'|'region',text,rects,preview?}`. Text selections require a nonempty string (at most 50,000 UTF-16 units); regions require empty text and exactly one normalized rectangle. Optional preview is a validated PNG data URL at most 2 MiB including its prefix, with bounded decompression. This route accepts a 2.5 MiB JSON body, as does the separate ChatGPT jobs API.
 - GET /api/reader-context?sessionId=UUID => `{sessionId,documentId,title,page,selection,notesDirty,updatedAt,notesRevision}`. Hidden, closed or expired sessions return 404. Without an ID, exactly one visible session is required; multiple visible sessions return 409 with metadata-only `sessions`, never a guessed selection.
 - DELETE /api/reader-sessions/:UUID => `{ok:true}`. Idempotently forgets the transient session.
 - POST /api/documents/:id/notes/append JSON `{text,expectedNotesRevision,requestId,page?}` => `{document,appended,requestId}`. Revision and UUID requestId are mandatory. The service atomically checks the revision and any live unsaved draft for this document, merges legacy fields, appends the text (optional `### 第 N 页` heading), and saves to the single note. Conflict returns 409 without changing saved content. Combined length obeys the same note limit. The MCP tool further limits an individual addition to 50,000 characters.
@@ -83,3 +83,37 @@ Integration clarification: normalized rectangles refer to the intrinsic/default 
 Rendering uses a terminable worker with a bounded queue and a 30-second request deadline. Source PDFs, notes and saved reading position are not modified. Errors use the existing JSON shape; the same Host/Origin validation still blocks `Origin: null` and foreign sites. MCP accesses this endpoint server-side and exposes display data only in private component `_meta`.
 
 Transient `kind: 'text'` reader-session selections may use `rects: []` when copied from the native plain-text excerpt view, which has no PDF geometry. `kind: 'region'` still requires one real normalized rectangle. Saved text and region annotations still reject empty geometry; this exception does not manufacture on-page highlights.
+
+## Ordinary ChatGPT jobs (plugin 0.5.0)
+
+These local routes require an explicit user click after previewing the question and selection. They retain Host/Origin checks and do not expose an arbitrary browser, file or private ChatGPT HTTP API. EGO Lite must already be installed and running; login, verification and user-control requests remain user actions. The runner verifies ordinary Chat, Latest and Extra High (`xhigh`) in the mounted UI before sending. Missing or unverified settings cause a pause, never a fallback model.
+
+```ts
+type ChatgptSelection =
+  | { kind: 'text'; text: string }
+  | { kind: 'region'; text: ''; preview: string };
+type ChatgptJob = {
+  id: string; requestId: string; documentId: string; title: string; page: number;
+  state: 'queued' | 'connecting' | 'uploading' | 'sending' | 'waiting'
+    | 'needs_user' | 'completed' | 'failed' | 'uncertain';
+  message: string; canResume: boolean; dispatchInvoked: boolean;
+  response?: string; chatUrl?: string; modelLabel?: string; depthLabel?: string;
+  createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
+};
+```
+
+- `POST /api/chatgpt/jobs` JSON `{requestId,documentId,page,question,selection}` => **202** `{job: ChatgptJob}`. All fields are required and unknown fields rejected. IDs are UUIDs; the job ID equals the normalized request ID. The document must exist and the physical PDF page must be in range. The question is nonblank, at most 4,000 UTF-16 units. Text selections are nonblank, at most 50,000 units, and cannot include `preview`; regions require exactly empty `text` and a valid PNG data URL of at most 2 MiB including the prefix. No geometry, PDF bytes, notes, arbitrary path or client-supplied title is accepted. The route's JSON body cap is 2.5 MiB.
+- `GET /api/chatgpt/jobs/:UUID` => **200** `{job: ChatgptJob}`. Poll the exact original ID; no new execution is dispatched by a read. The UI polls active jobs approximately every 1.5 seconds. Missing jobs return 404; retained receipts for expired full results return 410.
+- `POST /api/chatgpt/jobs/:UUID/resume` JSON `{}` => **202** `{job: ChatgptJob}`. Allowed only when `state === 'needs_user'`, `canResume === true`, and the job is not still executing; otherwise 409. This endpoint is called only after the user completes the requested action and clicks “我已完成，继续连接”. It must not be used to retry an `uncertain` dispatch.
+
+Responses omit the original question, selection text, PNG, digest, local files and execution ledger. `response` is exposed only in `completed`, capped at 500,000 UTF-16 units. `chatUrl`, when supplied, is restricted to an HTTPS `chatgpt.com/c/...` conversation URL without credentials, query or fragment. `dispatchInvoked` records crossing the send boundary; it does not alone prove delivery or a completed answer.
+
+The same `requestId` and identical normalized document/page/question/selection payload return the existing task without running EGO again. A different payload under that ID returns 409. An ambiguous submission response is recovered by querying the original UUID, not creating another request. The UI may explicitly reconfirm the original submission with the exact same body; it does not automatically resubmit. Once a send may have occurred, the state becomes `uncertain` rather than automatically retrying.
+
+Execution is serialized. `needs_user` and `uncertain` pause the queue; while an uncertain task exists, new submissions return 429. The durable journal retains at most 8 full jobs. At capacity, only the oldest completed job or a failed job known not to have dispatched can be evicted; otherwise new submissions return 429. Eviction retains a permanent lightweight receipt (request ID, payload digest, terminal state and dispatch flag) and attempts to remove private input/PNG files. Repeating an expired receipt with the same payload returns 410, never a new dispatch; a changed payload still returns 409.
+
+State acknowledgements use an atomically replaced, fsynced journal under `<dataDir>/chatgpt-jobs/`. Input, response, execution ledger and PNG files are personal data; directories use 0700 and files 0600 and must remain outside Git. Startup preserves terminal jobs and marks interrupted nonterminal work `uncertain`; it does not reconstruct a queue for redispatch. Invalid/unwritable records fail closed with 503. Do not delete the journal or receipts to force a retry.
+
+There is no task-cancellation route in this version. Closing a preview, webpage, native panel or service does not guarantee cancellation of an already started browser execution or prevent a subsequent send. Closing/reopening only the preview or changing PDF pages retains the current UI instance's job IDs; a new webpage/panel instance does not automatically restore the task list yet. Jobs do not change the source PDF, saved notes, annotations or database schema 2.
+
+Native components call `paperdesk_reader_chatgpt_submit` (the POST body), `paperdesk_reader_chatgpt_get` (`{jobId}`) and `paperdesk_reader_chatgpt_resume` (`{jobId}`). Each verifies the local service/library and returns job data only in `_meta.chatgptJob`, with generic success text in ordinary content. These 3 app-only tools set `openWorldHint: true`; no job question or answer is injected through `ui/message` or model context. The native resource is `ui://paperdesk/reader-v5.html`, with 17 tools total, 9 app-only. Empty network/resource/frame CSP lists remain unchanged.

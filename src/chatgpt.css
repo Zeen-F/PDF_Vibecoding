@@ -26,3 +26,9 @@
   .chatgpt-handoff-actions > * { flex:1 1 155px; }
   .selection-bar .chatgpt-share { margin-left:0; }
 }
+
+.chatgpt-manual { margin-top:20px; border-top:1px solid var(--line); padding-top:14px; }
+.chatgpt-manual summary { cursor:pointer; font-size:12px; color:#65725e; }
+.chatgpt-answer-card { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
+.chatgpt-answer-question { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.8; margin:12px 0; }
+.chatgpt-answer-card > .secondary-button { margin-top:10px; }

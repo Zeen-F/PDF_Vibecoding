@@ -25,8 +25,32 @@ function AnnotationCard({annotation,onJump,onUpdate,onDelete}) {
   </article>;
 }
 
-function ChatgptHandoff({snapshot,onClose,copying,onCopyPrompt}) {
+const CHATGPT_RUNNING=new Set(['queued','connecting','uploading','sending','waiting']);
+const CHATGPT_STATES={queued:'排队中',connecting:'正在连接 ChatGPT',uploading:'正在上传选区图片',sending:'正在发送问题',waiting:'正在等待回答',needs_user:'需要你完成连接',completed:'回答已收到',failed:'任务未完成',uncertain:'发送结果不确定'};
+async function chatgptRequest(path,options={}) {
+  const response=await fetch(`/api/chatgpt/jobs${path}`,{...options,headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(20000)});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){const error=new Error(data.error||`任务请求未完成 (${response.status})`);error.status=response.status;throw error;}
+  return data.job;
+}
+function ChatgptAnswers({records,onClose,onResume,onRefresh,onRetry}) {
+  const [copied,setCopied]=useState('');
+  const copy=async(record)=>{try{await navigator.clipboard.writeText(record.job.response);setCopied(record.requestId);}catch{const textarea=window.document.getElementById(`answer-${record.requestId}`);textarea?.focus();textarea?.select();setCopied('manual');}};
+  return <div className="chatgpt-handoff-backdrop" onKeyDown={event=>{
+    if(event.key==='Escape'){event.preventDefault();onClose();}
+    if(event.key==='Tab'){const items=[...event.currentTarget.querySelectorAll('button:not(:disabled),textarea')],first=items[0],last=items.at(-1);if(event.shiftKey&&window.document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&window.document.activeElement===last){event.preventDefault();first?.focus();}}
+  }}><section className="chatgpt-handoff-dialog" role="dialog" aria-modal="true" aria-label="ChatGPT 回答"><div className="chatgpt-handoff-heading"><h2>ChatGPT 回答</h2><button autoFocus className="icon-button" aria-label="关闭 ChatGPT 回答" onClick={onClose}><X size={20}/></button></div><p className="chatgpt-handoff-boundary">回答不会自动写入笔记。关闭窗口或翻页后，可通过“查看回答”继续查看当前文献的任务。</p>
+    {records.map(record=><article key={record.requestId} className="chatgpt-answer-card" data-job-id={record.requestId}><p className="chatgpt-handoff-source"><strong>{record.title}</strong> · PDF 第 {record.body.page} 页</p><p className="chatgpt-answer-question">{record.body.question}</p><p className="chatgpt-handoff-status" role="status">{record.busy==='submitting'?'正在确认提交…':CHATGPT_STATES[record.job?.state]||'尚未确认任务状态'}{record.job?.message?`：${record.job.message}`:''}</p>{record.error&&<p className="chatgpt-handoff-status" data-error="true" role="alert">{record.error}</p>}
+      {record.job?.state==='uncertain'&&<p className="chatgpt-handoff-boundary">请先核对 ChatGPT 会话。此任务不会自动重新发送。</p>}
+      {typeof record.job?.response==='string'&&record.job.response&&<><textarea id={`answer-${record.requestId}`} aria-label="ChatGPT 回答" readOnly rows={12} value={record.job.response}/><button className="secondary-button" onClick={()=>copy(record)}>复制回答</button></>}
+      <div className="chatgpt-handoff-actions">{record.job?.state==='needs_user'&&record.job.canResume&&<button className="primary-button" disabled={Boolean(record.busy)} onClick={()=>onResume(record.requestId)}>我已完成，继续连接</button>}<button className="secondary-button" disabled={Boolean(record.busy)} onClick={()=>onRefresh(record.requestId)}>刷新任务状态</button>{!record.job&&record.lookupNotFound&&<button className="secondary-button" disabled={Boolean(record.busy)} onClick={()=>onRetry(record.requestId)}>重新确认提交</button>}</div>
+      {copied===record.requestId&&<p role="status">回答已复制。</p>}
+    </article>)}{copied==='manual'&&<p role="status">复制未完成，已选中回答，请手动复制。</p>}
+  </section></div>;
+}
+function ChatgptHandoff({snapshot,onClose,copying,onCopyPrompt,onSubmit,submission,onViewAnswers}) {
   const [question,setQuestion]=useState(DEFAULT_CHATGPT_QUESTION);
+  const submitted=useRef(false);
   const [status,setStatus]=useState(null);
   const prepared=useRef(null),questionInput=useRef(null),active=useRef(false),copySequence=useRef(0),copyPending=useRef(false);
   const downloadUrls=useRef(new Map());
@@ -61,7 +85,7 @@ function ChatgptHandoff({snapshot,onClose,copying,onCopyPrompt}) {
   const trapFocus=event=>{
     if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();return;}
     if(event.key!=='Tab')return;
-    const items=[...event.currentTarget.querySelectorAll('button:not(:disabled),a[href],textarea:not(:disabled)')];
+    const items=[...event.currentTarget.querySelectorAll('button:not(:disabled),a[href],textarea:not(:disabled),summary')].filter(item=>item.getClientRects().length);
     const first=items[0],last=items.at(-1),focused=window.document.activeElement;
     if(event.shiftKey&&(focused===first||!items.includes(focused))){event.preventDefault();last?.focus();}
     else if(!event.shiftKey&&(focused===last||!items.includes(focused))){event.preventDefault();first?.focus();}
@@ -70,15 +94,22 @@ function ChatgptHandoff({snapshot,onClose,copying,onCopyPrompt}) {
     <section className="chatgpt-handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="chatgpt-handoff-title" aria-describedby="chatgpt-handoff-instructions">
       <div className="chatgpt-handoff-heading"><div><span className="section-eyebrow">TAKE A QUESTION WITH YOU</span><h2 id="chatgpt-handoff-title">ChatGPT 提问准备</h2></div><button className="icon-button" aria-label="关闭 ChatGPT 提问准备" onClick={close}><X size={20}/></button></div>
       <p className="chatgpt-handoff-source"><strong>{snapshot.title}</strong> · PDF 第 {snapshot.page} 页</p>
-      {snapshot.kind==='region'?<figure className="chatgpt-handoff-preview"><img src={snapshot.preview} alt={`第 ${snapshot.page} 页框选区域预览`}/><figcaption>仅保存这里预览的选区图片，请在 ChatGPT 中另行附上。</figcaption></figure>:<blockquote className="chatgpt-handoff-quote">{snapshot.text}</blockquote>}
+      {snapshot.kind==='region'?<figure className="chatgpt-handoff-preview"><img src={snapshot.preview} alt={`第 ${snapshot.page} 页框选区域预览`}/><figcaption>提问只携带这里预览的选区图片。</figcaption></figure>:<blockquote className="chatgpt-handoff-quote">{snapshot.text}</blockquote>}
       <label htmlFor="chatgpt-question">向 ChatGPT 提问</label>
-      <textarea id="chatgpt-question" ref={questionInput} rows={3} maxLength={MAX_CHATGPT_QUESTION_LENGTH} value={question} onChange={event=>{copySequence.current++;setQuestion(event.target.value);setStatus(null);}}/>
+      <textarea id="chatgpt-question" ref={questionInput} rows={3} disabled={Boolean(submission)} maxLength={MAX_CHATGPT_QUESTION_LENGTH} value={question} onChange={event=>{copySequence.current++;setQuestion(event.target.value);setStatus(null);}}/>
+      <p id="chatgpt-handoff-instructions" className="chatgpt-handoff-instructions">确认后自动连接普通 ChatGPT，提交这个问题和选区，并在纸间显示回答。登录、验证码或模型设置需要时会停下来，由你处理后继续。提交后关闭窗口不会取消任务，可点“查看回答”继续查看。</p>
+      <div className="chatgpt-handoff-actions"><button className="primary-button" disabled={!question.trim()||Boolean(submission)} onClick={()=>{if(submitted.current)return;submitted.current=true;onSubmit(snapshot,question.trim());}}>向 ChatGPT 提问</button>{submission&&<button className="secondary-button" onClick={onViewAnswers}>查看回答</button>}</div>
+      {submission&&<p className="chatgpt-handoff-status" role="status">{submission.error||CHATGPT_STATES[submission.job?.state]||'正在确认提交…'}</p>}
+      {submission?.job?.state==='completed'&&typeof submission.job.response==='string'&&<section><label htmlFor="chatgpt-inline-response">ChatGPT 回答预览</label><textarea id="chatgpt-inline-response" aria-label="ChatGPT 回答预览" rows={8} readOnly value={submission.job.response}/></section>}
+      <p className="chatgpt-handoff-boundary">问题发往普通 ChatGPT，不发到当前 Codex 对话。回答不会自动保存到笔记。</p>
+      <details className="chatgpt-manual"><summary>手动备用方式</summary>
       <label htmlFor="chatgpt-prepared">准备给 ChatGPT 的问题</label>
       <textarea id="chatgpt-prepared" ref={prepared} rows={6} readOnly value={prompt}/>
-      <p id="chatgpt-handoff-instructions" className="chatgpt-handoff-instructions">先复制提问{snapshot.kind==='region'?'并保存选区图片':''}，再打开 ChatGPT，粘贴问题{snapshot.kind==='region'?'并附上图片':''}，核对后自行发送。</p>
-      <p className="chatgpt-handoff-boundary">请选择普通聊天（Chat）；ChatGPT Work 与 Codex 共用额度。这里不会自动发送或保存回答，答案需要自行贴入纸间笔记。</p>
+      <p className="chatgpt-handoff-instructions">仅在需要手动处理时，复制提问{snapshot.kind==='region'?'并保存选区图片':''}，打开 ChatGPT 后粘贴、核对并发送。若任务发送结果不确定，请先查看原会话，避免重复发送。</p>
+      <p className="chatgpt-handoff-boundary">请选择普通聊天（Chat）；ChatGPT Work 与 Codex 共用额度。答案需要自行贴入纸间笔记。</p>
       <div className="chatgpt-handoff-actions"><button className="primary-button" disabled={copying||!question.trim()} onClick={copy}>{copying?(copyPending.current?'正在复制…':'等待上次复制…'):'复制 ChatGPT 提问'}</button>{snapshot.kind==='region'&&<button className="secondary-button" onClick={saveImage}><Download size={15}/>保存选区图片</button>}<a className="secondary-button" href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">打开 ChatGPT <ArrowUpRight size={15}/></a></div>
       <p className="chatgpt-handoff-status" role="status" data-error={status?.error||undefined}>{status?.message||''}</p>
+      </details>
     </section>
   </div>;
 }
@@ -92,6 +123,43 @@ export default function App() {
   const librarySearchPending=useRef(false);
   const [selection,setSelection]=useState(null),[modal,setModal]=useState(false),[comment,setComment]=useState(''),[color,setColor]=useState('yellow'),[annotationBusy,setAnnotationBusy]=useState(false),[focused,setFocused]=useState(null),[focusTick,setFocusTick]=useState(0);
   const [handoff,setHandoff]=useState(null);
+  const [chatgptJobs,setChatgptJobs]=useState([]),[answersOpen,setAnswersOpen]=useState(false),[handoffRequestId,setHandoffRequestId]=useState(null);
+  const chatgptRecords=useRef(new Map()),chatgptMounted=useRef(true);
+  const updateChatgptRecord=useCallback((requestId,patch)=>{const record=chatgptRecords.current.get(requestId);if(!record)return;chatgptRecords.current.set(requestId,{...record,...patch});if(chatgptMounted.current)setChatgptJobs([...chatgptRecords.current.values()]);},[]);
+  const acceptChatgptJob=useCallback((requestId,job)=>{const record=chatgptRecords.current.get(requestId);if(!record||job?.id!==requestId||job.documentId!==record.body.documentId||job.page!==record.body.page)throw new Error('任务返回的文献或页码不一致，已保留原提问。');updateChatgptRecord(requestId,{job,error:null,lookupNotFound:false});},[updateChatgptRecord]);
+  const refreshChatgptJob=useCallback(async requestId=>{
+    const record=chatgptRecords.current.get(requestId);if(!record||record.busy)return;
+    updateChatgptRecord(requestId,{busy:'checking'});
+    try{acceptChatgptJob(requestId,await chatgptRequest(`/${requestId}`));}
+    catch(error){updateChatgptRecord(requestId,{error:error.status===404?'尚未找到原任务。可重新确认原提交；仍使用同一请求，不会重复派发已存在的任务。':`未能刷新任务：${error.message}`,lookupNotFound:error.status===404});}
+    finally{updateChatgptRecord(requestId,{busy:null});}
+  },[acceptChatgptJob,updateChatgptRecord]);
+  const submitChatgptRecord=async requestId=>{
+    const record=chatgptRecords.current.get(requestId);if(!record||record.busy||record.job)return;
+    updateChatgptRecord(requestId,{busy:'submitting',error:null,lookupNotFound:false});
+    let unknown=false;
+    try{acceptChatgptJob(requestId,await chatgptRequest('',{method:'POST',body:JSON.stringify(record.body)}));}
+    catch(error){unknown=true;updateChatgptRecord(requestId,{error:`未能确认提交：${error.message}。正在查询原请求，不会自动重新发送。`});}
+    finally{updateChatgptRecord(requestId,{busy:null});}
+    if(unknown&&chatgptMounted.current)void refreshChatgptJob(requestId);
+  };
+  const submitChatgpt=(snapshot,question)=>{
+    const requestId=crypto.randomUUID();
+    const body=Object.freeze({requestId,documentId:snapshot.documentId,page:snapshot.page,question,selection:Object.freeze(snapshot.kind==='region'?{kind:'region',text:'',preview:snapshot.preview}:{kind:'text',text:snapshot.text})});
+    chatgptRecords.current.set(requestId,{requestId,title:snapshot.title,body,job:null,error:null,busy:null});setChatgptJobs([...chatgptRecords.current.values()]);setHandoffRequestId(requestId);void submitChatgptRecord(requestId);
+  };
+  const resumeChatgptJob=async requestId=>{
+    const record=chatgptRecords.current.get(requestId);if(!record||record.busy||record.job?.state!=='needs_user'||!record.job.canResume)return;
+    updateChatgptRecord(requestId,{busy:'resuming',error:null});
+    try{acceptChatgptJob(requestId,await chatgptRequest(`/${requestId}/resume`,{method:'POST',body:'{}'}));}
+    catch(error){updateChatgptRecord(requestId,{error:`未能确认继续连接：${error.message}。请刷新原任务状态，不要重新发送。`});}
+    finally{updateChatgptRecord(requestId,{busy:null});}
+  };
+  useEffect(()=>{
+    chatgptMounted.current=true;
+    const timer=setInterval(()=>{for(const record of chatgptRecords.current.values())if(!record.busy&&!record.lookupNotFound&&(!record.job||CHATGPT_RUNNING.has(record.job.state)))void refreshChatgptJob(record.requestId);},1500);
+    return()=>{chatgptMounted.current=false;clearInterval(timer);};
+  },[refreshChatgptJob]);
   const [handoffCopying,setHandoffCopying]=useState(false);
   const handoffCopyPending=useRef(false);
   const handoffOpen=Boolean(handoff&&handoff.documentId===current?.id&&handoff.page===page);
@@ -103,7 +171,7 @@ export default function App() {
   const notify=useCallback((message,type='error')=>{setToast({message,type});clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(null),type==='error'?11000:5000);},[]);
   const refresh=async()=>{const data=await api('/documents');setDocuments(data.documents);return data.documents;};
   const openDocument=async(id,targetPage)=>{
-    const token=++openToken.current;setOpening(true);setSelection(null);setModal(false);setHandoff(null);setFind('');setFocused(null);
+    const token=++openToken.current;setOpening(true);setSelection(null);setModal(false);setHandoff(null);setAnswersOpen(false);setFind('');setFocused(null);
     try {await notesRef.current?.flush();if(token!==openToken.current)return false;const data=await api(`/documents/${encodeURIComponent(id)}`);if(token!==openToken.current)return false;const requested=targetPage??data.document.lastPage??1;const valid=Number.isSafeInteger(requested)&&requested>=1&&requested<=data.document.pageCount;setCurrent(data.document);setAnnotations(data.annotations);setPage(valid?requested:1);if(!valid)notify('链接中的页码无效，已打开第 1 页。');try{localStorage.setItem('paperdesk-current',id);}catch{}return true;}
     catch(err){if(token===openToken.current)notify(err.message);}
     finally{if(token===openToken.current)setOpening(false);}
@@ -129,7 +197,9 @@ export default function App() {
   const codex=useCodexContext({document:current,page,selection,notesDirty:notesState.documentId===current?.id&&notesState.dirty,onDocument:savedDoc,onError:notify});
   const changePage=n=>{if(!Number.isSafeInteger(n)||n<1||n>(current?.pageCount||0))return;setHandoff(null);setPage(n);setSelection(null);setFind('');setFocused(null);};
   useEffect(()=>{setHandoff(null);},[current?.id,page]);
-  const openHandoff=()=>{try{setHandoff(createChatgptHandoffSnapshot(current,page,selection));}catch(error){notify(error.message);}};
+  const openHandoff=()=>{try{setHandoff(createChatgptHandoffSnapshot(current,page,selection));setHandoffRequestId(null);}catch(error){notify(error.message);}};
+  const viewChatgptAnswers=()=>{setHandoff(null);setAnswersOpen(true);};
+  const currentChatgptJobs=chatgptJobs.filter(record=>record.body.documentId===current?.id).slice().reverse();
   const closeHandoff=()=>{const documentId=current?.id,closedPage=page;setHandoff(null);requestAnimationFrame(()=>{if(currentIdRef.current===documentId&&currentPageRef.current===closedPage)handoffTrigger.current?.focus();});};
   // Clipboard writes cannot be cancelled. Keep one lock across dialog mounts
   // so an old document's delayed write cannot finish after a newer copy.
@@ -151,7 +221,7 @@ export default function App() {
   useEffect(()=>{if(current)patchDocument(current.id,{lastPage:page}).catch(e=>notify(`阅读位置未保存：${e.message}`));},[current?.id,page]);
   const importFiles=async files=>{
     if(importing)return;
-    if(handoffOpen){notify('请先关闭 ChatGPT 提问准备，再导入 PDF。');return;}
+    if(handoffOpen||answersOpen){notify('请先关闭 ChatGPT 窗口，再导入 PDF。');return;}
     if(modal||annotationBusy){notify('请先保存或关闭批注窗口，再导入 PDF。');return;}
     const list=[...files];if(!list.length)return;
     setImporting(true);let last,done=0,duplicates=0;const failures=[];
@@ -191,10 +261,10 @@ export default function App() {
       </nav>
       <div className="sidebar-bottom"><button className="demo-link" onClick={demo} disabled={importing}><BookOpen size={15}/> 打开阅读示例 <ArrowUpRight size={13}/></button><div className="local-badge"><span className="online-dot"/><span>本地书桌 · 数据保存在此 Mac</span><LockKeyhole size={12}/></div></div>
     </aside>
-    <main className="main-workspace" inert={modal||handoffOpen||undefined}>
-      <header className="workspace-header"><button className="icon-button library-toggle" aria-label={showLibrary?'收起文献栏':'展开文献栏'} title={showLibrary?'收起文献栏':'展开文献栏'} aria-expanded={showLibrary} aria-controls="library-panel" onClick={toggleLibrary}>{showLibrary?<PanelLeftClose size={19}/>:<PanelLeftOpen size={19}/>}</button><div className="header-title"><span className="eyebrow">YOUR READING SPACE</span><h1 title={current?.title}>{current?current.title:'把论文读成自己的理解。'}</h1></div><div className="header-actions">{current&&!codex.dismissed&&<div className="codex-status" data-shared={codex.shared} role="status"><span>{codex.status==='shared'?'选区已共享':codex.status==='error'?'阅读上下文暂不可用':codex.status==='ready'?'阅读上下文已就绪':'正在准备阅读上下文…'}</span><button className="icon-button small" aria-label={codex.shared?'停止共享选区':'关闭 Codex 状态'} onClick={codex.shared?codex.clear:codex.dismiss}><X size={13}/></button></div>}{current&&<><button className="secondary-button export-button" aria-label="导出 Markdown" title="导出 Markdown" disabled={exporting} onClick={exportMarkdown}>{exporting?<LoaderCircle size={15} className="spin"/>:<Download size={15}/>}<span>导出 Markdown</span></button><button className="icon-button panel-toggle" aria-label={showNotes?'收起笔记面板':'展开笔记面板'} onClick={toggleNotes}>{showNotes?<PanelRightClose size={19}/>:<PanelRightOpen size={19}/>}</button></>}<span className="local-pill">LOCAL</span></div></header>
+    <main className="main-workspace" inert={modal||handoffOpen||answersOpen||undefined}>
+      <header className="workspace-header"><button className="icon-button library-toggle" aria-label={showLibrary?'收起文献栏':'展开文献栏'} title={showLibrary?'收起文献栏':'展开文献栏'} aria-expanded={showLibrary} aria-controls="library-panel" onClick={toggleLibrary}>{showLibrary?<PanelLeftClose size={19}/>:<PanelLeftOpen size={19}/>}</button><div className="header-title"><span className="eyebrow">YOUR READING SPACE</span><h1 title={current?.title}>{current?current.title:'把论文读成自己的理解。'}</h1></div><div className="header-actions">{currentChatgptJobs.length>0&&<button className="secondary-button" onClick={viewChatgptAnswers}>查看回答</button>}{current&&!codex.dismissed&&<div className="codex-status" data-shared={codex.shared} role="status"><span>{codex.status==='shared'?'选区已共享':codex.status==='error'?'阅读上下文暂不可用':codex.status==='ready'?'阅读上下文已就绪':'正在准备阅读上下文…'}</span><button className="icon-button small" aria-label={codex.shared?'停止共享选区':'关闭 Codex 状态'} onClick={codex.shared?codex.clear:codex.dismiss}><X size={13}/></button></div>}{current&&<><button className="secondary-button export-button" aria-label="导出 Markdown" title="导出 Markdown" disabled={exporting} onClick={exportMarkdown}>{exporting?<LoaderCircle size={15} className="spin"/>:<Download size={15}/>}<span>导出 Markdown</span></button><button className="icon-button panel-toggle" aria-label={showNotes?'收起笔记面板':'展开笔记面板'} onClick={toggleNotes}>{showNotes?<PanelRightClose size={19}/>:<PanelRightOpen size={19}/>}</button></>}<span className="local-pill">LOCAL</span></div></header>
       {current?<div className={`reading-layout ${showNotes?'':'notes-hidden'}`}>
-        <Reader document={current} page={page} onPage={changePage} annotations={annotations} selection={selection} onSelection={setSelection} selectionLocked={modal||handoffOpen} find={find} focusedAnnotation={focused} focusTick={focusTick} tocOpen={tocOpen} onToggleToc={toggleToc}/>
+        <Reader document={current} page={page} onPage={changePage} annotations={annotations} selection={selection} onSelection={setSelection} selectionLocked={modal||handoffOpen||answersOpen} find={find} focusedAnnotation={focused} focusTick={focusTick} tocOpen={tocOpen} onToggleToc={toggleToc}/>
         <aside className={`notes-panel ${showNotes?'':'collapsed'}`} aria-label="笔记与批注" inert={opening||undefined}><div className="panel-tabs"><button className={tab==='notes'?'selected':''} onClick={()=>setTab('notes')}><Pencil size={14}/> 笔记</button><button className={tab==='annotations'?'selected':''} onClick={()=>setTab('annotations')}><MessageSquare size={14}/> 批注 <span>{annotations.length}</span></button></div>
           <div className={tab==='notes'?'panel-content':'panel-content invisible'}><Notes key={current.id} ref={notesRef} document={current} onSaved={savedDoc} onError={notify} onDirtyChange={notesDirtyChanged}/></div>
           {tab==='annotations'&&<div className="annotations-body"><div className="section-eyebrow">MARGINALIA</div><h2>与原文的对话</h2><p className="notes-intro">选中文字可高亮；扫描页、公式和图表可用“区域批注”框选。点击批注可回到标记处。</p>{annotations.length?annotations.slice().sort((a,b)=>a.page-b.page||a.createdAt.localeCompare(b.createdAt)).map(a=><AnnotationCard key={a.id} annotation={a} onJump={a=>{setSelection(null);setPage(a.page);setFocused(a.id);setFocusTick(t=>t+1);setFind('');if(window.matchMedia('(max-width:780px)').matches){setShowNotes(false);setTocOpen(false);}}} onUpdate={updateAnnotation} onDelete={deleteAnnotation}/>):<div className="empty-annotations"><Highlighter size={28} strokeWidth={1.25}/><p>给值得回看的地方，留下想法。</p><span>选中文字或框选区域 → 写下评论</span></div>}</div>}
@@ -202,8 +272,8 @@ export default function App() {
         {opening&&<div className="opening-mask" role="status"><LoaderCircle className="spin"/> 正在打开文献…</div>}
       </div>:<section className="welcome"><div className="welcome-kicker"><span/> A QUIET PLACE FOR BIG IDEAS</div><h2>读过的每一页，<br/>都可以<span>有所留下。</span></h2><p>把文献、原文批注和阅读笔记放在一起。<br/>从一篇论文开始，慢慢建立自己的理解。</p><div className="welcome-actions"><button className="primary-button" disabled={importing} onClick={()=>input.current.click()}><Upload size={17}/> 导入第一篇 PDF <ArrowRight size={17}/></button><button className="text-button" disabled={importing} onClick={demo}>先用示例体验 <ArrowUpRight size={15}/></button></div><div className="desk-illustration" aria-hidden="true"><div className="book-back"/><div className="paper-card"><span>PAPER / 001</span><h3>The art of<br/>paying attention.</h3><div className="fake-line long"/><div className="fake-line"/><div className="fake-line highlighted"/><div className="fake-line short"/><div className="paper-stamp">read.<br/>think.<br/>keep.</div></div><div className="margin-note">有些句子，<br/>值得多停留一会儿。<span>↖</span></div></div><div className="welcome-features"><span><Search size={15}/> 全文检索</span><span><Highlighter size={15}/> 原文高亮</span><span><Pencil size={15}/> 笔记</span><span><LockKeyhole size={15}/> 完全本地</span></div></section>}
     </main>
-    {selection&&!modal&&!handoffOpen&&!opening&&<div className="selection-bar" aria-label="选区操作" onPointerDown={e=>e.preventDefault()}>{selection.kind==='region'?<ScanLine size={17}/>:<Highlighter size={17}/>}<div className="selection-summary">{selection.kind==='region'?<><span>区域批注 · 第 {selection.page} 页</span><p>已框选页面区域，添加一条想法。</p></>:<><span>已选中 {selection.quote.length} 个字符 · 核对引文</span><p title={selection.quote}>{selection.quote}</p></>}</div><button className="text-button codex-share" onClick={codex.share}>交给 Codex</button><button ref={handoffTrigger} className="text-button chatgpt-share" onClick={openHandoff}>交给 ChatGPT</button><button className="mini-primary" onClick={()=>{setComment('');setColor('yellow');setModal(true);}}>{selection.kind==='region'?'添加区域批注':'高亮并批注'}</button><button className="icon-button small" aria-label="取消选择" onClick={()=>{setSelection(null);window.getSelection()?.removeAllRanges();}}><X size={16}/></button></div>}
-    {handoffOpen&&<ChatgptHandoff snapshot={handoff} onClose={closeHandoff} copying={handoffCopying} onCopyPrompt={copyHandoffPrompt}/>}
+    {selection&&!modal&&!handoffOpen&&!answersOpen&&!opening&&<div className="selection-bar" aria-label="选区操作" onPointerDown={e=>e.preventDefault()}>{selection.kind==='region'?<ScanLine size={17}/>:<Highlighter size={17}/>}<div className="selection-summary">{selection.kind==='region'?<><span>区域批注 · 第 {selection.page} 页</span><p>已框选页面区域，添加一条想法。</p></>:<><span>已选中 {selection.quote.length} 个字符 · 核对引文</span><p title={selection.quote}>{selection.quote}</p></>}</div><button className="text-button codex-share" onClick={codex.share}>交给 Codex</button><button ref={handoffTrigger} className="text-button chatgpt-share" onClick={openHandoff}>交给 ChatGPT</button><button className="mini-primary" onClick={()=>{setComment('');setColor('yellow');setModal(true);}}>{selection.kind==='region'?'添加区域批注':'高亮并批注'}</button><button className="icon-button small" aria-label="取消选择" onClick={()=>{setSelection(null);window.getSelection()?.removeAllRanges();}}><X size={16}/></button></div>}
+    {handoffOpen&&<ChatgptHandoff snapshot={handoff} onClose={closeHandoff} copying={handoffCopying} onCopyPrompt={copyHandoffPrompt} onSubmit={submitChatgpt} submission={chatgptJobs.find(record=>record.requestId===handoffRequestId)} onViewAnswers={viewChatgptAnswers}/>}{answersOpen&&<ChatgptAnswers records={currentChatgptJobs} onClose={()=>setAnswersOpen(false)} onResume={resumeChatgptJob} onRefresh={refreshChatgptJob} onRetry={submitChatgptRecord}/>}
     {modal&&selection&&<div className="modal-backdrop" onKeyDown={e=>{if(e.key==='Escape'&&!annotationBusy)setModal(false);if(e.key==='Tab'){const items=[...e.currentTarget.querySelectorAll('button:not(:disabled),textarea')];const first=items[0],last=items.at(-1);if(e.shiftKey&&window.document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&window.document.activeElement===last){e.preventDefault();first?.focus();}}}}><section className="annotation-modal" role="dialog" aria-modal="true" aria-labelledby="annotation-title"><div className="modal-heading"><div><span className="section-eyebrow">LEAVE A THOUGHT</span><h2 id="annotation-title">{selection.kind==='region'?'区域批注':'高亮与批注'} <small>第 {selection.page} 页</small></h2></div><button className="icon-button" disabled={annotationBusy} aria-label="关闭批注窗口" onClick={()=>setModal(false)}><X size={20}/></button></div>{selection.kind==='region'?<figure className="region-preview">{selection.preview&&<img src={selection.preview} alt={`第 ${selection.page} 页框选区域预览`}/>}<figcaption>批注绑定这块区域；原始 PDF 保持不变。</figcaption></figure>:<blockquote>{selection.quote}</blockquote>}<label className="comment-label" htmlFor="new-comment">你的想法 <span>可选</span></label><textarea autoFocus id="new-comment" aria-label="批注评论" placeholder={selection.kind==='region'?'记录这段内容、公式或图表的疑问与理解。':'为什么这句话值得留下？'} maxLength={20000} value={comment} onChange={e=>setComment(e.target.value)}/><div className="modal-footer"><div className="color-picker" aria-label="高亮颜色">{[['yellow','黄色'],['green','绿色'],['pink','粉色']].map(([v,label])=><button key={v} aria-label={label} aria-pressed={color===v} className={`color-choice ${v}`} onClick={()=>setColor(v)}>{color===v&&<Check size={15}/>}</button>)}</div><button className="primary-button" disabled={annotationBusy} onClick={createAnnotation}>{annotationBusy?<LoaderCircle className="spin" size={16}/>:selection.kind==='region'?<ScanLine size={16}/>:<Highlighter size={16}/>} 保存批注</button></div></section></div>}
     {toast&&<div className={`toast ${toast.type}`} role={toast.type==='error'?'alert':'status'} inert={handoffOpen||undefined}>{toast.type==='success'&&<Check size={16}/>}<span>{toast.message}</span><button aria-label="关闭提示" onClick={()=>setToast(null)}><X size={16}/></button></div>}
     {dragging&&<div className="drop-overlay" onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();e.stopPropagation();setDragging(false);importFiles(e.dataTransfer.files);}}><Upload size={42}/><h2>把 PDF 放到书桌上</h2><p>支持多文件，全部保存在本机</p></div>}

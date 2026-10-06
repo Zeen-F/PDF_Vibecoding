@@ -24,7 +24,7 @@ function deferred() {
 
 // Real MCP transport, real isolated API, and a browser sandbox that cannot fetch
 // the local service. Only the parent host's tools/call bridge crosses that gap.
-export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onChatGPTPreview }) {
+export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onChatGPTPreview, chatgptFixture }) {
   const tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-native-reader-'));
   const harnesses = [];
   let client;
@@ -40,7 +40,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     const template = await readFile(join(root, 'plugins/paperdesk/ui/reader.html'), 'utf8');
     const html = template.replace('__PAPERDESK_CONFIG__', JSON.stringify({ baseUrl: base }).replaceAll('<', '\\u003c'));
     assert.ok(!html.includes('__PAPERDESK_CONFIG__'));
-    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close']);
+    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_chatgpt_submit', 'paperdesk_reader_chatgpt_get', 'paperdesk_reader_chatgpt_resume']);
     const tools = (await client.listTools()).tools;
     for (const name of displayTools) assert.deepEqual(tools.find(tool => tool.name === name)?._meta?.ui?.visibility, ['app'], `${name} must be app-only`);
 
@@ -532,6 +532,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       await h.frame.getByRole('button', { name: '交给 ChatGPT', exact: true }).click();
       const section = h.frame.getByRole('region', { name: 'ChatGPT 提问准备', exact: true });
       await expect(section).toBeVisible();
+      if (!await section.locator('details').evaluate(element => element.open)) await section.locator('summary').filter({ hasText: '手动备用方式' }).click();
       return section;
     };
     const assertHandoffPrivate = async h => {
@@ -645,6 +646,76 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     assert.equal(noExport.links.length, 0);
     await assertHandoffPrivate(noExport); await noExport.close();
     console.log('PASS: absent native download/open capabilities retain the preview and offer truthful manual browser fallbacks');
+
+    if (chatgptFixture) {
+      // This is the same private native panel, with real SDK calls to the local
+      // queue. Only its external executor is simulated; never start EGO here.
+      const automatic = await harness({ documentId: book.id, pageNumber: 2 }); await ready(automatic, 2);
+      const beforeNotes = (await request(`/documents/${book.id}`)).document.notesRevision;
+      await selectText(automatic);
+      const automaticSection = automatic.frame.getByRole('region', { name: 'ChatGPT 提问准备', exact: true });
+      await automaticSection.getByRole('textbox', { name: '向 ChatGPT 提问', exact: true }).fill('模拟原生选文解释。');
+      await automaticSection.getByRole('button', { name: '向 ChatGPT 提问', exact: true }).click();
+      const submitCalls = () => automatic.calls.filter(call => call.params?.name === 'paperdesk_reader_chatgpt_submit');
+      await expect.poll(() => submitCalls().length).toBe(1);
+      const submitted = submitCalls()[0].params.arguments;
+      assert.deepEqual(submitted.selection, { kind: 'text', text: 'A short introduction' });
+      assert.equal(submitted.documentId, book.id); assert.equal(submitted.page, 2);
+      const textRun = await chatgptFixture.runFor(submitted.requestId);
+      await textRun.emit({ state: 'waiting', dispatchInvoked: true });
+      await automatic.frame.getByRole('button', { name: '取消共享', exact: true }).click();
+      await automatic.frame.getByRole('button', { name: '下一页', exact: true }).click(); await ready(automatic, 3);
+      textRun.finish({ state: 'completed', response: '模拟原生回答，仅对应第 2 页的选文。' });
+      await expect(automatic.frame.getByRole('dialog', { name: '共享预览', exact: true })).toBeHidden();
+      await automatic.frame.getByRole('button', { name: '查看回答', exact: true }).click();
+      const answerDialog = automatic.frame.getByRole('dialog', { name: 'ChatGPT 回答', exact: true });
+      await expect(answerDialog.getByRole('textbox', { name: 'ChatGPT 回答', exact: true })).toHaveValue('模拟原生回答，仅对应第 2 页的选文。');
+      await expect(answerDialog).toContainText('PDF 第 2 页');
+      assert.equal(submitCalls().length, 1);
+      await assertHandoffPrivate(automatic);
+      assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, beforeNotes);
+      for (const call of automatic.calls.filter(call => call.params?.name?.startsWith('paperdesk_reader_chatgpt_') && call.result)) {
+        assert.deepEqual(call.result.structuredContent, { ok: true });
+        assert.ok(call.result._meta.chatgptJob);
+        const modelVisible = JSON.stringify({ content: call.result.content, structuredContent: call.result.structuredContent });
+        assert.doesNotMatch(modelVisible, /模拟原生|A short introduction|PRIVATE/);
+      }
+      await automatic.close();
+
+      const automaticRegion = await harness({ documentId: scan.id }); await ready(automaticRegion, 1);
+      await automaticRegion.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(automaticRegion, [.5, .36], [.15, .18]);
+      const automaticPng = await automaticRegion.frame.getByRole('img', { name: '选区预览', exact: true }).getAttribute('src');
+      const automaticPageSize = await image(automaticRegion, 1).evaluate(element => ({ width: element.naturalWidth, height: element.naturalHeight }));
+      await automaticRegion.frame.getByRole('button', { name: '向 ChatGPT 提问', exact: true }).click();
+      await expect.poll(() => automaticRegion.calls.some(call => call.params?.name === 'paperdesk_reader_chatgpt_submit')).toBe(true);
+      const regionArgs = automaticRegion.calls.find(call => call.params?.name === 'paperdesk_reader_chatgpt_submit').params.arguments;
+      assert.deepEqual(regionArgs.selection, { kind: 'region', text: '', preview: automaticPng });
+      const regionRun = await chatgptFixture.runFor(regionArgs.requestId);
+      assertCropPng(Buffer.from(regionRun.job.selection.preview.split(',')[1], 'base64'), automaticPng, automaticPageSize);
+      regionRun.finish({ state: 'needs_user', canResume: true, message: '模拟需要用户处理。' });
+      await automaticRegion.frame.locator('#preview-view-answers').click();
+      const regionAnswer = automaticRegion.frame.getByRole('dialog', { name: 'ChatGPT 回答', exact: true });
+      await expect(regionAnswer.getByRole('button', { name: '我已完成，继续连接', exact: true })).toBeVisible();
+      assert.equal(automaticRegion.calls.some(call => call.params?.name === 'paperdesk_reader_chatgpt_resume'), false);
+      await regionAnswer.getByRole('button', { name: '我已完成，继续连接', exact: true }).click();
+      const resumed = await chatgptFixture.runFor(regionArgs.requestId, { resume: true });
+      resumed.finish({ state: 'completed', response: '模拟图形回答。', dispatchInvoked: true });
+      await expect(regionAnswer.getByRole('textbox', { name: 'ChatGPT 回答', exact: true })).toHaveValue('模拟图形回答。');
+      assert.equal(automaticRegion.calls.filter(call => call.params?.name === 'paperdesk_reader_chatgpt_submit').length, 1);
+      assert.equal(automaticRegion.calls.filter(call => call.params?.name === 'paperdesk_reader_chatgpt_resume').length, 1);
+      await assertHandoffPrivate(automaticRegion); await automaticRegion.close();
+      const inline = await harness({ documentId: book.id, pageNumber: 2 }); await ready(inline, 2); await selectText(inline);
+      await inline.frame.getByRole('button', { name: '向 ChatGPT 提问', exact: true }).click();
+      await expect.poll(() => inline.calls.some(call => call.params?.name === 'paperdesk_reader_chatgpt_submit')).toBe(true);
+      const inlineId = inline.calls.find(call => call.params?.name === 'paperdesk_reader_chatgpt_submit').params.arguments.requestId;
+      const completeReply = '模拟内联完整回答。\n\n第二段继续保留，回答不会写入笔记。';
+      (await chatgptFixture.runFor(inlineId)).finish({ state: 'completed', response: completeReply, dispatchInvoked: true });
+      const inlineReply = inline.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('textbox', { name: 'ChatGPT 回答预览', exact: true });
+      await expect(inlineReply).toBeVisible(); await expect(inlineReply).toHaveAttribute('readonly', ''); await expect(inlineReply).toHaveValue(completeReply);
+      assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, beforeNotes);
+      await assertHandoffPrivate(inline); await inline.close();
+      console.log('PASS: opaque native automatic ChatGPT uses private MCP job results, exact text/crop snapshots and explicit resume without Codex messages or context');
+    }
 
     for (const item of harnesses) assert.deepEqual(item.errors, [], 'Native reader must not raise uncaught browser exceptions');
     assert.equal(stderr, '', 'Native MCP transport must keep stderr quiet');

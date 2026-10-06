@@ -33,7 +33,7 @@ function crc32(bytes) {
 
 // Validate the transient image itself, not just a claimed MIME type. Limit
 // decompression separately so a tiny compressed image cannot exhaust memory.
-function validPng(bytes) {
+export function validPng(bytes) {
   if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return false;
   let offset = 8, header, palette = false, ended = false, dataEnded = false;
   const imageData = [];

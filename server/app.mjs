@@ -11,6 +11,7 @@ import { extractToc } from './toc.mjs';
 import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
 import { notesRevision, revisionValue, registerPluginApi } from './plugin-api.mjs';
 import { createReaderRenderer, readerPageQuery, readerPageText, ReaderRenderError } from './reader-render.mjs';
+import { registerChatgptJobs } from './chatgpt-jobs.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -209,7 +210,7 @@ function snippet(text, needle) {
 }
 
 /** Create a local app with its own persistent database. The caller owns its HTTP server. */
-export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.join(rootDir, 'data') } = {}) {
+export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.join(rootDir, 'data'), chatgptRunner } = {}) {
   dataDir = path.resolve(dataDir);
   const pdfDir = path.join(dataDir, 'pdfs');
   mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
@@ -264,6 +265,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   });
   // Only reader snapshots carry a transient PNG. Keep the existing note limit.
   app.use('/api/reader-sessions', express.json({ limit: '2.5mb' }));
+  app.use('/api/chatgpt/jobs', express.json({ limit: '2.5mb' }));
   app.use(express.json({ limit: '2mb' }));
   const upload = multer({
     storage: multer.diskStorage({ destination: incomingDir, filename: (_req, _file, callback) => callback(null, `${randomUUID()}.upload`) }),
@@ -334,6 +336,10 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   const pluginApi = registerPluginApi({
     app, db, dataDir, documentOr404, serializeDocument, transaction,
     HttpError, objectBody, stringValue, pageValue, rectanglesValue,
+  });
+  const findJobDocument = db.prepare('SELECT id, title, page_count FROM documents WHERE id = ?');
+  const chatgptJobs = registerChatgptJobs({ app, dataDir, chatgptRunner, HttpError, objectBody, stringValue, pageValue,
+    documentOr404(id) { const doc = findJobDocument.get(id); if (!doc) throw new HttpError(404, '没有找到这篇文献。'); return doc; },
   });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -549,12 +555,12 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     if (error instanceof multer.MulterError) {
       return res.status(400).json({ error: '请仅上传一个 PDF，文件字段名应为 file，不要附加其他文件或字段。' });
     }
-    if (error.type === 'entity.too.large') return res.status(413).json({ error: '请求内容过大，请缩短笔记或批注。' });
+    if (error.type === 'entity.too.large') return res.status(413).json({ error: _req.path.startsWith('/api/chatgpt/jobs') ? '问题或选区图片过大，请缩小选区后重试。' : '请求内容过大，请缩短笔记或批注。' });
     if (error instanceof SyntaxError && error.status === 400) return res.status(400).json({ error: 'JSON 格式不正确。' });
     if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
     console.error('Paperdesk request failed:', error);
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   let closed = false;
-  return { app, close() { if (!closed) { closed = true; pluginApi.close(); tocCache.clear(); db.close(); } return readerRenderer.close(); } };
+  return { app, close() { if (!closed) { closed = true; pluginApi.close(); void chatgptJobs.close(); tocCache.clear(); db.close(); } return readerRenderer.close(); } };
 }

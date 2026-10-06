@@ -58,7 +58,13 @@ test('plugin refuses remote, credentialed and path-bearing base URLs', () => {
 
 test('cached plugin uses real stdio SDK protocol with the isolated local API', async t => {
   const dataDir = await mkdtemp(join(tmpdir(), 'paperdesk-plugin-library-'));
-  const runtime = createApp({ dataDir });
+  const chatgptRuns = [];
+  const runtime = createApp({ dataDir, chatgptRunner: { async run(job, emit, { resume }) {
+    chatgptRuns.push({ job: structuredClone(job), resume });
+    if (job.selection.kind === 'region' && !resume) return { state: 'needs_user', canResume: true, message: 'Simulated login required.' };
+    await emit({ state: 'waiting', dispatchInvoked: true });
+    return { state: 'completed', response: `PRIVATE_SIMULATED_REPLY:${job.question}` };
+  } } });
   const httpServer = createServer(runtime.app);
   const baseUrl = await listen(httpServer);
   t.after(async () => { await stop(httpServer); await runtime.close(); await rm(dataDir, { recursive: true, force: true }); });
@@ -78,7 +84,14 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close'].sort());
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_chatgpt_submit', 'paperdesk_reader_chatgpt_get', 'paperdesk_reader_chatgpt_resume'].sort());
+    assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 9);
+    assert.equal(client.getServerVersion().version, '0.5.0');
+    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v5.html');
+    for (const name of ['submit', 'resume', 'get']) {
+      const tool = tools.find(tool => tool.name === `paperdesk_reader_chatgpt_${name}`);
+      assert.equal(tool.annotations.readOnlyHint, name === 'get');
+    }
     assert.equal(tools.find(tool => tool.name === 'paperdesk_append_note').annotations.readOnlyHint, false);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_get_notes').annotations.readOnlyHint, true);
     const open = tools.find(tool => tool.name === 'paperdesk_open_reader');
@@ -201,6 +214,44 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
     value(await call(client, 'paperdesk_reader_close', { sessionId: nativeId }));
     assert.equal((await call(client, 'paperdesk_get_context', { sessionId: nativeId })).isError, true);
   });
+  await t.test('automatic ChatGPT tools expose only private job receipts and preserve frozen selection/idempotency', async () => {
+    const before = (await api(`/api/documents/${doc.id}`)).document;
+    const privateReceipt = result => {
+      assert.deepEqual(value(result), { ok: true });
+      assert.ok(result._meta.chatgptJob);
+      assert.doesNotMatch(JSON.stringify({ content: result.content, structuredContent: result.structuredContent }), /PRIVATE|selected fragment|data:image|original-example/);
+      for (const key of ['selection', 'question', 'preview', 'digest', 'notes', 'notesZh', 'notesEn']) assert.equal(Object.hasOwn(result._meta.chatgptJob, key), false);
+      return result._meta.chatgptJob;
+    };
+    const waitForState = async (id, state) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const job = privateReceipt(await call(client, 'paperdesk_reader_chatgpt_get', { jobId: id }));
+        if (job.state === state && (state !== 'needs_user' || job.canResume)) return job;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.fail(`Simulated job did not reach ${state}`);
+    };
+    const body = { requestId: randomUUID(), documentId: doc.id, page: 1, question: 'PRIVATE_SHORT_QUESTION', selection: { kind: 'text', text: 'selected fragment' } };
+    assert.equal(privateReceipt(await call(client, 'paperdesk_reader_chatgpt_submit', body)).id, body.requestId);
+    const completed = await waitForState(body.requestId, 'completed');
+    assert.equal(completed.response, 'PRIVATE_SIMULATED_REPLY:PRIVATE_SHORT_QUESTION');
+    privateReceipt(await call(client, 'paperdesk_reader_chatgpt_submit', body));
+    assert.equal(chatgptRuns.filter(run => run.job.id === body.requestId).length, 1);
+    assert.deepEqual(chatgptRuns.find(run => run.job.id === body.requestId).job.selection, body.selection);
+    assert.equal((await call(client, 'paperdesk_reader_chatgpt_submit', { ...body, question: 'Different payload' })).structuredContent.status, 409);
+    assert.equal((await call(client, 'paperdesk_reader_chatgpt_submit', { ...body, requestId: randomUUID(), notes: 'must not be accepted' })).isError, true);
+    const imageBody = { ...body, requestId: randomUUID(), selection: { kind: 'region', text: '', preview: pngPreview() } };
+    privateReceipt(await call(client, 'paperdesk_reader_chatgpt_submit', imageBody));
+    await waitForState(imageBody.requestId, 'needs_user');
+    assert.equal(chatgptRuns.filter(run => run.job.id === imageBody.requestId).length, 1);
+    privateReceipt(await call(client, 'paperdesk_reader_chatgpt_resume', { jobId: imageBody.requestId }));
+    await waitForState(imageBody.requestId, 'completed');
+    const imageRuns = chatgptRuns.filter(run => run.job.id === imageBody.requestId);
+    assert.deepEqual(imageRuns.map(run => run.resume), [false, true]);
+    assert.deepEqual(imageRuns[1].job.selection, imageBody.selection);
+    const after = (await api(`/api/documents/${doc.id}`)).document;
+    assert.equal(after.notesRevision, before.notesRevision); assert.equal(after.notesZh, before.notesZh);
+  });
 });
 
 test('each operation rejects another service/library before requesting private endpoints', async t => {
@@ -223,6 +274,9 @@ test('each operation rejects another service/library before requesting private e
   assert.equal((await call(client, 'paperdesk_append_note', { documentId, text: 'do not write', expectedNotesRevision: 'c'.repeat(64), requestId: randomUUID() })).isError, true);
   assert.equal((await call(client, 'paperdesk_reader_page', { documentId, page: 1 })).isError, true);
   assert.equal((await call(client, 'paperdesk_reader_save_notes', { documentId, notes: 'do not write', expectedNotesRevision: 'c'.repeat(64) })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_chatgpt_submit', { requestId: randomUUID(), documentId, page: 1, question: 'do not send', selection: { kind: 'text', text: 'private' } })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_chatgpt_get', { jobId: randomUUID() })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_chatgpt_resume', { jobId: randomUUID() })).isError, true);
   await assert.rejects(client.readResource({ uri: READER_RESOURCE }));
   assert.deepEqual(privatePaths, []);
 });

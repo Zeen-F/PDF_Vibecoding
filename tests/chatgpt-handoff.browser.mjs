@@ -73,6 +73,7 @@ export async function chatgptHandoffWorkflow({ context, base, onPreview }) {
   };
   const verifyPreparation = async (dialog, info) => {
     await expect(dialog).toBeVisible();
+    if (!await dialog.locator('details').evaluate(element => element.open)) await dialog.locator('summary').filter({ hasText: '手动备用方式' }).click();
     await expect(question(dialog)).toHaveAttribute('maxlength', '4000');
     assert.ok((await question(dialog).inputValue()).trim().length > 0);
     await expect(prepared(dialog)).toHaveAttribute('readonly', '');
@@ -162,6 +163,7 @@ export async function chatgptHandoffWorkflow({ context, base, onPreview }) {
     await dialog.getByRole('button', { name: '关闭 ChatGPT 提问准备', exact: true }).click();
     await regionPage.getByRole('button', { name: '交给 ChatGPT', exact: true }).click();
     dialog = handoff(regionPage);
+    await dialog.locator('summary').filter({ hasText: '手动备用方式' }).click();
     await expect(dialog.getByRole('button', { name: '等待上次复制…', exact: true })).toBeDisabled();
     const reopenedPrompt = await prepared(dialog).inputValue(), reopenedStatus = await dialog.getByRole('status').textContent();
     assert.ok(!reopenedPrompt.includes('旧弹窗正在复制的问题'));
@@ -178,6 +180,7 @@ export async function chatgptHandoffWorkflow({ context, base, onPreview }) {
     await expect(handoff(regionPage)).toBeHidden();
     await expect(regionPage.getByRole('button', { name: '交给 ChatGPT', exact: true })).toBeHidden();
     dialog = await drag([.20, .25], [.65, .45]);
+    await dialog.locator('summary').filter({ hasText: '手动备用方式' }).click();
     await expect(question(dialog)).not.toHaveValue('不能复用到下一页的旧问题');
     assertHandoffPrompt(await prepared(dialog).inputValue(), { title: scan.title, page: 2, excluded: [scan.id] });
     assert.notEqual(await dialog.getByRole('img', { name: '第 2 页框选区域预览', exact: true }).getAttribute('src'), preview);
