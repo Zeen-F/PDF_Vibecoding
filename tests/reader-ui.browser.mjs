@@ -22,7 +22,7 @@ function deferred() {
 
 // Real MCP transport, real isolated API, and a browser sandbox that cannot fetch
 // the local service. Only the parent host's tools/call bridge crosses that gap.
-export async function nativeReaderWorkflow({ context, base, onQuestionPreview }) {
+export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onLibraryPreview }) {
   const tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-native-reader-'));
   const harnesses = [];
   let client;
@@ -38,7 +38,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
     const template = await readFile(join(root, 'plugins/paperdesk/ui/reader.html'), 'utf8');
     const html = template.replace('__PAPERDESK_CONFIG__', JSON.stringify({ baseUrl: base }).replaceAll('<', '\\u003c'));
     assert.ok(!html.includes('__PAPERDESK_CONFIG__'));
-    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close']);
+    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme']);
     const tools = (await client.listTools()).tools;
     for (const name of displayTools) assert.deepEqual(tools.find(tool => tool.name === name)?._meta?.ui?.visibility, ['app'], `${name} must be app-only`);
 
@@ -78,7 +78,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
         if (message.method === 'ui/initialize') {
-          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.7.0' });
+          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.8.0' });
           result = { protocolVersion: '2026-01-26', hostInfo: { name: 'isolated-browser-host', version: '1.0.0' }, hostCapabilities: capabilities };
         }
         else if (message.method === 'ui/notifications/initialized') { initialized = true; return; }
@@ -182,7 +182,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
     const landing = await harness({ libraryOnly: true });
     await expect(landing.frame.getByRole('button', { name: book.title, exact: true })).toBeVisible();
     await expect(landing.frame.locator('#status')).toContainText('选择一篇文献');
-    assert.equal(landing.calls.some(entry => entry.method === 'tools/call' && entry.params.name !== 'paperdesk_list_documents'), false, 'An empty open request may list metadata but must not automatically render, read notes or create a reader session');
+    assert.equal(landing.calls.some(entry => entry.method === 'tools/call' && !['paperdesk_list_documents', 'paperdesk_reader_library'].includes(entry.params.name)), false, 'An empty open request may list library metadata but must not automatically render, read notes or create a reader session');
     assert.equal(landing.updates.some(hasContext), false);
     await landing.close();
 
@@ -515,6 +515,59 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview })
     assert.equal(initialNotes.calls.some(call => call.params?.name === 'paperdesk_reader_save_notes'), false);
     await initialNotes.close();
     console.log('PASS: late note reads cannot roll back a newer manual save or an append received during initial loading');
+
+    const organizing = await harness({ pageNumber: 2 }); await ready(organizing, 2);
+    await organizing.frame.getByRole('button', { name: '展开笔记', exact: true }).click();
+    const organizingNotes = organizing.frame.getByRole('textbox', { name: '笔记', exact: true });
+    const savedBeforeOrganizing = (await request(`/documents/${book.id}`)).document;
+    const retainedDraft = savedBeforeOrganizing.notesZh + '\n\n整理文件夹时必须保留的未保存草稿';
+    await organizingNotes.fill(retainedDraft);
+    const categories = organizing.frame.getByRole('navigation', { name: '文献分类', exact: true });
+    await organizing.frame.getByRole('button', { name: '新建文件夹', exact: true }).click();
+    await organizing.frame.getByRole('textbox', { name: '文件夹名称', exact: true }).fill('原生文件夹验收');
+    await organizing.frame.getByRole('button', { name: '保存文件夹', exact: true }).click();
+    const folderTarget = categories.getByRole('button', { name: '原生文件夹验收', exact: true });
+    await expect(folderTarget).toBeVisible();
+    const folderId = (await request('/library')).folders.find(folder => folder.name === '原生文件夹验收').id;
+    await categories.getByRole('button', { name: '全部文献', exact: true }).click();
+    await organizing.frame.locator(`[data-document-id="${book.id}"]`).dragTo(folderTarget);
+    await expect.poll(async () => (await request(`/documents/${book.id}`)).document.folderId).toBe(folderId);
+    await expect(organizingNotes).toHaveValue(retainedDraft);
+    await expect(image(organizing, 2)).toBeVisible();
+    await categories.getByRole('button', { name: '原生文件夹验收', exact: true }).click();
+    await expect(organizing.frame.getByRole('button', { name: scan.title, exact: true })).toHaveCount(0);
+    await organizing.frame.getByRole('button', { name: '重命名文件夹', exact: true }).click();
+    await organizing.frame.getByRole('textbox', { name: '文件夹名称', exact: true }).fill('原生重命名验收');
+    await organizing.frame.getByRole('button', { name: '保存文件夹', exact: true }).click();
+    await expect(categories.getByRole('button', { name: '原生重命名验收', exact: true })).toBeVisible();
+    await organizing.frame.locator(`[data-document-id="${book.id}"]`).dragTo(categories.getByRole('button', { name: '未分类', exact: true }));
+    await expect.poll(async () => (await request(`/documents/${book.id}`)).document.folderId).toBeNull();
+    await categories.getByRole('button', { name: '全部文献', exact: true }).click();
+    await organizing.frame.getByRole('combobox', { name: `移动到：${book.title}`, exact: true }).selectOption(folderId);
+    await expect.poll(async () => (await request(`/documents/${book.id}`)).document.folderId).toBe(folderId);
+    const themeSelect = organizing.frame.getByRole('combobox', { name: '阅读皮肤', exact: true });
+    await themeSelect.selectOption('night');
+    await expect.poll(async () => (await request('/library')).theme).toBe('night');
+    await expect(organizing.frame.locator('html')).toHaveAttribute('data-theme', 'night');
+    await expect(organizingNotes).toHaveValue(retainedDraft);
+    await onLibraryPreview?.({ page: organizing.page, theme: 'night' });
+    const reopened = await harness({ libraryOnly: true });
+    await expect(reopened.frame.getByRole('combobox', { name: '阅读皮肤', exact: true })).toHaveValue('night');
+    await expect(reopened.frame.getByRole('navigation', { name: '文献分类' }).getByRole('button', { name: '原生重命名验收', exact: true })).toBeVisible();
+    await reopened.close();
+    await categories.getByRole('button', { name: '原生重命名验收', exact: true }).click();
+    await organizing.frame.getByRole('button', { name: '删除文件夹', exact: true }).click();
+    await organizing.frame.getByRole('dialog', { name: '删除文件夹', exact: true }).getByRole('button', { name: '确认删除文件夹', exact: true }).click();
+    await expect.poll(async () => (await request(`/documents/${book.id}`)).document.folderId).toBeNull();
+    await expect(organizingNotes).toHaveValue(retainedDraft);
+    assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, savedBeforeOrganizing.notesRevision);
+    assert.equal(organizing.calls.some(call => call.params?.name === 'paperdesk_reader_save_notes'), false);
+    assert.equal(organizing.messages.length, 0);
+    assert.equal(organizing.updates.some(hasContext), false);
+    await themeSelect.selectOption('forest');
+    await expect.poll(async () => (await request('/library')).theme).toBe('forest');
+    await organizing.close();
+    console.log('PASS: native folder drag, rename, keyboard moves, safe removal and persisted themes preserve unsaved notes and private display');
 
     for (const item of harnesses) {
       assert.deepEqual(item.errors, [], 'Native reader must not raise uncaught browser exceptions');

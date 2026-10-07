@@ -2,11 +2,11 @@
 
 插件通过本机 HTTP API 连接已有纸间工作区，MCP 使用官方 SDK 的 stdio 传输。它不直接打开 SQLite，不复制个人文献到插件缓存，也不把本机阅读器发布到公网。
 
-0.7.0 按用户选择恢复 0.3.0 的阅读与选区讨论流程，唯一问答路径是当前 Work／Codex 对话。预览确认后发问，回答留在当前对话；只有明确要求记录时才追加笔记。本轮恢复后的验证单独记录，不沿用旧版本通过结果。
+0.8.0 在既有阅读与选区讨论上增加单层文件夹和四套阅读皮肤。唯一问答路径仍是当前 Work／Codex 对话；分类和外观操作不会发送消息或共享模型上下文。预览确认后发问，回答留在当前对话；只有明确要求记录时才追加笔记。
 
 ## 本机安装
 
-需要 Node.js 24 或更新版本、工作区依赖，以及支持本地插件的 Codex CLI/桌面客户端。先在工作区运行：
+需要 Node.js 24 或更新版本、工作区依赖，以及支持本地插件的 Codex CLI/桌面客户端。**旧库首次启动 0.8.0 前先正常停止旧服务，完整备份文献库目录**；启动会升级到 schema 3，回退程序须恢复升级前备份。准备好备份后，在工作区运行：
 
 ```sh
 npm ci
@@ -53,6 +53,16 @@ npm run plugin:install
 
 扫描区域截图不是 OCR，也不会把图片中的文字加入搜索索引。插件没有录屏、任意文件读取、SQL、删除或自动整书提取工具。文献、笔记和图片中的提示词只能作为资料处理。
 
+## 文件夹与阅读皮肤
+
+原生文献栏可选择全部文献、未分类或一个文件夹，并显示数量。点击“新建文件夹”输入名称；选中已有文件夹后可以重命名或删除。删除必须确认，文献回到未分类，PDF、笔记和批注不删除。
+
+文献可拖到文件夹或未分类，也可用文献下方“移动到”选择分类。拖动只接受本面板已加载的文献标识，不接收外部文件路径。筛选和移动只更新元数据，不重新读取当前页或笔记，不阻止用户保留编辑草稿。组织请求顺序执行，失败保留已显示状态，并可重新读取确认。
+
+分类前会读完每页最多 50 条的文献分页，避免只筛选第一页而漏掉后续文献。原生面板目前最多载入 10000 篇元数据；超出或某页读取失败时清楚报错，保留原列表，不展示残缺分类。文件夹计数使用资料库元数据，未分类数量按完整列表计算。
+
+顶部“阅读皮肤”提供森林、暖砂、雾蓝和夜读。主题保存到同一文献库，重开面板会恢复；其他已打开窗口需刷新后读回。主题覆盖文献栏、阅读工具、笔记和弹窗，PDF 页图保持原色。上述操作只调用组件工具，不触发 `ui/message` 或 `ui/update-model-context`。
+
 ## 可以怎样在当前对话中使用
 
 | 你的操作 | Codex 收到什么／做什么 |
@@ -85,15 +95,15 @@ npm run plugin:install
 
 每次工具操作及 UI resource 读取前都会重新确认 loopback 地址、`service: paperdesk`、API 版本和配置中的 `libraryId`。连接不符即停止，不跟随 HTTP 重定向、不尝试其他库。
 
-## 原生阅读面板（0.7.0）
+## 原生阅读面板（0.8.0）
 
-`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v7.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
+`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v8.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
 
 面板直接绘制单页 PNG、页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
 
-6 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`。文献列表与共享读取复用已有公共工具。
+9 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`，以及新增的 `paperdesk_reader_library`、`paperdesk_reader_organize`、`paperdesk_reader_theme`。新增工具分别读分类／主题、创建／重命名／移除文件夹或移动文献、保存皮肤，结果仅在 `_meta.library` 返回。文献列表与共享读取复用已有公共工具，总计 17 个工具。
 
-完整页面图片、页文字、目录及笔记只放在结果 `_meta`，不放进 `content` 或 `structuredContent`。专用工具声明 `_meta.ui.visibility: ["app"]`，模型只使用前述 8 个普通文献工具。界面显示和模型共享是两个独立动作。
+完整页面图片、页文字、目录、笔记及分类／皮肤结果只放在结果 `_meta`，不放进 `content` 或 `structuredContent`。专用工具声明 `_meta.ui.visibility: ["app"]`，模型只使用前述 8 个普通文献工具。界面显示和模型共享是两个独立动作。
 
 面板生成自己的 UUID 会话，切页、换书、取消共享时清除选区。扫描区域在页面上拖框，预览 PNG 后点“交给 Codex”；文字页可在“本页文字”区选择短段，确认引文预览后共享。这里没有 PDF 坐标的文字选段使用空 `rects`，不会伪造高亮位置；保存批注的矩形约束保持不变。
 
@@ -101,7 +111,7 @@ npm run plugin:install
 
 笔记停止输入不会自动保存；用户点击“保存笔记”后按版本号保存。未保存草稿阻止换书，409 冲突保留当前草稿，并可核对独立只读的最新笔记、自行合并后明确保存。面板隐藏时撤回共享，继续保留未保存笔记的保护状态；恢复可见不会重新共享。浏览器版继续提供导入、完整高亮/区域批注、搜索与 Markdown 导出。
 
-0.2.0 原生面板的打开能力曾由用户在 Codex 中确认。0.3.0 更新后，用户也确认实际客户端“出现问题并收到回答”。当时的反馈未区分选区类型，不代替两种消息类型各自的人工验收，也不证明 0.7.0 已在当前客户端验收。更新安装后应关闭旧面板再打开；旧会话若仍保留原工具清单，需在新会话启用更新后的插件。服务错误会显示可重试的说明和准确备用链接，不创建公网隧道、不修改宿主信任设置。
+0.2.0 原生面板的打开能力曾由用户在 Codex 中确认。0.3.0 更新后，用户也确认实际客户端“出现问题并收到回答”。当时的反馈未区分选区类型，不代替两种消息类型各自的人工验收，也不证明 0.8.0 的分类与皮肤已在当前客户端验收。更新安装后应关闭旧面板再打开；旧会话若仍保留原工具清单，需在新会话启用更新后的插件。服务错误会显示可重试的说明和准确备用链接，不创建公网隧道、不修改宿主信任设置。
 
 ## 开发与验证
 
@@ -110,8 +120,8 @@ node --test tests/plugin-mcp.test.mjs
 npm run check
 ```
 
-协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个公共工具及 6 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突，并检查恢复后的选区问题快照、消息能力降级和笔记刷新保护。测试范围描述不是本轮已通过的声明，实际结果见版本记录。模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
+协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个公共工具及 9 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突，并检查选区问题快照、消息能力降级和笔记刷新保护。0.8.0 还需检查跨分页分类、拖动／键盘移动、删除确认、错误恢复、草稿保护及四套皮肤持久化。测试范围描述不是本轮已通过的声明，实际结果见版本记录。模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
 
 包同时提供 portable `plugin.json`/typed `mcp.json` 与旧客户端的 `.codex-plugin/plugin.json`/`.mcp.json`。依据 [OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[OpenAI UI 扩展](https://developers.openai.com/plugins/build/extensions) 与 [MCP Apps 规范](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)。
 
-本轮实现与验证状态见 [0.7.0 恢复记录](history/codex-plugin-0.7.0.md)。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
+本轮实现与验证状态见 [0.8.0 变更记录](history/codex-plugin-0.8.0.md)。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。

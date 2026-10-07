@@ -84,14 +84,14 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
 
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
-    assert.equal(client.getServerVersion().version, '0.7.0');
-    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v7.html');
+    assert.equal(client.getServerVersion().version, '0.8.0');
+    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v8.html');
     for (const file of ['plugins/paperdesk/plugin.json', 'plugins/paperdesk/.codex-plugin/plugin.json']) {
-      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.7.0');
+      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.8.0');
     }
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close'].sort());
-    assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 6);
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme'].sort());
+    assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 9);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_append_note').annotations.readOnlyHint, false);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_get_notes').annotations.readOnlyHint, true);
     const open = tools.find(tool => tool.name === 'paperdesk_open_reader');
@@ -133,6 +133,44 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
     const exported = value(await call(client, 'paperdesk_export_notes', { documentId: doc.id }));
     assert.equal(exported.url, `${baseUrl}/api/documents/${doc.id}/export`);
     assert.match(await (await fetch(exported.url)).text(), /PRIVATE 中文笔记/);
+  });
+  await t.test('folder organization and themes use only private UI metadata and preserve notes', async () => {
+    const before = (await api(`/api/documents/${doc.id}`)).document;
+    const initial = await call(client, 'paperdesk_reader_library');
+    assert.equal(initial._meta.library.theme, 'forest');
+    const created = await call(client, 'paperdesk_reader_organize', { operation: 'create', name: 'PRIVATE_FOLDER' });
+    assert.notEqual(created.isError, true);
+    assert.ok(!JSON.stringify({ content: created.content, structuredContent: created.structuredContent }).includes('PRIVATE_FOLDER'));
+    const folder = created._meta.library.folders.find(item => item.name === 'PRIVATE_FOLDER');
+    assert.ok(folder);
+    await call(client, 'paperdesk_reader_organize', { operation: 'move', documentId: doc.id, folderId: folder.id });
+    const moved = (await api(`/api/documents/${doc.id}`)).document;
+    assert.equal(moved.folderId, folder.id);
+    assert.equal(moved.notesZh, before.notesZh);
+    assert.equal(moved.notesEn, before.notesEn);
+    assert.equal(moved.notesRevision, before.notesRevision);
+    assert.equal(moved.lastPage, before.lastPage);
+    assert.equal(value(await call(client, 'paperdesk_list_documents')).documents.find(item => item.id === doc.id).folderId, folder.id);
+    const renamed = await call(client, 'paperdesk_reader_organize', { operation: 'rename', folderId: folder.id, name: 'PRIVATE_RENAMED' });
+    assert.equal(renamed._meta.library.folders.find(item => item.id === folder.id).name, 'PRIVATE_RENAMED');
+    for (const theme of ['sand', 'slate', 'night', 'forest']) {
+      const result = await call(client, 'paperdesk_reader_theme', { theme });
+      assert.notEqual(result.isError, true);
+      assert.equal(result._meta.library.theme, theme);
+      assert.deepEqual(result.structuredContent, { ok: true });
+    }
+    assert.equal((await call(client, 'paperdesk_reader_theme', { theme: 'remote-skin' })).isError, true);
+    for (const args of [
+      { operation: 'remove', folderId: null }, { operation: 'rename', folderId: folder.id },
+      { operation: 'move', documentId: doc.id }, { operation: 'create', name: 'unwanted', documentId: doc.id },
+    ]) assert.equal((await call(client, 'paperdesk_reader_organize', args)).isError, true);
+    const removed = await call(client, 'paperdesk_reader_organize', { operation: 'remove', folderId: folder.id });
+    assert.notEqual(removed.isError, true);
+    assert.ok(removed._meta.library.folders.every(item => item.id !== folder.id));
+    const after = (await api(`/api/documents/${doc.id}`)).document;
+    assert.equal(after.folderId, null);
+    assert.equal(after.notesRevision, before.notesRevision);
+    assert.equal(after.notesZh, before.notesZh);
   });
   await t.test('single page extraction is bounded and invalid schemas cannot widen it', async () => {
     const full = await api(`/api/documents/${doc.id}/pages/1`);
@@ -246,6 +284,9 @@ test('each operation rejects another service/library before requesting private e
   assert.equal((await call(client, 'paperdesk_append_note', { documentId, text: 'do not write', expectedNotesRevision: 'c'.repeat(64), requestId: randomUUID() })).isError, true);
   assert.equal((await call(client, 'paperdesk_reader_page', { documentId, page: 1 })).isError, true);
   assert.equal((await call(client, 'paperdesk_reader_save_notes', { documentId, notes: 'do not write', expectedNotesRevision: 'c'.repeat(64) })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_library')).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_organize', { operation: 'create', name: 'do not create' })).isError, true);
+  assert.equal((await call(client, 'paperdesk_reader_theme', { theme: 'night' })).isError, true);
   await assert.rejects(client.readResource({ uri: READER_RESOURCE }));
   assert.deepEqual(privatePaths, []);
 });

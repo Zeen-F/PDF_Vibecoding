@@ -11,6 +11,7 @@ import { bookmarkedPdf, unverifiedContentsPdf, verifiedContentsPdf, writeLargeUp
 import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 import { pluginWorkflow } from '../tests/plugin.browser.mjs';
 import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
+import { libraryThemesWorkflow } from '../tests/library-themes.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -582,6 +583,7 @@ try {
   await tableOfContentsWorkflow(context, sampleDocument);
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
+  await libraryThemesWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');

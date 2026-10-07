@@ -10,19 +10,28 @@
 <style>
 .reading-questions{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}.question-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.question-actions button{border-color:#c9d0bb}.question-editor{display:flex;flex-direction:column;gap:8px;margin-top:12px;font-size:11px;color:#687d58}.question-editor textarea{width:100%;min-height:76px;padding:10px;line-height:1.8;resize:vertical}.question-editor button{align-self:flex-end}.question-fallback{margin-top:12px;font-size:11px;line-height:1.8}.question-fallback textarea{width:100%;height:110px;padding:10px;resize:vertical;line-height:1.7;font-size:11px}.modal-actions{flex-wrap:wrap}.notes-actions{flex-wrap:wrap}
 </style>
+
+<style>
+:root{--ink:#293d31;--paper:#faf9f3;--canvas:#e9ece3;--soft:#f0f1e7;--input:#fffef9;--line:#dedfd3;--muted:#69775f;--forest:#293f34;--side-ink:#e4e9db;--side-muted:#b7c3ad;--side-hover:#385041;--side-selected:#425a47;--side-line:#5a705b;--action:#466441;--action-hover:#345331;--action-ink:#fbfbef;--hover:#e6eadc;--accent:#9b684c;--quote:#efeeda;--warning-bg:#fff0e2;--warning-ink:#935e3d;--scrim:#20372c72;color:var(--ink);background:var(--paper);color-scheme:light}
+:root[data-theme=sand]{--ink:#514338;--paper:#fbf5e9;--canvas:#e9decb;--soft:#f1e8d8;--input:#fffaf0;--line:#daceb9;--muted:#80705c;--forest:#5b4b39;--side-ink:#fff3dc;--side-muted:#ddcaac;--side-hover:#705d45;--side-selected:#806b4e;--side-line:#958064;--action:#82613e;--action-hover:#694c2d;--action-ink:#fff8e9;--hover:#ede0c8;--accent:#9b6840;--quote:#eee0c2;--warning-bg:#f7e4ce;--warning-ink:#885a35;--scrim:#47372585}
+:root[data-theme=slate]{--ink:#344756;--paper:#f2f6f8;--canvas:#dfe7ed;--soft:#e8eef2;--input:#fbfdff;--line:#cbd7df;--muted:#657b8a;--forest:#304956;--side-ink:#e8f0f6;--side-muted:#b5ccd7;--side-hover:#3c5a6b;--side-selected:#476879;--side-line:#668595;--action:#486c82;--action-hover:#34566b;--action-ink:#f5faff;--hover:#dce8ef;--accent:#6f8b9d;--quote:#e0eaf0;--warning-bg:#f7e8d9;--warning-ink:#8c6346;--scrim:#243c5080}
+:root[data-theme=night]{--ink:#d8ded5;--paper:#252c2a;--canvas:#171d1b;--soft:#2d3531;--input:#202723;--line:#455047;--muted:#acb8a8;--forest:#1b2420;--side-ink:#e0e9db;--side-muted:#aebfaa;--side-hover:#2e3d32;--side-selected:#3c4e3e;--side-line:#50644e;--action:#a4bb90;--action-hover:#bed2ab;--action-ink:#202d1e;--hover:#3a473a;--accent:#c8a276;--quote:#343e30;--warning-bg:#46372b;--warning-ink:#edc597;--scrim:#070d0acf;color-scheme:dark}
+body,input,textarea,select{color:var(--ink)}button,input,textarea,select{font:inherit}select{max-width:100%;border:1px solid var(--line);border-radius:4px;background:var(--input);padding:6px;font-size:11px}input,textarea{background:var(--input)}button:hover{background:var(--hover)}button:focus-visible,a:focus-visible,input:focus,textarea:focus,select:focus-visible{outline-color:var(--accent)}.status-line,.toolbar{background:var(--soft);color:var(--muted)}.status-line:before{background:var(--action)}.page-scroll{background:var(--canvas)}.pager,.welcome,.welcome h2,.welcome p,.welcome small,.page-caption,.loading,.toc-expand,.toc-jump small,.panel-message,.text-pane summary,.text-pane p,.modal small,.modal p,.question-editor,.browser-fallback a{color:var(--muted)}.toolbar [aria-pressed=true],.primary{background:var(--action);color:var(--action-ink)}.primary:hover{background:var(--action-hover)}.toc-jump[aria-current=page]{background:var(--hover)}.text-pane,.text-actions button,.question-actions button,#review-notes{border-color:var(--line)}.share-state{background:var(--quote);color:var(--ink);border-color:var(--line)}.share-state button{border-color:var(--line)}.modal-wrap{background:var(--scrim)}.modal{background:var(--paper)}.modal blockquote{background:var(--quote);border-color:var(--accent)}.modal img{border-color:var(--line)}.browser-fallback{background:var(--soft)}.error-box{background:var(--warning-bg);color:var(--warning-ink);border-color:var(--line)}.error-box button{border-color:var(--accent)}#note-error,.dirty{color:var(--warning-ink)!important}.library{padding-top:17px;color:var(--side-ink)}.library-heading{padding-bottom:12px;color:var(--side-muted)}.library-empty,.library-footer,.document-item small{color:var(--side-muted)}.library-footer{border-color:var(--side-line)}.document-item{color:var(--side-ink);margin:0}.document-item:hover{background:var(--side-hover)}.document-item[aria-current=true]{background:var(--side-selected);border-color:var(--accent)}.library-tools{display:flex;align-items:center;gap:8px;padding:0 4px 12px}.library-tools button{color:var(--side-ink);border-color:var(--side-line);padding:6px;font-size:10px}.library-tools button:hover,.folder-row:hover{background:var(--side-hover)}.folder-list{max-height:26vh;overflow:auto;border-block:1px solid var(--side-line);padding:7px 0;margin-bottom:8px}.folder-row{display:flex;width:100%;gap:8px;align-items:center;text-align:left;color:var(--side-ink);font-size:11px;padding:8px}.folder-row span{flex:1;overflow-wrap:anywhere}.folder-row small{font:10px Georgia,serif;color:var(--side-muted)}.folder-row[aria-current=true]{background:var(--side-selected)}.folder-row.drop-target{outline:2px dashed var(--side-muted);outline-offset:-3px}.folder-actions{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:8px}.folder-actions button{color:var(--side-muted);font-size:10px;padding:5px}.folder-actions button:hover{background:var(--side-hover)}.folder-editor{font-size:11px;padding:8px;border:1px solid var(--side-line);border-radius:4px;margin-bottom:10px}.folder-editor input{width:100%;padding:7px;margin:7px 0}.folder-editor-actions{display:flex;justify-content:flex-end;gap:4px}.folder-editor button{color:var(--side-ink);border-color:var(--side-line);font-size:10px;padding:5px}.document-entry{margin-bottom:8px;border-radius:4px}.document-entry[draggable=true]{cursor:grab}.document-entry.dragging{opacity:.5}.move-document{display:block;margin:0 10px 10px;width:calc(100% - 20px);background:var(--forest);color:var(--side-muted);border-color:var(--side-line);font-size:10px}.theme-control{display:flex;align-items:center;gap:8px;font-size:10px;white-space:nowrap}.theme-control select{width:76px}.library-hint{font-size:10px;color:var(--side-muted);line-height:1.7;padding:0 8px 8px}.document-list{overscroll-behavior:contain}.folder-confirm-text{margin-top:16px!important;color:var(--ink)!important}@media(max-width:680px){.theme-control>span{display:none}.theme-control select{width:64px;padding:5px;font-size:10px}.app-header{gap:5px}.browser-button{max-width:85px;white-space:normal}}
+</style>
 </head>
 <body>
 <header class="app-header">
   <button id="library-toggle" aria-label="收起文献栏" aria-expanded="true" aria-controls="library">☰</button>
   <div class="brand">纸间<small>PAPERDESK</small></div>
   <div class="header-title"><small>LOCAL READING SPACE</small><h1 id="document-title">让阅读，留下一点痕迹。</h1></div>
+  <label class="theme-control"><span>阅读皮肤</span><select id="reader-theme" aria-label="阅读皮肤" disabled><option value="forest">森林</option><option value="sand">暖砂</option><option value="slate">雾蓝</option><option value="night">夜读</option></select></label>
   <button id="browser-button" class="browser-button">在浏览器打开</button>
 </header>
 <div id="status" class="status-line" role="status">正在连接纸间…</div>
 <div id="error-box" class="error-box" role="alert" hidden><p id="error-text"></p><button id="retry-button">重试</button><button id="dismiss-error" aria-label="关闭错误提示">关闭</button></div>
 <div id="browser-fallback" class="browser-fallback" hidden><input id="browser-url" aria-label="阅读器链接" readonly><a id="external-link" target="_blank" rel="noopener noreferrer">在浏览器打开</a><button id="copy-url">复制链接</button></div>
 <div class="workspace">
-  <aside id="library" class="library" aria-label="文献栏"><div class="library-heading">我的文献<span id="library-count">—</span></div><div id="library-list" class="document-list"><p class="library-empty">正在读取文献列表…</p></div><button id="library-more" class="library-more" hidden>加载更多</button><div class="library-footer">本机资料库 · 只分享你选中的内容</div></aside>
+  <aside id="library" class="library" aria-label="文献栏"><div class="library-heading">我的文献<span id="library-count">—</span></div><div class="library-tools"><button id="new-folder" disabled>新建文件夹</button></div><div id="folder-editor" class="folder-editor" role="group" aria-label="文件夹编辑" hidden><label for="folder-name">文件夹名称</label><input id="folder-name" aria-label="文件夹名称" maxlength="80" required><div class="folder-editor-actions"><button id="cancel-folder" type="button">取消编辑</button><button id="save-folder" type="button">保存文件夹</button></div></div><nav id="folder-list" class="folder-list" aria-label="文献分类"></nav><div id="folder-actions" class="folder-actions" hidden><button id="rename-folder">重命名文件夹</button><button id="remove-folder">删除文件夹</button></div><p class="library-hint">拖动文献到分类，或使用“移动到”。</p><div id="library-list" class="document-list"><p class="library-empty">正在读取文献列表…</p></div><button id="library-more" class="library-more" hidden>加载更多</button><div class="library-footer">本机资料库 · 只分享你选中的内容</div></aside>
   <main class="main">
     <div class="toolbar">
       <button id="toc-toggle" aria-expanded="false" aria-controls="toc-panel" disabled>展开目录</button><button id="notes-toggle" aria-expanded="false" aria-controls="notes-panel" disabled>展开笔记</button><button id="region-toggle" aria-pressed="false" disabled>框选区域</button><span class="spacer"></span>
@@ -44,6 +53,7 @@
   </main>
 </div>
 <div id="preview-wrap" class="modal-wrap" hidden><section class="modal" role="dialog" aria-modal="true" aria-label="共享预览"><small id="preview-origin"></small><h2>共享预览</h2><p>核对下方选区，再选择如何讨论。回答显示在当前 Codex 对话中，只有你要求时才写入笔记。</p><img id="preview-image" alt="选区预览" hidden><blockquote id="preview-quote" hidden></blockquote><section class="reading-questions" aria-label="阅读讨论"><p>把这段内容交给 Codex：</p><div class="question-actions"><button id="explain-selection">解释选区</button><button id="summarize-selection">提炼要点</button><button id="custom-question" aria-expanded="false" aria-controls="question-editor">自定义提问</button></div><div id="question-editor" class="question-editor" hidden><label for="reading-question">向 Codex 提问</label><textarea id="reading-question" maxlength="4000" placeholder="例如：这个公式成立需要哪些条件？"></textarea><button id="send-question" class="primary" disabled>发送问题</button></div><p id="question-status" role="status"></p><div id="question-fallback" class="question-fallback" hidden><p id="question-fallback-hint"></p><textarea id="question-copy" aria-label="待发送问题" readonly></textarea><button id="copy-question">复制提问</button></div></section><div class="modal-actions"><button id="cancel-preview">取消共享</button><button id="confirm-share">交给 Codex</button></div></section></div>
+<div id="folder-confirm-wrap" class="modal-wrap" hidden><section class="modal" role="dialog" aria-modal="true" aria-label="删除文件夹"><small>LIBRARY</small><h2>删除文件夹</h2><p id="folder-confirm-text" class="folder-confirm-text"></p><div class="modal-actions"><button id="cancel-folder-remove">取消删除</button><button id="confirm-folder-remove" class="primary">确认删除文件夹</button></div></section></div>
 <script>
 'use strict';
 const config = __PAPERDESK_CONFIG__;
@@ -54,6 +64,9 @@ const elements = Object.fromEntries(['status','error-box','error-text','retry-bu
 const sessionId = crypto.randomUUID();
 let hostOrigin, originLocked = false, nextId = 1, capabilities = {}, ready = false, closing = false, disposed = false;
 let documents = [], total = 0, nextOffset = 0, libraryPromise, retryAction, pendingDeepLink, fallbackDeepLink;
+const themes = new Set(['forest','sand','slate','night']), dragMime = 'application/x-paperdesk-document';
+let library = {folders:[],theme:'forest'}, libraryReady = false, libraryFilter = 'all', libraryQueue = Promise.resolve(), libraryPending = 0;
+let editingFolder = null, removingFolder = null, draggedDocument = null;
 let current = null, page = 1, documentVersion = 0, pageVersion = 0, contextVersion = 0, zoom = 1;
 let pageReady = false, pageData = null, notesReady = false, savedNotes = '', notesRevision = '', saving = false, notesConflict = false, reviewedNotes = null;
 let draftSelection = null, sharedSelection = null, dragging = null, regionMode = false, tocData = null;
@@ -76,7 +89,7 @@ function request(method, params, cleanup = false) {
     pending.set(id,{resolve,reject,timer}); send({jsonrpc:'2.0',id,method,params});
   });
 }
-const toolNames = new Set(['paperdesk_list_documents','paperdesk_reader_page','paperdesk_reader_get_notes','paperdesk_reader_save_notes','paperdesk_reader_toc','paperdesk_reader_session','paperdesk_reader_close','paperdesk_get_context']);
+const toolNames = new Set(['paperdesk_list_documents','paperdesk_reader_page','paperdesk_reader_get_notes','paperdesk_reader_save_notes','paperdesk_reader_toc','paperdesk_reader_session','paperdesk_reader_close','paperdesk_get_context','paperdesk_reader_library','paperdesk_reader_organize','paperdesk_reader_theme']);
 async function tool(name,args,cleanup=false) {
   if (!capabilities.serverTools) throw new Error('当前宿主未提供面板工具能力，请在对话中调用纸间工具，或在浏览器打开阅读器。');
   if (!toolNames.has(name)) throw new Error('不支持的阅读操作。');
@@ -117,29 +130,102 @@ function updateControls() {
   for(const name of ['confirm-share','explain-selection','summarize-selection','custom-question'])elements[name].disabled=selectionBusy;
   elements['send-question'].disabled=selectionBusy||!elements['reading-question'].value.trim();
   $('ask-shared').disabled=!sharedSelection||closing||shareBusy||Boolean(questionTask);
-  updateLink();
+  updateLink();renderLibraryControls();
+}
+function checkedLibrary(value) {
+  if(!value||!themes.has(value.theme)||!Array.isArray(value.folders)||value.folders.some(folder=>!UUID.test(folder.id||'')||typeof folder.name!=='string'||!Number.isSafeInteger(folder.documentCount)||folder.documentCount<0))throw new Error('文献分类数据不完整，请重新读取。');
+  if(new Set(value.folders.map(folder=>folder.id)).size!==value.folders.length)throw new Error('文献分类包含重复标识，请重新读取。');
+  return value;
+}
+function renderLibraryControls() {
+  const busy=!libraryReady||libraryPending>0||closing;
+  $('reader-theme').value=library.theme;$('reader-theme').disabled=busy;$('new-folder').disabled=busy;
+  for(const id of ['rename-folder','remove-folder','save-folder','folder-name','confirm-folder-remove'])$(id).disabled=busy;
+  $('folder-actions').hidden=!library.folders.some(folder=>folder.id===libraryFilter);
+}
+function applyLibrary(value) {
+  library=checkedLibrary(value);libraryReady=true;
+  if(libraryFilter!=='all'&&libraryFilter!=='none'&&!library.folders.some(folder=>folder.id===libraryFilter))libraryFilter='none';
+  document.documentElement.dataset.theme=library.theme;renderLibrary();
+}
+function filterFolder(id) { libraryFilter=id;renderLibrary(); }
+function addFolderRow(label,id,count,folderId) {
+  const row=document.createElement('button');row.type='button';row.className='folder-row';row.setAttribute('aria-label',label);row.setAttribute('aria-current',String(libraryFilter===id));row.dataset.folderId=id;
+  const name=document.createElement('span'),number=document.createElement('small');name.textContent=label;number.textContent=String(count);row.append(name,number);row.addEventListener('click',()=>filterFolder(id));
+  if(id!=='all'){
+    row.addEventListener('dragover',event=>{if(!closing&&libraryReady&&!libraryPending&&draggedDocument&&documents.some(doc=>doc.id===draggedDocument)&&Array.from(event.dataTransfer?.types||[]).includes(dragMime)){event.preventDefault();event.dataTransfer.dropEffect='move';row.classList.add('drop-target');}});
+    row.addEventListener('dragleave',()=>row.classList.remove('drop-target'));
+    row.addEventListener('drop',event=>{row.classList.remove('drop-target');const id=event.dataTransfer?.getData(dragMime);if(!libraryPending&&!closing&&id&&id===draggedDocument&&documents.some(doc=>doc.id===id)){event.preventDefault();moveDocument(id,folderId);}});
+  }
+  $('folder-list').append(row);
 }
 function renderLibrary() {
-  elements['library-count'].textContent=String(total); elements['library-list'].replaceChildren();
-  if(!documents.length){const item=document.createElement('p');item.className='library-empty';item.textContent='资料库里还没有文献。请在浏览器中导入 PDF。';elements['library-list'].append(item);}
-  for(const doc of documents){
-    const button=document.createElement('button');button.className='document-item';button.setAttribute('aria-label',doc.title||doc.filename||'未命名文献');button.setAttribute('aria-current',String(doc.id===current?.id));
-    const title=document.createElement('b');title.textContent=doc.title||doc.filename||'未命名文献';const sub=document.createElement('small');sub.textContent=String(doc.pageCount)+' 页'+(doc.textAvailable===false?' · 扫描或图形':'');button.append(title,sub);
-    button.addEventListener('click',()=>openDocument(doc,doc.lastPage||1));elements['library-list'].append(button);
+  elements['library-count'].textContent=String(total);elements['library-list'].replaceChildren();$('folder-list').replaceChildren();
+  addFolderRow('全部文献','all',total);addFolderRow('未分类','none',documents.filter(doc=>!doc.folderId).length,null);
+  for(const folder of library.folders)addFolderRow(folder.name,folder.id,folder.documentCount,folder.id);
+  const visible=documents.filter(doc=>libraryFilter==='all'||(libraryFilter==='none'?!doc.folderId:doc.folderId===libraryFilter));
+  if(!visible.length){const item=document.createElement('p');item.className='library-empty';item.textContent=documents.length?'此分类还没有文献。可拖动文献到这里。':'资料库里还没有文献。请在浏览器中导入 PDF。';elements['library-list'].append(item);}
+  for(const doc of visible){
+    const label=doc.title||doc.filename||'未命名文献',entry=document.createElement('div');entry.className='document-entry';entry.draggable=libraryReady&&!libraryPending;entry.dataset.documentId=doc.id;
+    const button=document.createElement('button');button.className='document-item';button.setAttribute('aria-label',label);button.setAttribute('aria-current',String(doc.id===current?.id));
+    const title=document.createElement('b');title.textContent=label;const sub=document.createElement('small');sub.textContent=String(doc.pageCount)+' 页'+(doc.textAvailable===false?' · 扫描或图形':'');button.append(title,sub);
+    button.addEventListener('click',()=>openDocument(doc,doc.lastPage||1));entry.append(button);
+    const move=document.createElement('select');move.className='move-document';move.setAttribute('aria-label','移动到：'+label);move.disabled=!libraryReady||libraryPending>0||closing;
+    const destinations=[{id:'',name:'未分类'},...library.folders];for(const folder of destinations){const option=document.createElement('option');option.value=folder.id;option.textContent='移动到 · '+folder.name;move.append(option);}move.value=doc.folderId||'';
+    move.addEventListener('change',()=>{const target=move.value||null;move.value=doc.folderId||'';moveDocument(doc.id,target);});entry.append(move);
+    entry.addEventListener('dragstart',event=>{if(!libraryReady||libraryPending||closing||event.target.closest('select')){event.preventDefault();return;}draggedDocument=doc.id;event.dataTransfer.setData(dragMime,doc.id);event.dataTransfer.effectAllowed='move';entry.classList.add('dragging');});
+    entry.addEventListener('dragend',()=>{draggedDocument=null;entry.classList.remove('dragging');for(const row of $('folder-list').querySelectorAll('.drop-target'))row.classList.remove('drop-target');});elements['library-list'].append(entry);
   }
-  elements['library-more'].hidden=nextOffset===null; elements['library-more'].disabled=Boolean(libraryPromise);
+  elements['library-more'].hidden=true;renderLibraryControls();
 }
-async function loadLibrary(reset=false) {
-  if(libraryPromise) return libraryPromise;
-  const offset=reset?0:nextOffset;if(offset===null)return;
-  elements['library-more'].disabled=true;
+async function readDocumentList() {
+  const merged=[],seen=new Set();let offset=0;
+  // Consume every bounded page before filtering. Keep the previous view intact
+  // if any page fails, rather than presenting a partial folder as complete.
+  for(let batch=0;batch<200;batch++){
+    const result=await tool('paperdesk_list_documents',{offset,limit:50}),list=result.structuredContent;
+    if(!list||!Array.isArray(list.documents)||!Number.isSafeInteger(list.total)||list.total<0)throw new Error('无法读取完整文献列表。');
+    for(const doc of list.documents){if(!UUID.test(doc.id||'')||(doc.folderId!==null&&doc.folderId!==undefined&&!UUID.test(doc.folderId)))throw new Error('文献元数据不完整。');if(!seen.has(doc.id)){seen.add(doc.id);merged.push(doc);}}
+    if(list.nextOffset===null)return {documents:merged,total:merged.length};
+    if(!Number.isSafeInteger(list.nextOffset)||list.nextOffset<=offset)throw new Error('文献分页没有继续前进，请重试。');offset=list.nextOffset;
+  }
+  throw new Error('原生面板暂时最多载入 10000 篇文献。请使用浏览器整理较大的资料库。');
+}
+async function loadLibrary(reset=false,knownLibrary=null) {
+  if(libraryPromise)return libraryPromise;
   libraryPromise=(async()=>{
-    const result=await tool('paperdesk_list_documents',{offset,limit:50});const list=result.structuredContent;
-    if(!list||!Array.isArray(list.documents))throw new Error('无法读取文献列表。');
-    const merged=reset?[]:documents.slice();for(const doc of list.documents)if(UUID.test(doc.id||'')&&!merged.some(item=>item.id===doc.id))merged.push(doc);
-    documents=merged;total=list.total;nextOffset=list.nextOffset;renderLibrary();
+    const info=checkedLibrary(knownLibrary||metadata(await tool('paperdesk_reader_library',{}),'library'));
+    const listing=await readDocumentList();if(closing)return;
+    documents=listing.documents;total=listing.total;nextOffset=null;applyLibrary(info);
   })();
-  try{await libraryPromise;}catch(cause){error(cause.message,()=>loadLibrary(reset));throw cause;}finally{libraryPromise=null;elements['library-more'].disabled=false;}
+  try{await libraryPromise;}catch(cause){error(cause.message,()=>loadLibrary(true));throw cause;}finally{libraryPromise=null;}
+}
+function organizeLibrary(name,args,onSuccess) {
+  libraryPending++;renderLibrary();
+  const task=libraryQueue.then(async()=>{
+    if(closing)return;if(libraryPromise)await libraryPromise;
+    const updated=checkedLibrary(metadata(await tool(name,args),'library'));
+    if(closing)return;
+    if(name==='paperdesk_reader_organize'&&(args.operation==='move'||args.operation==='remove'))await loadLibrary(true,updated);else applyLibrary(updated);
+    if(onSuccess)onSuccess();status(name==='paperdesk_reader_theme'?'阅读皮肤已保存到本机资料库。':'文献分类已保存。正在阅读的页面和笔记草稿保持不变。');
+  });
+  libraryQueue=task.catch(()=>{});
+  return task.catch(cause=>error(cause.message+' 当前页面与笔记草稿已保留。',()=>loadLibrary(true))).finally(()=>{libraryPending--;renderLibrary();});
+}
+function moveDocument(documentId,folderId) {
+  const doc=documents.find(item=>item.id===documentId);if(!doc||doc.folderId===folderId||(!doc.folderId&&folderId===null))return;
+  if(folderId!==null&&!library.folders.some(folder=>folder.id===folderId))return;
+  return organizeLibrary('paperdesk_reader_organize',{operation:'move',documentId,folderId});
+}
+function editFolder(folder=null) {
+  if(!libraryReady||libraryPending||closing)return;editingFolder=folder?.id||null;$('folder-name').value=folder?.name||'';$('folder-editor').hidden=false;$('folder-name').focus();
+}
+function cancelFolderEditor() { $('folder-editor').hidden=true;editingFolder=null; }
+function saveFolderEditor() {
+  if(!libraryReady||libraryPending||closing||$('folder-editor').hidden)return;
+  const name=$('folder-name').value.trim();if(!name){error('请输入文件夹名称。');$('folder-name').focus();return;}
+  const args=editingFolder?{operation:'rename',folderId:editingFolder,name}:{operation:'create',name};
+  organizeLibrary('paperdesk_reader_organize',args,cancelFolderEditor);
 }
 function snapshot() { return current?{sessionId,documentId:current.id,page,selection:sharedSelection,notesDirty:dirty(),visible:document.visibilityState!=='hidden'}:null; }
 function queueSession(state=snapshot(),cleanup=false) {
@@ -365,7 +451,17 @@ window.addEventListener('message',event=>{
   else if(message.method==='ui/resource-teardown'){teardown().finally(()=>send({jsonrpc:'2.0',id:message.id,result:{}}));}
 });
 $('library-toggle').addEventListener('click',()=>{elements.library.hidden=!elements.library.hidden;elements['library-toggle'].setAttribute('aria-expanded',String(!elements.library.hidden));elements['library-toggle'].setAttribute('aria-label',elements.library.hidden?'展开文献栏':'收起文献栏');});
-$('library-more').addEventListener('click',()=>loadLibrary().catch(()=>{}));
+$('library-more').addEventListener('click',()=>loadLibrary(true).catch(()=>{}));
+$('reader-theme').addEventListener('change',()=>{const theme=$('reader-theme').value;$('reader-theme').value=library.theme;if(themes.has(theme)&&theme!==library.theme)organizeLibrary('paperdesk_reader_theme',{theme});});
+$('new-folder').addEventListener('click',()=>editFolder());
+$('rename-folder').addEventListener('click',()=>{const folder=library.folders.find(item=>item.id===libraryFilter);if(folder)editFolder(folder);});
+$('cancel-folder').addEventListener('click',cancelFolderEditor);
+$('save-folder').addEventListener('click',saveFolderEditor);
+$('folder-name').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();event.stopPropagation();saveFolderEditor();}});
+$('remove-folder').addEventListener('click',()=>{const folder=library.folders.find(item=>item.id===libraryFilter);if(!folder||libraryPending)return;removingFolder=folder.id;$('folder-confirm-text').textContent='删除“'+folder.name+'”？其中的文献将回到未分类，PDF、笔记和批注都会保留。';$('folder-confirm-wrap').hidden=false;$('cancel-folder-remove').focus();});
+$('cancel-folder-remove').addEventListener('click',()=>{$('folder-confirm-wrap').hidden=true;removingFolder=null;});
+$('confirm-folder-remove').addEventListener('click',()=>{if(!removingFolder||libraryPending)return;const folderId=removingFolder;organizeLibrary('paperdesk_reader_organize',{operation:'remove',folderId},()=>{$('folder-confirm-wrap').hidden=true;removingFolder=null;});});
+window.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('folder-confirm-wrap').hidden&&!libraryPending){event.preventDefault();event.stopImmediatePropagation();$('folder-confirm-wrap').hidden=true;removingFolder=null;}else if(event.key==='Escape'&&!$('folder-editor').hidden&&!libraryPending){event.preventDefault();event.stopImmediatePropagation();cancelFolderEditor();}});
 $('previous-page').addEventListener('click',()=>goPage(page-1));$('next-page').addEventListener('click',()=>goPage(page+1));
 $('page-number').addEventListener('change',()=>goPage(Number(elements['page-number'].value)));$('page-number').addEventListener('keydown',event=>{if(event.key==='Enter')goPage(Number(elements['page-number'].value));});
 $('fit-page').addEventListener('click',()=>{zoom=1;fitImage();});$('zoom-in').addEventListener('click',()=>{zoom=Math.min(3,zoom+.25);fitImage();});
@@ -409,7 +505,7 @@ window.addEventListener('resize',()=>{if(dragging){dragging=null;elements['regio
 window.addEventListener('beforeunload',event=>{if(dirty()){event.preventDefault();event.returnValue='';}});
 async function initialize() {
   hideError();clearInterval(heartbeat);status('正在连接纸间…');
-  try{const result=await request('ui/initialize',{appInfo:{name:'paperdesk-reader',version:'0.7.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']},protocolVersion:'2026-01-26'});
+  try{const result=await request('ui/initialize',{appInfo:{name:'paperdesk-reader',version:'0.8.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']},protocolVersion:'2026-01-26'});
     capabilities=result.hostCapabilities||{};send({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}});
     if(!capabilities.serverTools){elements['library-list'].replaceChildren();const message='当前宿主没有面板工具能力。请在对话中使用纸间工具，或在浏览器继续阅读。';status(message);error(message,initialize);showLink();return;}
     await loadLibrary(true);ready=true;status('选择一篇文献开始阅读。页面与笔记只在面板中显示，选区需确认后才共享。');

@@ -249,7 +249,7 @@ test('TOC endpoint works for previously imported documents across restart withou
   assert.deepEqual(await readFile(join(dataDir, 'pdfs', `${doc.id}.pdf`)), bytes);
   assert.deepEqual(await (await fetch(`${base}/api/documents/${doc.id}`)).json(), before);
   const database = new DatabaseSync(join(dataDir, 'paperdesk.sqlite'), { readOnly: true });
-  assert.equal(database.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(database.prepare('PRAGMA user_version').get().user_version, 3);
   assert.ok(!database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().some(row => /toc|outline/i.test(row.name)));
   database.close();
   assert.deepEqual((await readdir(dataDir)).filter(name => !name.startsWith('paperdesk.sqlite')), ['pdfs']);

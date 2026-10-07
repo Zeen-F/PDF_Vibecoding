@@ -202,9 +202,9 @@ test('v1 migration preserves complete old records and original bytes, is idempot
   const before = databaseSnapshot(file);
   app = await start(dataDir);
   const migrated = databaseSnapshot(file);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(migrated.integrity, 'ok');
-  assert.deepEqual(migrated.documents, before.documents);
+  assert.deepEqual(migrated.documents, before.documents.map(row => ({ ...row, folder_id: null })));
   assert.deepEqual(migrated.pages, before.pages);
   assert.deepEqual(migrated.annotations.map(({ kind, ...row }) => row), before.annotations);
   assert.equal(migrated.annotations[0].kind, 'text');
@@ -223,7 +223,7 @@ test('v1 migration preserves complete old records and original bytes, is idempot
   assert.ok(!markdown.includes('区域批注'));
   await app.close();
   app = await start(dataDir);
-  assert.deepEqual(databaseSnapshot(file), migrated, 'Opening v2 again must not rewrite prior content or duplicate columns');
+  assert.deepEqual(databaseSnapshot(file), migrated, 'Opening the current schema again must not rewrite prior content or duplicate columns');
   const created = await app.request(`/api/documents/${docId}/annotations`, { method: 'POST', body: { page: 2, quote: 'Old client remains compatible', comment: '', color: 'yellow', rects: JSON.parse(rawRects) } });
   assert.equal(created.status, 201);
   assert.equal((await created.json()).annotation.kind, 'text');
@@ -251,11 +251,11 @@ test('schema migration rollback and future-version refusal leave versioned data 
   await mkdir(futureDir);
   const futureFile = join(futureDir, 'paperdesk.sqlite');
   db = new DatabaseSync(futureFile);
-  db.exec("CREATE TABLE future_data (value TEXT); INSERT INTO future_data VALUES ('keep'); PRAGMA user_version = 3;");
+  db.exec("CREATE TABLE future_data (value TEXT); INSERT INTO future_data VALUES ('keep'); PRAGMA user_version = 4;");
   db.close();
   assert.throws(() => createApp({ dataDir: futureDir }), /更新版本/);
   db = new DatabaseSync(futureFile, { readOnly: true });
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
   assert.equal(db.prepare('SELECT value FROM future_data').get().value, 'keep');
   assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name), ['future_data']);
   db.close();
