@@ -56,6 +56,13 @@ test('plugin refuses remote, credentialed and path-bearing base URLs', () => {
   assert.equal(validatePluginProfile({ baseUrl: 'http://127.0.0.1:4317/', libraryId }).baseUrl, 'http://127.0.0.1:4317');
 });
 
+test('ordinary ChatGPT handoff and browser bridges are absent from active entry points', async () => {
+  const removed = /chatgpt-(?:handoff|jobs|browser|ego|native-login)|paperdesk_reader_chatgpt_|\/api\/chatgpt|https:\/\/chatgpt\.com|交给 ChatGPT|向 ChatGPT 提问|手动备用方式/;
+  for (const file of ['src/App.jsx', 'server/app.mjs', 'server/index.mjs', 'server/mcp.mjs', 'scripts/setup-plugin.mjs', 'plugins/paperdesk/ui/reader.html']) {
+    assert.doesNotMatch(await readFile(join(root, file), 'utf8'), removed, `${file} must not expose or load the removed ordinary ChatGPT feature`);
+  }
+});
+
 test('cached plugin uses real stdio SDK protocol with the isolated local API', async t => {
   const dataDir = await mkdtemp(join(tmpdir(), 'paperdesk-plugin-library-'));
   const runtime = createApp({ dataDir });
@@ -77,8 +84,14 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
 
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
+    assert.equal(client.getServerVersion().version, '0.7.0');
+    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v7.html');
+    for (const file of ['plugins/paperdesk/plugin.json', 'plugins/paperdesk/.codex-plugin/plugin.json']) {
+      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.7.0');
+    }
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close'].sort());
+    assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 6);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_append_note').annotations.readOnlyHint, false);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_get_notes').annotations.readOnlyHint, true);
     const open = tools.find(tool => tool.name === 'paperdesk_open_reader');
@@ -88,6 +101,8 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
     resource = (await client.readResource({ uri: READER_RESOURCE })).contents[0];
     assert.equal(resource.mimeType, 'text/html;profile=mcp-app');
     assert.deepEqual(resource._meta.ui.csp, { frameDomains: [], resourceDomains: [], connectDomains: [] });
+    assert.deepEqual(resource._meta['openai/widgetCSP'].redirect_domains, [baseUrl]);
+    assert.doesNotMatch(resource.text, /paperdesk_reader_chatgpt_|\/api\/chatgpt|https:\/\/chatgpt\.com|交给 ChatGPT|向 ChatGPT 提问|手动备用方式/);
     assert.ok(!/<iframe\b|fetch\(/.test(resource.text), 'Native component must not embed or fetch a loopback website');
     for (const tool of tools.filter(tool => tool.name.startsWith('paperdesk_reader_'))) {
       assert.deepEqual(tool._meta.ui.visibility, ['app']);
@@ -96,6 +111,14 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
     assert.ok(resource.text.includes(baseUrl));
     assert.ok(!resource.text.includes(root), 'resource must not expose workspace filesystem paths');
     assert.equal(value(await call(client, 'paperdesk_status')).libraryId, status.libraryId);
+  });
+  await t.test('removed ordinary ChatGPT endpoints cannot accept jobs or expose a connection service', async () => {
+    const missing = [
+      await fetch(`${baseUrl}/api/chatgpt/jobs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+      await fetch(`${baseUrl}/api/chatgpt/connection`),
+      await fetch(`${baseUrl}/api/chatgpt/jobs/${randomUUID()}`),
+    ];
+    for (const response of missing) assert.equal(response.status, 404);
   });
   await t.test('list/open/export return only metadata or exact local links', async () => {
     await api(`/api/documents/${doc.id}`, { notesZh: 'PRIVATE 中文笔记', notesEn: 'PRIVATE English note' }, 'PATCH');
