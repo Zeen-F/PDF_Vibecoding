@@ -40,7 +40,6 @@ const allowedRootFiles = new Set([
   '.node-version',
   '.npmrc',
   '.nvmrc',
-  'API.md',
   'CONTRIBUTING.md',
   'PDF_Vibecoding.code-workspace',
   'README.md',
