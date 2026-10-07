@@ -95,9 +95,9 @@ npm run plugin:install
 
 每次工具操作及 UI resource 读取前都会重新确认 loopback 地址、`service: paperdesk`、API 版本和配置中的 `libraryId`。连接不符即停止，不跟随 HTTP 重定向、不尝试其他库。
 
-## 原生阅读面板（0.9.0）
+## 原生阅读面板（0.10.0）
 
-`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v9.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
+`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v10.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
 
 面板直接绘制单页 PNG、页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
 
@@ -124,8 +124,10 @@ npm run check
 
 包同时提供 portable `plugin.json`/typed `mcp.json` 与旧客户端的 `.codex-plugin/plugin.json`/`.mcp.json`。依据 [OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[OpenAI UI 扩展](https://developers.openai.com/plugins/build/extensions) 与 [MCP Apps 规范](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)。
 
-本轮实现与验证状态见 [0.9.0 变更记录](history/codex-plugin-0.9.0.md)。[0.8.0 变更记录](history/codex-plugin-0.8.0.md)保留文件夹和皮肤的原验证结果。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
+本轮实现与验证状态见 [0.10.0 变更记录](history/codex-plugin-0.10.0.md)。[0.8.0 变更记录](history/codex-plugin-0.8.0.md)保留文件夹和皮肤的原验证结果。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
 
 ### 软件直接调用的翻译
 
 原生面板的“翻译设置”与浏览器共用本机配置。`paperdesk_reader_translation` 仅对组件开放，用于设置状态、凭据配置／移除和用户主动文字翻译。密钥不会出现在读回结果中，设置和译文只通过私有 `_meta` 返回；翻译不发送 `ui/message` 或模型上下文，不自动写笔记。没有有效配置时显示配置入口，配置保存本身不测试外部连接。扫描区域尚无 OCR。
+
+0.10.0 设置内增加“测试翻译”：用未保存的候选参数或该服务已保存的凭据发送固定英文示例，译文和错误类别只通过私有 `_meta.translationTest` 返回。不改变启用服务、不自动保存，不触发模型消息或笔记写入。测试属于真实小额调用，不能用缓存代替连接验证。

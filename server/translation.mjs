@@ -10,6 +10,8 @@ const DEEPL_ENDPOINTS = ['https://api-free.deepl.com/v2/translate', 'https://api
 const PROVIDERS = ['baidu', 'azure', 'deepl', 'openai-compatible'];
 const TIERS = { standard: { allowance: 50_000, characters: 1000 }, advanced: { allowance: 1_000_000, characters: 6000 } };
 const MAX_CACHE = 200, MAX_PENDING = 8;
+const TEST_TEXT = 'Hello, Paperdesk.';
+const ERROR_CATEGORIES = new Set(['authentication', 'quota', 'timeout', 'connection', 'configuration', 'response', 'changed', 'stopped', 'unknown']);
 const sha = value => createHash('sha256').update(value).digest('hex');
 const monthAt = now => new Date(now + 8 * 60 * 60_000).toISOString().slice(0, 7);
 const allowance = provider => provider === 'azure' ? 2_000_000 : 50_000;
@@ -27,7 +29,7 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
   const filename = path.join(dataDir, 'translation.sqlite');
   let database, queue = Promise.resolve(), closed = false, closing;
   const pending = new Set();
-  const error = (status, message) => new HttpError(status, message);
+  const error = (status, message, category = [400, 409, 413].includes(status) ? 'configuration' : status === 429 ? 'quota' : status === 504 ? 'timeout' : status === 503 ? 'stopped' : 'unknown') => Object.assign(new HttpError(status, message), { category });
   function strictBody(body, keys) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !keys.includes(key))) throw error(400, '翻译请求字段不正确，请检查后重试。');
     return body;
@@ -124,7 +126,7 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
     if (provider === 'openai-compatible' && !url.pathname.endsWith('/chat/completions')) throw error(400, '自定义服务须填写以 /chat/completions 结尾的完整地址。');
     return url.href;
   }
-  function settingsPut(body) {
+  function candidateConfig(body) {
     strictBody(body, ['provider', 'appId', 'apiKey', 'tier', 'monthlyLimit', 'endpoint', 'region', 'model']);
     const provider = providerId(body.provider === undefined ? 'baidu' : body.provider), existing = config(provider);
     const allowed = provider === 'baidu' ? ['provider', 'appId', 'apiKey', 'tier', 'monthlyLimit'] : ['provider', 'apiKey', 'tier', 'monthlyLimit', 'endpoint', ...(provider === 'azure' ? ['region'] : provider === 'openai-compatible' ? ['model'] : [])];
@@ -154,6 +156,13 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
         if (!model) throw error(400, '请填写自定义服务的模型名称。');
       }
     }
+    // Reuse a saved profile only in memory. Connection tests never persist these
+    // credentials, activate a provider, or modify the saved monthly threshold.
+    return { provider, app_id: appId, api_key: key, tier, monthly_limit: monthlyLimit, endpoint, region, model, revision: existing.revision };
+  }
+  function settingsPut(body) {
+    const candidate = candidateConfig(body);
+    const { provider, app_id: appId, api_key: key, tier, monthly_limit: monthlyLimit, endpoint, region, model } = candidate;
     transaction(connection => {
       connection.prepare(`INSERT INTO profiles VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET app_id=excluded.app_id,api_key=excluded.api_key,tier=excluded.tier,monthly_limit=excluded.monthly_limit,endpoint=excluded.endpoint,region=excluded.region,model=excluded.model,revision=excluded.revision`).run(provider, appId, key, tier, monthlyLimit, endpoint, region, model, randomUUID());
       connection.prepare('UPDATE active_settings SET provider = ?, revision = ? WHERE id = 1').run(provider, randomUUID());
@@ -207,10 +216,14 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
       '54003': '翻译请求过于频繁，请稍后手动重试。', '54004': '翻译账户额度或状态不可用，请到服务商控制台确认。',
       '54005': '百度翻译暂时限制长文本请求，请稍后手动重试。', '58000': '百度翻译来源地址未获授权，请检查百度控制台设置。',
       '58001': '百度翻译暂不支持本次语言方向。', '58002': '百度翻译服务尚未开通或已关闭。', '90107': '请在百度翻译控制台完成账户认证。',
+      '400': '翻译服务未接受当前配置，请检查模型、地址或参数。', '404': '未找到翻译服务，请检查完整地址和模型名称。',
       '401': '翻译服务授权未通过，请检查密钥。', '403': '翻译服务拒绝访问，请检查账户权限或区域设置。',
       '429': '翻译服务请求过于频繁或额度不足，请到服务商控制台确认。', '456': '翻译服务账户额度不足，请到服务商控制台确认。',
     };
-    return error(code === '52001' ? 504 : ['54003', '429', '456'].includes(code) ? 429 : 502, (Object.hasOwn(messages, code) ? messages[code] : '翻译服务未返回可用结果。') + ' 本次已计入本机用量估算，不会自动重试。');
+    const category = ['52003', '54001', '401', '403'].includes(code) ? 'authentication'
+      : ['54003', '54004', '429', '456'].includes(code) ? 'quota'
+      : ['400', '404'].includes(code) ? 'configuration' : code === '52001' ? 'timeout' : code === '52002' ? 'connection' : 'response';
+    return error(code === '52001' ? 504 : ['54003', '429', '456'].includes(code) ? 429 : 502, (Object.hasOwn(messages, code) ? messages[code] : '翻译服务未返回可用结果。') + ' 本次已计入本机用量估算，不会自动重试。', category);
   }
   function providerRequest(current, input) {
     const { text, from, to } = input;
@@ -267,8 +280,8 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
       checkActive(request);
       const reservation = transaction(connection => {
         checkActive(request);
-        if (active().revision !== request.activeRevision || config(current.provider).revision !== current.revision) throw error(409, '翻译设置已改变，本次排队请求没有发送，请重新确认。');
-        const cached = connection.prepare('SELECT * FROM cache WHERE digest IN (?, ?) AND account = ? ORDER BY id DESC LIMIT 1').get(digest, legacyDigest, account);
+        if ((!request.isTest && active().revision !== request.activeRevision) || config(current.provider).revision !== request.anchorRevision) throw error(409, '翻译设置已改变，本次排队请求没有发送，请重新确认。', 'changed');
+        const cached = !request.isTest && connection.prepare('SELECT * FROM cache WHERE digest IN (?, ?) AND account = ? ORDER BY id DESC LIMIT 1').get(digest, legacyDigest, account);
         if (cached) { connection.prepare('UPDATE cache SET touched_at = ? WHERE id = ?').run(now(), cached.id); return { cached }; }
         const time = now(), month = monthAt(time);
         const used = connection.prepare('SELECT characters FROM usage WHERE account = ? AND month = ?').get(account, month)?.characters || 0;
@@ -287,14 +300,16 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
         const wire = providerRequest(current, request.input);
         const response = await interruptible(fetchImpl(wire.url, { ...wire.options, signal: request.controller.signal }), request);
         if (!response.ok) throw providerFailure(String(response.status));
-        payload = await interruptible(response.json(), request);
+        try { payload = await interruptible(response.json(), request); }
+        catch (failure) { if (failure instanceof SyntaxError) throw providerFailure(); throw failure; }
       } catch (failure) {
         if (request.controller.signal.aborted || closed) throw stopError(request);
         if (failure instanceof HttpError) throw failure;
-        throw error(502, '无法取得翻译结果。本次已计入本机用量估算，不会自动重试。');
+        throw error(502, '无法取得翻译结果。本次已计入本机用量估算，不会自动重试。', 'connection');
       }
       checkActive(request);
       const result = parseResult(current.provider, payload, request.input);
+      if (request.isTest) return { test: { provider: current.provider, sourceText: TEST_TEXT, translatedText: result.translatedText, characters, elapsedMs: Math.max(0, Date.now() - request.startedAt) } };
       transaction(connection => {
         if (active().revision !== request.activeRevision || config(current.provider).revision !== current.revision) return;
         connection.prepare('INSERT INTO cache(digest,account,translated_text,source_language,target_language,characters,touched_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(digest) DO UPDATE SET translated_text=excluded.translated_text,touched_at=excluded.touched_at').run(digest, account, result.translatedText, result.from, to, characters, now());
@@ -303,11 +318,13 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
       return { translation: { provider: current.provider, ...result, to, cached: false, characters }, settings: publicSettings() };
     }
   }
-  function enqueue(body, req, res) {
-    const current = config(), input = validateText(body, current);
+  function enqueue(body, req, res, isTest = false) {
+    const current = isTest ? candidateConfig(body) : config();
+    const input = validateText(isTest ? { text: TEST_TEXT, from: 'en', to: 'zh' } : body, current);
     if (!configured(current)) throw error(409, '请先在翻译设置中配置所选服务商的账户或密钥。');
     if (pending.size >= MAX_PENDING) throw error(429, '翻译请求正在排队，请稍后再试。');
-    const request = { input, config: current, activeRevision: active().revision, controller: new AbortController(), expired: false, deadline: Date.now() + timeoutMs };
+    const startedAt = Date.now();
+    const request = { input, config: current, isTest, anchorRevision: current.revision, activeRevision: active().revision, controller: new AbortController(), expired: false, startedAt, deadline: startedAt + timeoutMs };
     pending.add(request);
     const timer = setTimeout(() => { request.expired = true; request.controller.abort(); }, timeoutMs);
     const disconnected = () => { if (!res.writableEnded) request.controller.abort(); };
@@ -327,6 +344,18 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
   app.put('/api/translation/settings', route(req => settingsPut(req.body)));
   app.delete('/api/translation/settings', route(req => settingsDelete(req.body, selectedProvider(req.query))));
   app.post('/api/translation', route((req, res) => enqueue(req.body, req, res)));
+  app.post('/api/translation/test', route((req, res) => enqueue(req.body, req, res, true)));
+  // Also sanitize JSON parser failures raised before this route. Local-origin
+  // rejections and all existing routes retain their original { error } contract.
+  app.use('/api/translation/test', (failure, req, res, next) => {
+    if (req.method !== 'POST' || req.path !== '/') return next(failure);
+    let safe = failure;
+    if (failure.type === 'entity.too.large') safe = error(413, '测试配置内容过大，请检查后重试。');
+    else if (failure instanceof SyntaxError && failure.status === 400) safe = error(400, 'JSON 格式不正确。');
+    else if (!(failure instanceof HttpError)) safe = error(500, '翻译测试暂时不可用，请稍后重试。');
+    const category = ERROR_CATEGORIES.has(safe.category) ? safe.category : [400, 403, 413].includes(safe.status) ? 'configuration' : 'unknown';
+    res.status(safe.status).json({ error: safe.message, category });
+  });
   return { close() {
     if (closing) return closing;
     closed = true;

@@ -37,9 +37,9 @@ export function translationTestOptions() {
 }
 
 export async function translationWorkflow({ context, base, onTranslationPreview }) {
-  const page = await context.newPage(), calls = [], errors = [];
+  const page = await context.newPage(), calls = [], testCalls = [], errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (request.url() === `${base}/api/translation` && request.method() === 'POST') calls.push(request.postDataJSON()); });
+  page.on('request', request => { if (request.method() !== 'POST') return; if (request.url() === `${base}/api/translation`) calls.push(request.postDataJSON()); if (request.url() === `${base}/api/translation/test`) testCalls.push(request.postDataJSON()); });
   const json = async (path, body, method = 'GET') => {
     const response = await fetch(`${base}/api${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
     assert.ok(response.ok, `${method} ${path}: ${response.status}`); return response.json();
@@ -50,7 +50,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
   await json(`/documents/${book.id}`, { notesZh: privateNote, notesEn: '' }, 'PATCH');
   const before = (await json(`/documents/${book.id}`)).document;
   const appId = '2026100712345678', secret = 'synthetic-translation-key-only';
-  const settingsEndpoint = `${base}/api/translation/settings`, translationEndpoint = `${base}/api/translation`;
+  const settingsEndpoint = `${base}/api/translation/settings`, translationEndpoint = `${base}/api/translation`, testEndpoint = `${base}/api/translation/test`;
   const selectText = async (pattern = /^A short introduction for navigation checks\.$/) => {
     const span = page.locator('.textLayer span').filter({ hasText: pattern }); await expect(span).toBeVisible();
     await expect(page.locator('.pdf-paper')).not.toHaveClass(/is-loading/);
@@ -80,6 +80,26 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     await expect(settings.getByLabel('本机月度上限', { exact: true })).toHaveValue('0');
     await settings.getByLabel('百度账号版本', { exact: true }).selectOption('standard');
     await settings.getByLabel('本机月度上限', { exact: true }).fill('50000');
+    const testButton = settings.getByRole('button', { name: '测试翻译', exact: true });
+    const testResult = settings.getByRole('region', { name: '翻译测试结果', exact: true });
+    assert.equal(testCalls.length, 0, 'Opening or editing settings never automatically tests a provider');
+    await testButton.click();
+    await expect(testResult).toContainText('测试成功');
+    await expect(testResult).toContainText(/\d+ ms/);
+    await expect(testResult.getByRole('textbox', { name: '测试原文', exact: true })).toHaveValue('Hello, Paperdesk.');
+    await expect(testResult.getByRole('textbox', { name: '测试译文', exact: true })).toHaveValue('测试译文：Hello, Paperdesk.');
+    await expect(settings.getByLabel('翻译 API Key', { exact: true })).toHaveValue(secret);
+    await expect(settings.getByLabel('百度 APP ID', { exact: true })).toHaveValue(appId);
+    assert.deepEqual(testCalls[0], { provider: 'baidu', tier: 'standard', monthlyLimit: 50000, appId, apiKey: secret });
+    assert.equal((await json('/translation/settings')).settings.configured, false, 'A successful candidate test must not save credentials');
+    await onTranslationPreview?.(page, 'settings-test-success');
+    await page.route(testEndpoint, route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: '隔离测试：请核对测试密钥。', category: 'authentication' }) }));
+    await testButton.click();
+    await expect(testResult.getByRole('alert')).toContainText('测试失败：隔离测试：请核对测试密钥');
+    await expect(settings.getByLabel('翻译 API Key', { exact: true })).toHaveValue(secret);
+    await expect(settings.getByLabel('百度 APP ID', { exact: true })).toHaveValue(appId);
+    assert.equal(testCalls.length, 2, 'A provider failure never retries automatically');
+    await page.unroute(testEndpoint);
     await page.route(settingsEndpoint, route => route.request().method() === 'PUT' ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '隔离测试：设置暂时无法保存。' }) }) : route.continue());
     await settings.getByRole('button', { name: '保存翻译设置', exact: true }).click();
     await expect(settings.getByRole('alert')).toContainText('暂时无法保存');
@@ -93,6 +113,14 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     const publicSettings = await json('/translation/settings');
     assert.equal(publicSettings.settings.configured, true);
     assert.ok(!JSON.stringify(publicSettings).includes(secret)); assert.ok(!JSON.stringify(publicSettings).includes(appId));
+    assert.equal(testCalls.length, 2, 'Saving settings does not test them');
+    await testButton.click(); await expect(testResult).toContainText('测试成功');
+    assert.deepEqual(testCalls.at(-1), { provider: 'baidu', tier: 'standard', monthlyLimit: 50000 });
+    const sampleUsage = (await json('/translation/settings')).settings.usedCharacters;
+    await testButton.click(); await expect(testResult).toContainText('测试成功');
+    assert.equal((await json('/translation/settings')).settings.usedCharacters, sampleUsage + Array.from('Hello, Paperdesk.').length);
+    assert.equal((await json(`/documents/${book.id}`)).document.notesRevision, before.notesRevision);
+    console.log('PASS: explicit fixed-sample tests use unsaved or saved candidate credentials without saving, activating, leaking notes or automatic retries');
     await expect(settings).toContainText('本机用量估算'); await expect(settings).toContainText('以百度控制台为准');
     await settings.getByRole('button', { name: '保存翻译设置', exact: true }).focus(); await page.keyboard.press('Tab');
     await expect(settings.getByRole('button', { name: '关闭翻译设置', exact: true })).toBeFocused();
@@ -290,5 +318,62 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     assert.ok(calls.every(body => !JSON.stringify(body).includes(privateNote) && Object.keys(body).sort().join(',') === 'from,text,to'));
     assert.deepEqual(errors, []);
     console.log('PASS: four translation adapters, saved independent profiles, arbitrary compatible model/endpoint, host-change key guard and targeted key removal');
+
+    await result.getByRole('button', { name: '关闭翻译结果', exact: true }).click();
+    await page.getByRole('button', { name: '翻译设置', exact: true }).click();
+    const activeBeforeTest = (await json('/translation/settings')).settings.provider;
+    const storedCustom = (await json('/translation/settings?provider=openai-compatible')).settings;
+    await chooseProvider('openai-compatible');
+    await settings.getByLabel('翻译 API Key', { exact: true }).fill('synthetic-unsaved-test-key');
+    await settings.getByLabel('模型名称', { exact: true }).fill('unsaved-candidate-translator');
+    await page.setViewportSize({ width: 688, height: 853 });
+    await testButton.click(); await expect(testResult).toContainText('测试成功');
+    await expect(testResult.getByRole('textbox', { name: '测试译文', exact: true })).toHaveValue('测试译文：Hello, Paperdesk.');
+    await expect(settings.getByLabel('翻译 API Key', { exact: true })).toHaveValue('synthetic-unsaved-test-key');
+    await expect(settings.getByLabel('模型名称', { exact: true })).toHaveValue('unsaved-candidate-translator');
+    await onTranslationPreview?.(page, 'settings-test-success-night-narrow');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    const testButtonBox = await testButton.boundingBox(); assert.ok(testButtonBox.x >= 0 && testButtonBox.x + testButtonBox.width <= 688);
+    assert.equal((await json('/translation/settings')).settings.provider, activeBeforeTest);
+    const afterCandidate = (await json('/translation/settings?provider=openai-compatible')).settings;
+    assert.equal(afterCandidate.configured, false); assert.equal(afterCandidate.model, storedCustom.model);
+    assert.equal(testCalls.at(-1).model, 'unsaved-candidate-translator');
+    assert.equal(testCalls.at(-1).endpoint, storedCustom.endpoint);
+    for (const interruption of ['edit', 'provider', 'close']) {
+      if (interruption !== 'edit') {
+        await chooseProvider('openai-compatible');
+        await settings.getByLabel('翻译 API Key', { exact: true }).fill('synthetic-unsaved-test-key');
+      }
+      let releaseTest, enteredTest, finishedTest;
+      const entered = new Promise(resolve => { enteredTest = resolve; }), gate = new Promise(resolve => { releaseTest = resolve; }), finished = new Promise(resolve => { finishedTest = resolve; });
+      await page.route(testEndpoint, async route => {
+        const response = await route.fetch(); enteredTest(); await gate;
+        await route.fulfill({ response }).catch(() => {}); finishedTest();
+      });
+      const count = testCalls.length;
+      await testButton.click(); await entered;
+      await expect(testResult).toContainText('正在测试翻译');
+      await expect(testButton).toBeDisabled();
+      await expect(settings.getByRole('button', { name: '保存翻译设置', exact: true })).toBeDisabled();
+      await expect(provider).toBeEnabled();
+      assert.equal(testCalls.length, count + 1);
+      if (interruption === 'edit') await settings.getByLabel('模型名称', { exact: true }).fill('newer-draft-translator');
+      else if (interruption === 'provider') await chooseProvider('azure');
+      else await settings.getByRole('button', { name: '关闭翻译设置', exact: true }).click();
+      await expect(testResult).toHaveCount(0);
+      releaseTest(); await finished; await page.unroute(testEndpoint);
+      if (interruption === 'close') {
+        await page.getByRole('button', { name: '翻译设置', exact: true }).click();
+        await expect(settings.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+      }
+      await expect(testResult).toHaveCount(0);
+      assert.equal(testCalls.length, count + 1, 'Invalidating a result cannot automatically send another sample');
+    }
+    const configKeys = ['apiKey', 'appId', 'endpoint', 'model', 'monthlyLimit', 'provider', 'region', 'tier'];
+    assert.ok(testCalls.every(body => Object.keys(body).every(key => configKeys.includes(key)) && !JSON.stringify(body).includes(privateNote) && !JSON.stringify(body).includes(book.id)));
+    assert.equal((await json(`/documents/${book.id}`)).document.notesRevision, before.notesRevision);
+    assert.equal((await json('/translation/settings')).settings.provider, activeBeforeTest);
+    assert.deepEqual(errors, []);
+    console.log('PASS: candidate test model responses, narrow/night controls and edit/provider/close interruptions discard delayed results without changing active configuration');
   } finally { await page.close(); }
 }
