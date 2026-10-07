@@ -84,10 +84,10 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
 
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
-    assert.equal(client.getServerVersion().version, '0.10.0');
-    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v10.html');
+    assert.equal(client.getServerVersion().version, '0.11.0');
+    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v11.html');
     for (const file of ['plugins/paperdesk/plugin.json', 'plugins/paperdesk/.codex-plugin/plugin.json']) {
-      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.10.0');
+      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.11.0');
     }
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme', 'paperdesk_reader_translation'].sort());
