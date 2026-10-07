@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
+import { READER_LAYOUT_PAGE_COUNT, readerLayoutPdf, readerLayoutSize, readerLayoutText } from './fixtures/reader-layout.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const fullCapabilities = { serverTools: {}, updateModelContext: { text: {}, image: {}, structuredContent: {} }, message: { text: {}, image: {} }, openLinks: {} };
@@ -22,7 +23,7 @@ function deferred() {
 
 // Real MCP transport, real isolated API, and a browser sandbox that cannot fetch
 // the local service. Only the parent host's tools/call bridge crosses that gap.
-export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onLibraryPreview, onTranslationPreview }) {
+export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onLibraryPreview, onTranslationPreview, onLayoutPreview }) {
   const tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-native-reader-'));
   const harnesses = [];
   let client;
@@ -78,7 +79,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
         if (message.method === 'ui/initialize') {
-          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.10.0' });
+          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.11.0' });
           result = { protocolVersion: '2026-01-26', hostInfo: { name: 'isolated-browser-host', version: '1.0.0' }, hostCapabilities: capabilities };
         }
         else if (message.method === 'ui/notifications/initialized') { initialized = true; return; }
@@ -140,8 +141,8 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       await expect.poll(() => image(h, number).evaluate(element => element.complete && element.naturalWidth > 0 && element.naturalHeight > 0)).toBe(true);
       await expect.poll(h.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     }
-    async function drag(h, from, to) {
-      const layer = h.frame.getByLabel('拖动框选区域', { exact: true });
+    async function drag(h, from, to, number) {
+      const layer = number === undefined ? h.frame.getByLabel('拖动框选区域', { exact: true }) : h.frame.locator(`.page-paper[data-page="${number}"]`).getByLabel('拖动框选区域', { exact: true });
       await expect(layer).toBeVisible(); const box = await layer.boundingBox(); assert.ok(box);
       await h.page.mouse.move(box.x + from[0] * box.width, box.y + from[1] * box.height); await h.page.mouse.down();
       await h.page.mouse.move(box.x + to[0] * box.width, box.y + to[1] * box.height, { steps: 7 }); await h.page.mouse.up();
@@ -780,6 +781,140 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     for (const provider of ['baidu', 'azure', 'deepl', 'openai-compatible']) await client.callTool({ name: 'paperdesk_reader_translation', arguments: { operation: 'clear', provider } });
     console.log('PASS: native fixed-sample translation tests preserve unsaved forms, saved profiles, notes and private context across edit/profile/close races');
     console.log('PASS: native translation settings, explicit private results, failure recovery, stale selection protection and narrow modal leave notes and model context unchanged');
+
+    const layoutBook = await upload('original-native-reader-layout.pdf', readerLayoutPdf({ variant: 'native-layout' }));
+    const layoutNotes = 'NATIVE_LAYOUT_PRIVATE_NOTE：阅读布局不得发送或改写这段内容。';
+    assert.equal((await request(`/documents/${layoutBook.id}`, { notesZh: layoutNotes, notesEn: '' }, 'PATCH')).status, 200);
+    const layoutBefore = (await request(`/documents/${layoutBook.id}`)).document;
+    const display = await harness({ documentId: layoutBook.id }); await ready(display, 1);
+    const flow = display.frame.getByRole('combobox', { name: '翻页方式', exact: true });
+    const layout = display.frame.getByRole('combobox', { name: '页面布局', exact: true });
+    const zoom = display.frame.getByRole('combobox', { name: '阅读缩放', exact: true });
+    const pageInput = display.frame.getByRole('spinbutton', { name: 'PDF 页码', exact: true });
+    const nativeTile = number => display.frame.locator(`.page-paper[data-page="${number}"]`);
+    const groupPages = (number, count) => {
+      const start = Math.floor((number - 1) / count) * count + 1;
+      return Array.from({ length: Math.min(count, READER_LAYOUT_PAGE_COUNT - start + 1) }, (_, index) => start + index);
+    };
+    async function gotoLayout(number) {
+      await pageInput.fill(String(number)); await pageInput.press('Enter');
+      await expect(pageInput).toHaveValue(String(number)); await ready(display, number);
+    }
+    async function nativeGroup(number, count) {
+      const expected = groupPages(number, count);
+      await expect.poll(() => display.frame.locator('.page-paper[data-page]').evaluateAll(elements => elements.map(element => Number(element.dataset.page)))).toEqual(expected);
+      await Promise.all(expected.map(number => ready(display, number))); return expected;
+    }
+    await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('1'); await expect(zoom).toHaveValue('fit');
+    await display.page.setViewportSize({ width: 2560, height: 1440 });
+    const collapseNativeLibrary = display.frame.getByRole('button', { name: '收起文献栏', exact: true });
+    if (await collapseNativeLibrary.isVisible()) await collapseNativeLibrary.click();
+    const nativeContentWidth = () => display.frame.locator('#page-scroll').evaluate(element => {
+      const style = getComputedStyle(element); return element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    await expect.poll(async () => Math.abs((await nativeTile(1).boundingBox()).width - await nativeContentWidth())).toBeLessThan(6);
+    const nativeWide = (await nativeTile(1).boundingBox()).width;
+    assert.ok(nativeWide > 600 * 1.65 + 300, 'Native fit width must consume its actual wide container');
+    await onLayoutPreview?.(display.page, 'native-width-wide');
+    await display.page.setViewportSize({ width: 1600, height: 1100 });
+    await expect.poll(async () => Math.abs((await nativeTile(1).boundingBox()).width - await nativeContentWidth())).toBeLessThan(6);
+    assert.ok((await nativeTile(1).boundingBox()).width < nativeWide - 500);
+    await display.page.setViewportSize({ width: 2560, height: 1440 });
+    for (const count of [2, 4, 6, 9]) {
+      await layout.selectOption(String(count)); await expect(zoom).toHaveValue('page'); await gotoLayout(1); await nativeGroup(1, count);
+      const boxes = await Promise.all(groupPages(1, count).map(number => nativeTile(number).boundingBox()));
+      const columns = count <= 4 ? 2 : 3, scroll = await display.frame.locator('#page-scroll').boundingBox();
+      assert.ok(boxes[1].x > boxes[0].x + boxes[0].width - 2 && Math.abs(boxes[1].y - boxes[0].y) < 2);
+      assert.ok(boxes[1].x - boxes[0].x - boxes[0].width <= 18, `${count}-page native whole-screen grid must pack neighboring paper with the intended gap`);
+      if (count > columns) assert.ok(boxes[columns].y > boxes[0].y + boxes[0].height - 2);
+      assert.ok(boxes.every(box => box.y >= scroll.y - 2 && box.y + box.height <= scroll.y + scroll.height + 2), `${count}-page native whole-screen grid must fit vertically`);
+      await display.frame.getByRole('button', { name: '下一页', exact: true }).click(); await expect(pageInput).toHaveValue(String(count + 1)); await nativeGroup(count + 1, count);
+      await display.frame.getByRole('button', { name: '上一页', exact: true }).click(); await expect(pageInput).toHaveValue('1'); await nativeGroup(1, count);
+      await gotoLayout(count + 2); await nativeGroup(count + 2, count); await expect(pageInput).toHaveValue(String(count + 2));
+      await gotoLayout(READER_LAYOUT_PAGE_COUNT); await nativeGroup(READER_LAYOUT_PAGE_COUNT, count);
+      await expect(display.frame.getByRole('button', { name: '下一页', exact: true })).toBeDisabled();
+      await onLayoutPreview?.(display.page, `native-grid-${count}-tail`);
+    }
+    assert.equal(display.updates.some(hasContext), false, 'Native page preloading must never publish page pixels/text/notes');
+    const renderedPages = display.calls.filter(call => call.params?.name === 'paperdesk_reader_page' && call.result);
+    assert.ok(renderedPages.some(call => call.params.arguments.page !== 1), 'Multi-page tests must really preload nonfirst pages through MCP');
+    for (const call of renderedPages) {
+      const modelFields = JSON.stringify({ content: call.result.content, structuredContent: call.result.structuredContent });
+      assert.ok(!modelFields.includes(layoutNotes) && !modelFields.includes(readerLayoutText(call.params.arguments.page)) && !modelFields.includes('iVBOR'), 'Preloaded page data must remain in app-only metadata');
+    }
+
+    const mixedLayoutBook = await upload('original-native-reader-mixed-sizes.pdf', readerLayoutPdf({ variant: 'native-mixed-sizes', pageCount: 4, mixedSizes: true }));
+    const mixedDisplay = await harness({ documentId: mixedLayoutBook.id }); await ready(mixedDisplay, 1);
+    await mixedDisplay.page.setViewportSize({ width: 2560, height: 1440 });
+    await mixedDisplay.frame.getByRole('button', { name: '收起文献栏', exact: true }).click();
+    await mixedDisplay.frame.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('4');
+    await Promise.all([1, 2, 3, 4].map(number => ready(mixedDisplay, number)));
+    const mixedBounds = await mixedDisplay.frame.locator('#page-scroll').boundingBox();
+    for (const number of [1, 2, 3, 4]) {
+      const bounds = await mixedDisplay.frame.locator(`.page-paper[data-page="${number}"]`).boundingBox(), size = readerLayoutSize(number, true);
+      assert.ok(Math.abs(bounds.width / bounds.height - size.width / size.height) < .01, `Native mixed page ${number} must keep its actual aspect ratio`);
+      assert.ok(bounds.y >= mixedBounds.y - 2 && bounds.y + bounds.height <= mixedBounds.y + mixedBounds.height + 2, `Native mixed page ${number} must fit inside the whole-screen viewport`);
+    }
+    assert.equal(mixedDisplay.updates.some(hasContext), false);
+    await onLayoutPreview?.(mixedDisplay.page, 'native-grid-4-mixed-sizes'); await mixedDisplay.close();
+
+    await layout.selectOption('1'); await zoom.selectOption('page'); await gotoLayout(1); await flow.selectOption('continuous'); await ready(display, 1);
+    const continuousScroll = await display.frame.locator('#page-scroll').boundingBox();
+    await display.page.mouse.move(continuousScroll.x + continuousScroll.width / 2, continuousScroll.y + continuousScroll.height / 2);
+    await display.page.mouse.wheel(0, continuousScroll.height * 3);
+    await expect.poll(async () => Number(await pageInput.inputValue())).toBeGreaterThan(1);
+    await display.frame.locator('.page-group[data-group-start="15"]').evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
+    await expect(pageInput).toHaveValue('15'); await ready(display, 15);
+    const visibleImages = await display.frame.locator('.page-paper img[src^="data:image"]').count();
+    assert.ok(visibleImages > 0 && visibleImages <= 7 && visibleImages < READER_LAYOUT_PAGE_COUNT, `Native continuous images must remain bounded (actual ${visibleImages})`);
+    assert.equal(display.updates.some(hasContext), false, 'Scrolling also must not inject mutable model context');
+    await onLayoutPreview?.(display.page, 'native-continuous-page-15');
+
+    await flow.selectOption('paged'); await layout.selectOption('9'); await gotoLayout(1); await nativeGroup(1, 9);
+    await display.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(display, [.15, .30], [.60, .45], 5);
+    await expect(pageInput).toHaveValue('5'); await expect(display.frame.locator('#preview-origin')).toContainText('5');
+    const regionPreview = await display.frame.getByRole('img', { name: '选区预览', exact: true }).getAttribute('src');
+    assert.notEqual(regionPreview, await image(display, 5).getAttribute('src'));
+    await onLayoutPreview?.(display.page, 'native-page-5-region-preview');
+    await display.frame.getByRole('button', { name: '解释选区', exact: true }).click();
+    await expect.poll(() => display.messages.length).toBe(1);
+    const layoutQuestion = assertQuestion(display.messages[0], display, layoutBook, 5);
+    assert.ok(!layoutQuestion.includes(layoutNotes));
+    assert.deepEqual(display.messages[0].content.filter(block => block.type === 'image'), [{ type: 'image', data: regionPreview.split(',')[1], mimeType: 'image/png' }]);
+    const selectionArgs = display.calls.findLast(call => call.params?.name === 'paperdesk_reader_session' && call.params.arguments.selection)?.params.arguments;
+    assert.equal(selectionArgs.page, 5); assert.equal(selectionArgs.selection.kind, 'region');
+    for (const [key, value] of Object.entries({ x: .15, y: .30, width: .45, height: .15 })) assert.ok(Math.abs(selectionArgs.selection.rects[0][key] - value) < .006, `Native fifth-tile ${key} must stay normalized`);
+    await expect(display.frame.getByRole('dialog', { name: '共享预览', exact: true })).toBeHidden();
+    // An intentional new tile drag replaces the old shared scope. The already
+    // sent question keeps its immutable page-five snapshot.
+    await drag(display, [.15, .30], [.60, .45], 6);
+    await expect(pageInput).toHaveValue('6'); await expect(display.frame.locator('#preview-origin')).toContainText('6');
+    await expect.poll(async () => (await currentContext(display)).selection).toBeNull();
+    assertQuestion(display.messages[0], display, layoutBook, 5);
+    await display.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
+    await expect.poll(() => display.updates.some(hasContext)).toBe(true);
+    await layout.selectOption('4'); await expect(display.frame.getByRole('dialog', { name: '共享预览', exact: true })).toBeHidden();
+    await expect.poll(async () => (await currentContext(display)).selection).toBeNull();
+    await gotoLayout(5); await nativeGroup(5, 4); await drag(display, [.15, .30], [.60, .45], 5);
+    await display.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
+    await expect.poll(async () => (await currentContext(display)).selection?.kind).toBe('region');
+    await flow.selectOption('continuous'); await expect.poll(async () => (await currentContext(display)).selection).toBeNull();
+    await flow.selectOption('paged'); await gotoLayout(5); await nativeGroup(5, 4); await drag(display, [.15, .30], [.60, .45], 5);
+    await display.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '交给 Codex', exact: true }).click();
+    await expect.poll(async () => (await currentContext(display)).selection?.kind).toBe('region');
+    const expandNativeLibrary = display.frame.getByRole('button', { name: '展开文献栏', exact: true });
+    if (await expandNativeLibrary.isVisible()) await expandNativeLibrary.click();
+    await display.frame.getByRole('button', { name: book.title, exact: true }).click();
+    await expect(display.frame.locator('#document-title')).toHaveText(book.title); await gotoLayout(1);
+    await expect.poll(async () => (await currentContext(display)).selection).toBeNull();
+    assert.equal(hasContext(display.updates.at(-1)), false);
+    const layoutAfter = (await request(`/documents/${layoutBook.id}`)).document;
+    assert.equal(layoutAfter.notesRevision, layoutBefore.notesRevision); assert.equal(layoutAfter.notesZh, layoutNotes);
+    assert.equal(display.calls.some(call => /save_notes|append_note|translation/.test(call.params?.name || '')), false, 'Display controls must not write notes or call translation');
+    await flow.selectOption('paged'); await layout.selectOption('1'); await zoom.selectOption('fit');
+    await display.close();
+    console.log('PASS: native wide fit/resize, 2/4/6/9 grids and exact tail jumps; MCP preloading and bounded continuous scrolling keep app-only data private');
+    console.log('PASS: native fifth-grid-tile region questions retain true page/crop/normalized coordinates; layout/mode/document switches clear shared selections and preserve notes');
 
     for (const item of harnesses) {
       assert.deepEqual(item.errors, [], 'Native reader must not raise uncaught browser exceptions');

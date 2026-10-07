@@ -1,7 +1,7 @@
 {
   "name": "paperdesk",
-  "version": "0.10.0",
-  "description": "本机 PDF 阅读、分类和皮肤，支持多服务 API 选区翻译；按需在当前 Work／Codex 对话讨论选区。",
+  "version": "0.11.0",
+  "description": "本机 PDF 单页／多页阅读、连续滚动、分类和皮肤，支持 API 选区翻译与 Work／Codex 选区讨论。",
   "author": {
     "name": "Paperdesk"
   },
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "纸间 Paperdesk",
     "shortDescription": "本机 PDF 阅读、选区翻译与讨论",
-    "longDescription": "整理单层文件夹、拖动文献和选择四套阅读皮肤。支持测试当前填写的百度、Azure、DeepL 或自定义 OpenAI 兼容 API 配置，确认后在阅读器直接翻译文字选区，不使用 Codex 模型。阅读问题仍在当前 Work／Codex 对话讨论，明确要求后才追加笔记。",
+    "longDescription": "按显示器空间选择单页、双页、四页、六页或九页，左右翻页或上下连续阅读，支持适合宽度和适合整屏。整理单层文件夹与四套阅读皮肤；直接调用用户配置的翻译 API，选区讨论仍在当前 Work／Codex 对话中进行，明确要求后才追加笔记。",
     "developerName": "Paperdesk",
     "category": "Productivity",
     "capabilities": [

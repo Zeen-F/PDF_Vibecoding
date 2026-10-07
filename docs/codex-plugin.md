@@ -95,11 +95,11 @@ npm run plugin:install
 
 每次工具操作及 UI resource 读取前都会重新确认 loopback 地址、`service: paperdesk`、API 版本和配置中的 `libraryId`。连接不符即停止，不跟随 HTTP 重定向、不尝试其他库。
 
-## 原生阅读面板（0.10.0）
+## 原生阅读面板（0.11.0）
 
-`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v10.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
+`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v11.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
 
-面板直接绘制单页 PNG、页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
+面板直接绘制按需加载的页面 PNG，支持左右翻页／上下连续阅读和单页、双页、四页、六页、九页布局；同时提供页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
 
 10 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`，以及新增的 `paperdesk_reader_library`、`paperdesk_reader_organize`、`paperdesk_reader_theme` 和 `paperdesk_reader_translation`。分类和主题工具读写结果在 `_meta.library` 返回；翻译设置状态与译文在 `_meta.translationSettings`、`_meta.translation` 返回。文献列表与共享读取复用已有公共工具，总计 18 个工具。
 
@@ -124,7 +124,7 @@ npm run check
 
 包同时提供 portable `plugin.json`/typed `mcp.json` 与旧客户端的 `.codex-plugin/plugin.json`/`.mcp.json`。依据 [OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[OpenAI UI 扩展](https://developers.openai.com/plugins/build/extensions) 与 [MCP Apps 规范](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)。
 
-本轮实现与验证状态见 [0.10.0 变更记录](history/codex-plugin-0.10.0.md)。[0.8.0 变更记录](history/codex-plugin-0.8.0.md)保留文件夹和皮肤的原验证结果。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
+本轮实现与验证状态见 [0.11.0 变更记录](history/codex-plugin-0.11.0.md)，使用说明见 [阅读显示设置](reader-display.md)。[0.10.0 变更记录](history/codex-plugin-0.10.0.md)保留设置内试译的原验证结果。[0.8.0 变更记录](history/codex-plugin-0.8.0.md)保留文件夹和皮肤的原验证结果。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
 
 ### 软件直接调用的翻译
 

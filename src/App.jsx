@@ -67,7 +67,7 @@ export default function App() {
   const savedDoc=useCallback((doc,expectedRevision)=>{if(!doc)return;const apply=d=>d?.id===doc.id&&(expectedRevision===undefined||d.notesRevision===expectedRevision||d.notesRevision===doc.notesRevision)?{...d,...doc,folderId:d.folderId}:d;setDocuments(ds=>ds.map(apply));setCurrent(apply);},[]);
   const notesDirtyChanged=useCallback((documentId,dirty)=>{if(currentIdRef.current===documentId)setNotesState(value=>value.documentId===documentId&&value.dirty===dirty?value:{documentId,dirty});},[]);
   const codex=useCodexContext({document:current,page,selection,notesDirty:notesState.documentId===current?.id&&notesState.dirty,onDocument:savedDoc,onError:notify});
-  const changePage=n=>{if(!Number.isSafeInteger(n)||n<1||n>(current?.pageCount||0))return;setPage(n);setSelection(null);setFind('');setFocused(null);};
+  const changePage=(n,{source}={})=>{if(modal||translationSettingsOpen||!Number.isSafeInteger(n)||n<1||n>(current?.pageCount||0))return;setPage(n);if(source!=='selection')setSelection(null);setFind('');setFocused(null);};
   const toggleToc=open=>{setTocOpen(open);setSelection(null);if(open&&window.matchMedia('(max-width:780px)').matches)setShowNotes(false);};
   const toggleNotes=()=>{if(!showNotes&&window.matchMedia('(max-width:780px)').matches)setTocOpen(false);setShowNotes(!showNotes);};
   const revealNotes=()=>{if(window.matchMedia('(max-width:780px)').matches)setTocOpen(false);setShowNotes(true);};

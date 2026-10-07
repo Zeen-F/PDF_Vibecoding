@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { createServer as createViteServer } from 'vite';
@@ -12,6 +12,7 @@ import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 import { pluginWorkflow } from '../tests/plugin.browser.mjs';
 import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
 import { libraryThemesWorkflow } from '../tests/library-themes.browser.mjs';
+import { readerLayoutWorkflow } from '../tests/reader-layout.browser.mjs';
 import { translationWorkflow, translationTestOptions } from '../tests/translation.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -584,6 +585,14 @@ try {
   await tableOfContentsWorkflow(context, sampleDocument);
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
+  const layoutVisualDir = process.env.PAPERDESK_READER_LAYOUT_VISUAL_DIR ? resolve(root, process.env.PAPERDESK_READER_LAYOUT_VISUAL_DIR) : null;
+  if (layoutVisualDir && !layoutVisualDir.startsWith(`${join(root, '.local')}${sep}`)) throw new Error('Reader layout proofs must remain under this workspace .local directory');
+  if (layoutVisualDir) await mkdir(layoutVisualDir, { recursive: true, mode: 0o700 });
+  const onLayoutPreview = layoutVisualDir ? async (page, label) => {
+    if (!/^[a-z0-9-]+$/.test(label)) throw new Error('Invalid reader layout preview filename');
+    await page.screenshot({ path: join(layoutVisualDir, `${label}.png`), fullPage: true, animations: 'disabled' });
+  } : undefined;
+  await readerLayoutWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onLayoutPreview });
   await libraryThemesWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   const visualDir = process.env.PAPERDESK_TRANSLATION_VISUAL_DIR;
   if (visualDir) await mkdir(visualDir, { recursive: true, mode: 0o700 });
@@ -593,7 +602,7 @@ try {
   } : undefined;
   await translationWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview });
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
-  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview });
+  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview, onLayoutPreview });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {
