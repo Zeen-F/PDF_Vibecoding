@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "paperdesk",
-  "version": "0.7.0",
-  "description": "连接本机纸间 PDF 阅读器，按需共享选区并在当前 Work／Codex 对话中提问，明确要求后追加笔记。",
+  "version": "0.8.0",
+  "description": "在本机纸间阅读和分类文献，选择阅读皮肤，按需在当前 Work／Codex 对话讨论选区，明确要求后追加笔记。",
   "author": {
     "name": "Paperdesk"
   },
@@ -10,8 +10,8 @@
     "com.openai": {
       "interface": {
         "displayName": "纸间 Paperdesk",
-        "shortDescription": "本机 PDF 阅读、选区讨论与笔记",
-        "longDescription": "在原生面板阅读本机文献，预览后在当前 Work／Codex 对话中解释选区、提炼要点或自定义提问。只共享不会启动回答；聊天内容仅在明确要求时追加到单一笔记区。",
+        "shortDescription": "本机 PDF 分类、阅读与选区讨论",
+        "longDescription": "在原生面板整理单层文件夹、拖动文献和选择四套阅读皮肤。预览后在当前 Work／Codex 对话中讨论选区；只共享不会启动回答，明确要求后才追加笔记。",
         "developerName": "Paperdesk",
         "category": "Productivity",
         "capabilities": [

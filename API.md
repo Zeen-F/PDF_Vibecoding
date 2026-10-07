@@ -2,7 +2,7 @@
 
 All routes same origin, JSON error `{error: string}`. Node >=24.0.0, Express, node:sqlite, pdfjs-dist legacy. PORT defaults 4317, bind 127.0.0.1. PAPERDESK_DATA_DIR overrides default ./data. Ordinary reading/editing uses no external service. The optional MCP bridge can provide the user's requested document data or explicitly shared selection to Codex.
 
-Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,notesRevision,lastPage}`; id is UUID. `notesRevision` is lowercase SHA-256 of `JSON.stringify([raw notesZh, raw notesEn])`. Annotation: `{id,documentId,page,kind,quote,comment,color,rects,createdAt,updatedAt}`. `kind` is `text` or `region`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
+Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailable,notesZh,notesEn,notesRevision,lastPage,folderId}`; id is UUID and folderId is one folder UUID or null (unclassified). `notesRevision` is lowercase SHA-256 of `JSON.stringify([raw notesZh, raw notesEn])`. Annotation: `{id,documentId,page,kind,quote,comment,color,rects,createdAt,updatedAt}`. `kind` is `text` or `region`. Rectangles `{x,y,width,height}` are normalized 0..1, top-left origin on the default PDF.js viewport including intrinsic PDF rotation. Color enum yellow,green,pink. All UI pages 1-based.
 
 - GET /api/health => `{ok:true}`
 - GET /api/documents => `{documents: Document[]}` (notes may be included)
@@ -17,13 +17,13 @@ Document: `{id,title,filename,pageCount,byteSize,createdAt,updatedAt,textAvailab
 - GET /api/search?q=... => `{results:[{documentId,title,page,snippet,source}]}`. source = text|title|notes|annotation. Case-insensitive literal substring, Unicode CJK supported; excerpts near match; maximum 100 results. Return pages across all docs, cap/snippet behavior documented.
 - GET /api/documents/:id/export => text/markdown UTF-8 download containing title, original filename, one `笔记` section, and all annotations with page, quote, comment, color. Legacy note fields are combined for display/export without rewriting the stored fields. Escape metadata and quote text as appropriate; user note bodies preserve Markdown. Ensure safe Content-Disposition.
 
-The document API retains `notesZh` and `notesEn` for storage compatibility; they are not two editors in the current UI. `shared/notes.mjs` combines two nonempty values with exactly `\n\n---\n\n`, retaining their original contents and order. With one empty value it returns the other without a separator. Opening, unchanged saving and exporting a legacy document do not consolidate its raw fields. An actual single-editor edit saves the complete displayed text to `notesZh` and clears `notesEn`; existing two-field local drafts are recovered into the same editor. The schema remains version 2. The combined note is capped at 500,007 UTF-16 code units, retaining the previous two-field capacity plus the separator; the legacy `notesEn` field remains capped at 250,000. Over-limit updates reject the whole request without changing either field.
+The document API retains `notesZh` and `notesEn` for storage compatibility; they are not two editors in the current UI. `shared/notes.mjs` combines two nonempty values with exactly `\n\n---\n\n`, retaining their original contents and order. With one empty value it returns the other without a separator. Opening, unchanged saving and exporting a legacy document do not consolidate its raw fields. An actual single-editor edit saves the complete displayed text to `notesZh` and clears `notesEn`; existing two-field local drafts are recovered into the same editor. Schema 3 preserves both note fields. The combined note is capped at 500,007 UTF-16 code units, retaining the previous two-field capacity plus the separator; the legacy `notesEn` field remains capped at 250,000. Over-limit updates reject the whole request without changing either field.
 
 Region exports identify `区域批注`, physical page, color, comment and the `x`, `y`, `width`, `height` coordinates normalized to 0–1. They do not fabricate quotation text or include a screenshot. Region comments participate in annotation search; words contained only in page images do not become searchable. PATCH cannot change an annotation's `kind`, page, quote or geometry.
 
 ## Local Codex bridge
 
-These routes keep the existing Host/Origin validation and schema 2. They add no cloud account, filesystem access or model API. The bridge verifies `service`, `apiVersion` and the configured `libraryId` before every MCP operation.
+These routes keep the existing Host/Origin validation and work with schema 3. They add no cloud account, filesystem access or model API. The bridge verifies `service`, `apiVersion` and the configured `libraryId` before every MCP operation.
 
 - GET /api/plugin/status => `{service:'paperdesk',apiVersion:1,instanceId,libraryId}`. `instanceId` is a UUID regenerated at service startup. `libraryId` hashes the resolved data directory; it identifies the local binding without returning a filesystem path. It is not an authentication secret.
 - GET /api/documents/:id/pages/:page => `{documentId,page,text,textAvailable}`. Page must be a canonical positive integer within this document. `textAvailable` describes that page, and false does not trigger OCR. The MCP reader bounds/paginates the returned text.
@@ -40,7 +40,22 @@ The UI uses revision checks for ordinary note saves and receives clean external 
 
 ## Storage version
 
-Schema 2 adds `annotations.kind` with a `text` default and `text`/`region` validation. Startup upgrades existing records in a transaction without rewriting their IDs, quotes, comments or rectangles; repeated startup is idempotent and migration errors roll back. A database with `user_version > 2` is rejected rather than downgraded. Back up the complete library before first opening it with this version; reverting to an older application requires restoring the pre-migration backup.
+Schema 3 adds `folders`, nullable `documents.folder_id` referencing folders with `ON DELETE SET NULL`, and one `library_preferences` row for theme. Names have a unique NFKC/lowercase `name_key`. Legacy documents begin unclassified and theme defaults to forest. The earlier schema 2 migration still adds `annotations.kind` with a `text` default and `text`/`region` validation when needed.
+
+Startup applies all schema changes in one transaction, without rewriting original document metadata, raw notes, saved reading positions, page text, annotations or PDF bytes. Existing note revisions remain identical. Repeated startup is idempotent; migration errors roll back tables, columns and version together. A database with `user_version > 3` is rejected rather than downgraded. Back up the complete library before first opening it with this version; reverting to an older application requires restoring the pre-migration backup.
+
+## Library folders and theme
+
+Folders are one level deep; each document belongs to zero or one folder. Folder metadata is `{id,name,documentCount,createdAt,updatedAt}`. Counts are computed from current membership. List order is normalized name, then ID.
+
+- GET /api/library => `{folders: Folder[],theme:'forest'|'sand'|'slate'|'night'}`.
+- POST /api/folders JSON `{name}` => 201 `{folder}`.
+- PATCH /api/folders/:id JSON `{name}` => `{folder}`.
+- DELETE /api/folders/:id with no body or `{}` => `{ok:true}`. Documents become unclassified; their PDF, notes, annotations and reading position remain.
+- PATCH /api/documents/:id/folder JSON `{folderId:UUID|null}` => `{document}`. This is the drag/drop and menu classification endpoint. It changes only membership and document update time; it neither compares nor changes notesRevision, and cannot accept note fields.
+- PATCH /api/library/theme JSON `{theme}` => `{theme}`. The theme persists for the whole library across browser/plugin sessions and restarts. Labels are forest 森林, sand 暖砂, slate 雾蓝 and night 夜读.
+
+All bodies reject unsupported fields. Names are trimmed and must contain 1–80 UTF-16 units; Unicode control/format characters are rejected even before trimming. NFKC plus lowercase is used only for uniqueness, preserving the trimmed display spelling. Conflicting creation/renaming returns 409, malformed UUID/name/theme/body returns 400, and an unknown document or folder returns 404. IDs may use either hex case. These routes inherit the same Host/Origin protections, including rejection of foreign websites and `Origin: null`. Folder renaming, deletion, movement and theme changes never rewrite note content or invalidate a valid note revision; clients must also avoid replacing an unsaved editor draft with metadata responses.
 
 ## Table of contents
 

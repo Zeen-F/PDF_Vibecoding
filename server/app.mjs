@@ -11,6 +11,8 @@ import { extractToc } from './toc.mjs';
 import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
 import { notesRevision, revisionValue, registerPluginApi } from './plugin-api.mjs';
 import { createReaderRenderer, readerPageQuery, readerPageText, ReaderRenderError } from './reader-render.mjs';
+import { migrateLibrary, registerLibraryApi } from './library.mjs';
+import { CURRENT_SCHEMA } from '../shared/library.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -93,7 +95,7 @@ function serializeDocument(row) {
     pageCount: row.page_count, byteSize: row.byte_size,
     createdAt: row.created_at, updatedAt: row.updated_at,
     textAvailable: Boolean(row.text_available), notesZh: row.notes_zh,
-    notesEn: row.notes_en, lastPage: row.last_page, notesRevision: notesRevision(row),
+    notesEn: row.notes_en, lastPage: row.last_page, notesRevision: notesRevision(row), folderId: row.folder_id,
   };
 }
 
@@ -219,11 +221,11 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   let migrating = false;
   try {
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-    if (db.prepare('PRAGMA user_version').get().user_version > 2) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
+    if (db.prepare('PRAGMA user_version').get().user_version > CURRENT_SCHEMA) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
     db.exec('PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;');
     migrating = true;
     // Recheck under the write lock in case another process migrated first.
-    if (db.prepare('PRAGMA user_version').get().user_version > 2) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
+    if (db.prepare('PRAGMA user_version').get().user_version > CURRENT_SCHEMA) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
     db.exec(`
       CREATE TABLE IF NOT EXISTS documents (
         id TEXT PRIMARY KEY, sha256 TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
@@ -246,7 +248,8 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     if (!db.prepare('PRAGMA table_info(annotations)').all().some(column => column.name === 'kind')) {
       db.exec("ALTER TABLE annotations ADD COLUMN kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'region'));");
     }
-    db.exec('PRAGMA user_version = 2; COMMIT;');
+    migrateLibrary(db);
+    db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA}; COMMIT;`);
     migrating = false;
   } catch (error) {
     if (migrating) db.exec('ROLLBACK');
@@ -335,6 +338,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     app, db, dataDir, documentOr404, serializeDocument, transaction,
     HttpError, objectBody, stringValue, pageValue, rectanglesValue,
   });
+  registerLibraryApi({ app, db, documentOr404, serializeDocument, transaction, HttpError, objectBody });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/documents', (_req, res) => {
@@ -540,7 +544,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   const distDir = path.join(rootDir, 'dist');
   app.use(express.static(distDir, { dotfiles: 'deny', index: false }));
   app.get('/', (_req, res, next) => {
-    if (existsSync(path.join(distDir, 'index.html'))) res.sendFile(path.join(distDir, 'index.html'));
+    if (existsSync(path.join(distDir, 'index.html'))) res.sendFile('index.html', { root: distDir });
     else next(new HttpError(503, '界面尚未构建，请先运行 npm run build，或使用开发启动方式。'));
   });
   app.use((_req, res) => res.status(404).json({ error: '没有找到这个资源。' }));

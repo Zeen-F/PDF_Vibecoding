@@ -72,7 +72,7 @@ test('single-note saves and exports preserve legacy content without rewriting or
     const en = '\n## Evidence\n\n```text\ngm/ID = 12\n```\n\n[Original source](https://example.com/)  \n';
     assert.equal((await patch({ notesZh: zh, notesEn: en })).status, 200);
     const before = storedNotes();
-    assert.equal(before.version, 2);
+    assert.equal(before.version, 3);
     const expected = `${zh}\n\n---\n\n${en}`;
     assert.equal(await exportNotes(), expected);
     const loaded = await readDocument();
@@ -125,6 +125,6 @@ test('single-note saves and exports preserve legacy content without rewriting or
     assert.equal(cleared.notesEn, '');
     assert.equal(await exportNotes(), '（暂无笔记）');
     assert.equal(await exportNotes(), '（暂无笔记）');
-    assert.equal(storedNotes().version, 2);
+    assert.equal(storedNotes().version, 3);
   });
 });

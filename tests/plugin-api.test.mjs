@@ -106,8 +106,8 @@ test('plugin identity and page reads are scoped to one library and preserve orig
   assert.equal(after.libraryId, before.libraryId);
   const db = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
   try {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
-    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map(row => row.name), ['annotations', 'documents', 'pages']);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map(row => row.name), ['annotations', 'documents', 'folders', 'library_preferences', 'pages']);
   } finally { db.close(); }
   assert.deepEqual(await readFile(path.join(lib.dataDir, 'pdfs', `${doc.id}.pdf`)), source);
   assert.deepEqual(Buffer.from(await (await fetch(`${lib.app.base}/api/documents/${doc.id}/file`)).arrayBuffer()), source);

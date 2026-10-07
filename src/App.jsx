@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BookOpen, Plus, Search, Upload, FileText, ArrowUpRight, Download, X, Highlighter, MessageSquare, Check, Trash2, Pencil, Library, LockKeyhole, LoaderCircle, ArrowRight, PanelRightClose, PanelRightOpen, PanelLeftClose, PanelLeftOpen, ScanLine } from 'lucide-react';
 import Reader from './Reader.jsx';
 import Notes from './Notes.jsx';
+import LibraryPanel from './Library.jsx';
+import { DOCUMENT_DRAG_TYPE } from '../shared/library.mjs';
 import { api, patchDocument } from './api.js';
 import { readDeepLink, useCodexContext } from './codex-context.js';
 import './codex.css';
 
 const sourceNames={text:'正文',title:'标题',notes:'笔记',annotation:'批注'};
-const fmtSize=n=>n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(n/1024))} KB`;
 function MarkedText({text,query}) {
   const index=text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
   if(index<0||!query)return text;
@@ -35,7 +36,9 @@ export default function App() {
   const currentIdRef=useRef(current?.id);currentIdRef.current=current?.id;
   const input=useRef(null),notesRef=useRef(null),openToken=useRef(0),toastTimer=useRef(null),searchSequence=useRef(0);
   const notify=useCallback((message,type='error')=>{setToast({message,type});clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(null),type==='error'?11000:5000);},[]);
-  const refresh=async()=>{const data=await api('/documents');setDocuments(data.documents);return data.documents;};
+  const refreshSequence=useRef(0);
+  const refresh=async()=>{const sequence=++refreshSequence.current;const data=await api('/documents');if(sequence===refreshSequence.current){setDocuments(data.documents);setCurrent(value=>{const doc=data.documents.find(item=>item.id===value?.id);return doc?{...value,folderId:doc.folderId}:value;});}return data.documents;};
+  const folderChanged=(id,folderId)=>{++refreshSequence.current;const apply=doc=>doc?.id===id?{...doc,folderId}:doc;setDocuments(items=>items.map(apply));setCurrent(apply);};
   const openDocument=async(id,targetPage)=>{
     const token=++openToken.current;setOpening(true);setSelection(null);setModal(false);setFind('');setFocused(null);
     try {await notesRef.current?.flush();if(token!==openToken.current)return false;const data=await api(`/documents/${encodeURIComponent(id)}`);if(token!==openToken.current)return false;const requested=targetPage??data.document.lastPage??1;const valid=Number.isSafeInteger(requested)&&requested>=1&&requested<=data.document.pageCount;setCurrent(data.document);setAnnotations(data.annotations);setPage(valid?requested:1);if(!valid)notify('链接中的页码无效，已打开第 1 页。');try{localStorage.setItem('paperdesk-current',id);}catch{}return true;}
@@ -58,7 +61,7 @@ export default function App() {
   const toggleLibrary=()=>{setSelection(value=>value?.kind==='region'?value:null);setShowLibrary(value=>!value);};
   // Heartbeats and completed saves carry the revision they started from. A
   // delayed response must not roll a newer save (or a different book) backward.
-  const savedDoc=useCallback((doc,expectedRevision)=>{if(!doc)return;const apply=d=>d?.id===doc.id&&(expectedRevision===undefined||d.notesRevision===expectedRevision||d.notesRevision===doc.notesRevision)?{...d,...doc}:d;setDocuments(ds=>ds.map(apply));setCurrent(apply);},[]);
+  const savedDoc=useCallback((doc,expectedRevision)=>{if(!doc)return;const apply=d=>d?.id===doc.id&&(expectedRevision===undefined||d.notesRevision===expectedRevision||d.notesRevision===doc.notesRevision)?{...d,...doc,folderId:d.folderId}:d;setDocuments(ds=>ds.map(apply));setCurrent(apply);},[]);
   const notesDirtyChanged=useCallback((documentId,dirty)=>{if(currentIdRef.current===documentId)setNotesState(value=>value.documentId===documentId&&value.dirty===dirty?value:{documentId,dirty});},[]);
   const codex=useCodexContext({document:current,page,selection,notesDirty:notesState.documentId===current?.id&&notesState.dirty,onDocument:savedDoc,onError:notify});
   const changePage=n=>{if(!Number.isSafeInteger(n)||n<1||n>(current?.pageCount||0))return;setPage(n);setSelection(null);setFind('');setFocused(null);};
@@ -100,18 +103,10 @@ export default function App() {
     if(!current)return;setExporting(true);
     try{await notesRef.current?.flush();const response=await fetch(`/api/documents/${current.id}/export`);if(!response.ok){const e=await response.json();throw new Error(e.error||'导出失败');}const blob=await response.blob();const url=URL.createObjectURL(blob),a=window.document.createElement('a');a.href=url;a.download=`${current.title.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)||'paper-notes'}.md`;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);notify('Markdown 已导出，包含笔记与全部批注。','success');}catch(err){notify(`导出未完成：${err.message}`);}finally{setExporting(false);}
   };
-  return <div className="app-shell" onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();setDragging(true);}}} onDrop={e=>{e.preventDefault();setDragging(false);importFiles(e.dataTransfer.files);}}>
+  return <div className="app-shell" onDragOver={e=>{if(e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)){e.preventDefault();return;}if(e.dataTransfer.types.includes('Files')){e.preventDefault();setDragging(true);}}} onDrop={e=>{e.preventDefault();setDragging(false);if(!e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)&&e.dataTransfer.files.length)importFiles(e.dataTransfer.files);}}>
     <input ref={input} className="hidden-input" type="file" accept=".pdf,application/pdf" multiple aria-label="选择 PDF 文件" onChange={e=>importFiles(e.target.files)}/>
-    <aside id="library-panel" className={`sidebar ${showLibrary?'':'collapsed'}`} aria-label="文献栏" inert={modal||!showLibrary||undefined}>
-      <a href="#" className="brand" onClick={e=>{e.preventDefault();setQuery('');}}><span className="brand-mark"><BookOpen size={22}/></span><span>纸间<span className="brand-english">PAPERDESK</span></span></a>
-      <div className="sidebar-caption">给阅读留一张安静的书桌。</div>
-      <button className="import-button" disabled={importing} onClick={()=>input.current.click()}>{importing?<LoaderCircle size={17} className="spin"/>:<Plus size={18}/>} {importing?'正在导入与索引…':'导入 PDF'} <span>↗</span></button>
-      <div className="search-field"><Search size={16}/><input id="library-search" aria-label="全文搜索" value={query} maxLength={200} onChange={e=>setQuery(e.target.value)} placeholder="搜索全文、笔记、批注"/>{query?<button className="clear-search" aria-label="清空搜索" onClick={()=>{setQuery('');setFind('');}}><X size={14}/></button>:<kbd>⌘ K</kbd>}</div>
-      <div className="library-heading"><span>{query.trim()?'搜索结果':'我的文献'}</span><span>{query.trim()?(searching?'…':results.length):documents.length}</span></div>
-      <nav className="document-list" aria-label="文献库">
-        {loading?<p className="library-empty">正在打开书桌…</p>:query.trim()?<>{searching?<p className="library-empty">正在检索…</p>:results.length?results.map((r,i)=><button className={`search-result ${current?.id===r.documentId?'active':''}`} key={`${r.documentId}-${r.source}-${r.page}-${i}`} onClick={()=>searchJump(r)}><span className="result-source">{sourceNames[r.source]||'正文'} · 第 {r.page||1} 页</span><b>{r.title}</b><span className="result-snippet"><MarkedText text={r.snippet} query={query.trim()}/></span><ArrowUpRight className="result-arrow" size={14}/></button>):<p className="library-empty">没有找到“{query}”<small>试试更短的关键词。扫描件暂不支持全文搜索。</small></p>}{results.length>=100&&<p className="library-empty">仅显示前 100 条，请缩小搜索范围。</p>}</>:documents.length?documents.map((doc,i)=><button key={doc.id} className={`document-item ${current?.id===doc.id?'active':''}`} onClick={()=>openDocument(doc.id)}><span className="document-number">{String(i+1).padStart(2,'0')}</span><span className="document-details"><b>{doc.title}</b><small>{doc.pageCount} 页 <span>·</span> {fmtSize(doc.byteSize)}{!doc.textAvailable?' · 扫描件':''}</small></span><FileText size={15} className="doc-icon"/></button>):<p className="library-empty">书架还是空的。<small>导入你的第一篇论文，<br/>或者打开示例开始体验。</small></p>}
-      </nav>
-      <div className="sidebar-bottom"><button className="demo-link" onClick={demo} disabled={importing}><BookOpen size={15}/> 打开阅读示例 <ArrowUpRight size={13}/></button><div className="local-badge"><span className="online-dot"/><span>本地书桌 · 数据保存在此 Mac</span><LockKeyhole size={12}/></div></div>
+    <aside id="library-panel" className={`sidebar library-sidebar ${showLibrary?'':'collapsed'}`} aria-label="文献栏" inert={modal||!showLibrary||undefined}>
+      <LibraryPanel documents={documents} currentId={current?.id} loading={loading} importing={importing} query={query} onQuery={setQuery} onClearSearch={()=>{setQuery('');setFind('');}} onImport={()=>input.current.click()} onDemo={demo} onOpen={openDocument} onRefresh={refresh} onFolderChange={folderChanged} searchCount={searching?'…':results.length} searchResults={<>{searching?<p className="library-empty">正在检索…</p>:results.length?results.map((r,i)=><button className={`search-result ${current?.id===r.documentId?'active':''}`} key={`${r.documentId}-${r.source}-${r.page}-${i}`} onClick={()=>searchJump(r)}><span className="result-source">{sourceNames[r.source]||'正文'} · 第 {r.page||1} 页</span><b>{r.title}</b><span className="result-snippet"><MarkedText text={r.snippet} query={query.trim()}/></span><ArrowUpRight className="result-arrow" size={14}/></button>):<p className="library-empty">没有找到“{query}”<small>试试更短的关键词。扫描件暂不支持全文搜索。</small></p>}{results.length>=100&&<p className="library-empty">仅显示前 100 条，请缩小搜索范围。</p>}</>}/>
     </aside>
     <main className="main-workspace" inert={modal||undefined}>
       <header className="workspace-header"><button className="icon-button library-toggle" aria-label={showLibrary?'收起文献栏':'展开文献栏'} title={showLibrary?'收起文献栏':'展开文献栏'} aria-expanded={showLibrary} aria-controls="library-panel" onClick={toggleLibrary}>{showLibrary?<PanelLeftClose size={19}/>:<PanelLeftOpen size={19}/>}</button><div className="header-title"><span className="eyebrow">YOUR READING SPACE</span><h1 title={current?.title}>{current?current.title:'把论文读成自己的理解。'}</h1></div><div className="header-actions">{current&&!codex.dismissed&&<div className="codex-status" data-shared={codex.shared} role="status"><span>{codex.status==='shared'?'选区已共享':codex.status==='error'?'阅读上下文暂不可用':codex.status==='ready'?'阅读上下文已就绪':'正在准备阅读上下文…'}</span><button className="icon-button small" aria-label={codex.shared?'停止共享选区':'关闭 Codex 状态'} onClick={codex.shared?codex.clear:codex.dismiss}><X size={13}/></button></div>}{current&&<><button className="secondary-button export-button" aria-label="导出 Markdown" title="导出 Markdown" disabled={exporting} onClick={exportMarkdown}>{exporting?<LoaderCircle size={15} className="spin"/>:<Download size={15}/>}<span>导出 Markdown</span></button><button className="icon-button panel-toggle" aria-label={showNotes?'收起笔记面板':'展开笔记面板'} onClick={toggleNotes}>{showNotes?<PanelRightClose size={19}/>:<PanelRightOpen size={19}/>}</button></>}<span className="local-pill">LOCAL</span></div></header>
