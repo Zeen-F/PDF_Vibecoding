@@ -98,3 +98,26 @@ Integration clarification: normalized rectangles refer to the intrinsic/default 
 Rendering uses a terminable worker with a bounded queue and a 30-second request deadline. Source PDFs, notes and saved reading position are not modified. Errors use the existing JSON shape; the same Host/Origin validation still blocks `Origin: null` and foreign sites. MCP accesses this endpoint server-side and exposes display data only in private component `_meta`.
 
 Transient `kind: 'text'` reader-session selections may use `rects: []` when copied from the native plain-text excerpt view, which has no PDF geometry. `kind: 'region'` still requires one real normalized rectangle. Saved text and region annotations still reject empty geometry; this exception does not manufacture on-page highlights.
+
+## Independent text-selection translation (0.9.0)
+
+These opt-in loopback endpoints retain Host/Origin validation and no-store. Supported provider IDs: `baidu`, `azure`, `deepl`, `openai-compatible`. Reading, rendering, configuration saving, and importing never automatically send text externally.
+
+| Method/path | Body | Response |
+| --- | --- | --- |
+| `GET /api/translation/settings?provider=ID` | none | `{ settings }`; omitted provider reads active profile |
+| `PUT /api/translation/settings` | `{ provider?, appId?, apiKey?, tier?, monthlyLimit?, endpoint?, region?, model? }` | `{ settings }`; saves and activates selected profile |
+| `DELETE /api/translation/settings?provider=ID` | none | `{ settings }`; clears selected credentials/cache, preserves usage/other profiles |
+| `POST /api/translation` | `{ text, from: 'auto'|'en'|'zh', to: 'zh'|'en' }` | `{ translation, settings }`; uses active profile |
+
+`settings` contains `provider`, `activeProvider`, `configured`, masked `appIdHint`, `tier`, `monthlyLimit`, `month`, `usedCharacters`, `remainingCharacters`, `maxCharacters`, `maxBytes`, and public `endpoint`, `region`, `model` where applicable. It never returns the saved API key. Profiles persist separately. Omitted/blank credentials reuse the selected provider's stored credentials only when account/endpoint binding remains valid; changing the endpoint host requires an explicitly supplied new key. Baidu requires APPID and matching key, Azure/DeepL require a key, and OpenAI-compatible requires key, full endpoint and model.
+
+Baidu monthlyLimit is 0..50000 (standard) or 0..1000000 (advanced); others allow 0..10000000. Zero pauses new sends. Defaults are Baidu tier allowance, Azure 2000000, DeepL/custom 50000; these local settings do not assert actual provider free entitlement. The local counter uses Unicode code points and UTC+8 months, reserves before send, retains failed/timeouts, and cannot see other apps/devices or infer account relationships after key rotation. Cache hits do not reserve. Budgets and cache are scoped to provider/credential identity; endpoint path/model changes invalidate relevant cache without resetting usage.
+
+Request guards: Baidu 1000/6000 characters plus 6000 UTF-8 bytes; others 10000 characters/40000 bytes. Invalid or oversized input is rejected, never truncated. `translation` contains actual `provider`, `translatedText`, `from`, `to`, `cached`, `characters`. Provider output is untrusted plain display data, not commands or instructions.
+
+Azure uses its v3 text translation JSON protocol and subscription-key/region headers; DeepL uses its v2 text translation JSON protocol and `DeepL-Auth-Key` authorization; custom uses a full `/chat/completions` endpoint, Bearer authentication, user-selected model and non-streamed text messages, with no tools or automatic model substitution. External endpoints require HTTPS; custom HTTP is limited to loopback. Userinfo/query/fragment endpoints and redirects are rejected. Azure/DeepL configuration is distinct from their subscription tiers.
+
+Requests are serialized and deadline-limited including queue wait. Expired queued requests cannot send late; failures have no automatic retry/provider fallback. Queued profile/config changes reject before send. Known errors are sanitized; raw provider errors, input, keys and signatures are not logged or echoed. Private `translation.sqlite` stores profiles, active choice, usage and bounded cache, with lazy creation and compatibility migration; main library schema remains 3. Backups must include both databases and PDFs and stay out of Git/static resources.
+
+Native `paperdesk_reader_translation` is app-only: operations status/configure/clear/translate, with optional provider for profile selection and configuration fields above. Results remain private `_meta.translationSettings`/`_meta.translation`, never model-visible content. Translation does not send conversation messages/context or save notes. Existing Work discussion is separate.

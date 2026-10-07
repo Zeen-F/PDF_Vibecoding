@@ -22,7 +22,7 @@ function deferred() {
 
 // Real MCP transport, real isolated API, and a browser sandbox that cannot fetch
 // the local service. Only the parent host's tools/call bridge crosses that gap.
-export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onLibraryPreview }) {
+export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onLibraryPreview, onTranslationPreview }) {
   const tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-native-reader-'));
   const harnesses = [];
   let client;
@@ -38,7 +38,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     const template = await readFile(join(root, 'plugins/paperdesk/ui/reader.html'), 'utf8');
     const html = template.replace('__PAPERDESK_CONFIG__', JSON.stringify({ baseUrl: base }).replaceAll('<', '\\u003c'));
     assert.ok(!html.includes('__PAPERDESK_CONFIG__'));
-    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme']);
+    const displayTools = new Set(['paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme', 'paperdesk_reader_translation']);
     const tools = (await client.listTools()).tools;
     for (const name of displayTools) assert.deepEqual(tools.find(tool => tool.name === name)?._meta?.ui?.visibility, ['app'], `${name} must be app-only`);
 
@@ -62,7 +62,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       if (useClock) await page.clock.install();
       const item = { page, close: () => page.close() }; harnesses.push(item);
       const calls = [], updates = [], messages = [], links = [], errors = [], network = [], holds = [];
-      let initialized = false, messageResult = { isError: false };
+      let initialized = false, messageResult = { isError: false }, translationFailure = false;
       const holdNext = (predicate, phase = 'after') => {
         const hold = { predicate, phase, used: false, entered: deferred(), release: deferred(), finished: deferred() }; holds.push(hold);
         return { entered: hold.entered.promise, finished: hold.finished.promise, release: () => hold.release.resolve() };
@@ -78,11 +78,14 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
         if (message.method === 'ui/initialize') {
-          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.8.0' });
+          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.9.0' });
           result = { protocolVersion: '2026-01-26', hostInfo: { name: 'isolated-browser-host', version: '1.0.0' }, hostCapabilities: capabilities };
         }
         else if (message.method === 'ui/notifications/initialized') { initialized = true; return; }
-        else if (message.method === 'tools/call') result = await client.callTool(message.params);
+        else if (message.method === 'tools/call') {
+          if (translationFailure && message.params.name === 'paperdesk_reader_translation' && message.params.arguments.operation === 'translate') { translationFailure = false; result = { isError: true, content: [{ type: 'text', text: '纸间翻译操作未完成。' }], _meta: { translation: { error: '模拟翻译服务失败，请重试。', status: 502 } } }; }
+          else result = await client.callTool(message.params);
+        }
         else if (message.method === 'ui/update-model-context') { updates.push(message.params); result = {}; }
         else if (message.method === 'ui/message') {
           assert.equal(message.params.role, 'user'); assert.ok(Array.isArray(message.params.content));
@@ -122,6 +125,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       const frame = page.frameLocator('#native-panel');
       Object.assign(item, { page, frame, calls, updates, messages, links, errors, network, url, holdNext, initialNotesHold,
         setMessageResult(value) { messageResult = value; },
+        failNextTranslation() { translationFailure = true; },
         sessionId: () => calls.filter(call => call.method === 'tools/call' && call.params.name === 'paperdesk_reader_session').at(-1)?.params.arguments.sessionId,
         async notify(result) { await page.evaluate(value => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: value }, '*'), result); },
         async close() { for (const hold of holds) hold.release.resolve(); if (!page.isClosed()) { await page.evaluate(() => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', id: 'test-teardown', method: 'ui/resource-teardown', params: {} }, '*')).catch(() => {}); await expect.poll(() => page.evaluate(() => window.nativeMessages.some(message => message.id === 'test-teardown' && !message.method)), { timeout: 5000 }).toBe(true).catch(() => {}); await page.close(); } },
@@ -568,6 +572,143 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     await expect.poll(async () => (await request('/library')).theme).toBe('forest');
     await organizing.close();
     console.log('PASS: native folder drag, rename, keyboard moves, safe removal and persisted themes preserve unsaved notes and private display');
+
+    const translationLanding = await harness({ libraryOnly: true });
+    await expect(translationLanding.frame.getByRole('button', { name: '翻译设置', exact: true })).toBeEnabled();
+    await translationLanding.frame.getByRole('button', { name: '翻译设置', exact: true }).click();
+    const settingDialog = translationLanding.frame.getByRole('dialog', { name: '翻译设置', exact: true });
+    await expect(settingDialog.getByRole('button', { name: '保存翻译设置', exact: true })).toBeEnabled();
+    const providerSelect = settingDialog.getByRole('combobox', { name: '翻译服务', exact: true });
+    await providerSelect.selectOption('baidu');
+    await expect(settingDialog.getByLabel('百度 APP ID', { exact: true })).toBeEnabled();
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveAttribute('type', 'password');
+    await settingDialog.getByLabel('百度 APP ID', { exact: true }).fill('20261007012345678');
+    await settingDialog.getByLabel('翻译 API Key', { exact: true }).fill('synthetic_native_translation_key');
+    await settingDialog.getByLabel('本机月度字符上限', { exact: true }).fill('0');
+    await settingDialog.getByRole('combobox', { name: '接口版本', exact: true }).selectOption('advanced');
+    await expect(settingDialog.getByLabel('本机月度字符上限', { exact: true })).toHaveValue('0');
+    await settingDialog.getByRole('combobox', { name: '接口版本', exact: true }).selectOption('standard');
+    await settingDialog.getByLabel('本机月度字符上限', { exact: true }).fill('50000');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-settings-status')).toContainText('未发送测试请求');
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+    assert.equal(translationLanding.calls.some(call => call.params?.name === 'paperdesk_reader_translation' && call.params.arguments.operation === 'translate'), false);
+    assert.equal(translationLanding.calls.some(call => call.params?.name === 'paperdesk_reader_page'), false, 'Settings are available without opening a personal document');
+    const savedAzureSettings = (await request('/translation/settings?provider=azure')).settings;
+    await providerSelect.selectOption('azure');
+    await expect(settingDialog.getByLabel('完整 API 地址', { exact: true })).toHaveValue(savedAzureSettings.endpoint || 'https://api.cognitive.microsofttranslator.com/translate');
+    await expect(settingDialog.getByLabel('本机月度字符上限', { exact: true })).toHaveValue(String(savedAzureSettings.monthlyLimit));
+    await settingDialog.getByLabel('完整 API 地址', { exact: true }).fill('https://api.cognitive.microsofttranslator.com/translate');
+    await settingDialog.getByLabel('翻译 API Key', { exact: true }).fill('synthetic_native_azure_key');
+    await settingDialog.getByLabel('Azure 区域', { exact: true }).fill('eastasia');
+    await settingDialog.getByLabel('本机月度字符上限', { exact: true }).fill('2000000');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-settings-status')).toContainText('已保存并启用');
+    await providerSelect.selectOption('baidu');
+    await expect(translationLanding.frame.locator('#translation-account')).toContainText('查看：百度翻译 · 已配置');
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-account')).toContainText('当前使用：百度翻译');
+    const delayedProfile = translationLanding.holdNext(entry => entry.params?.name === 'paperdesk_reader_translation' && entry.params.arguments.operation === 'status' && entry.params.arguments.provider === 'azure');
+    await providerSelect.selectOption('azure'); await delayedProfile.entered;
+    await providerSelect.selectOption('deepl');
+    await expect(translationLanding.frame.locator('#translation-account')).toContainText('查看：DeepL');
+    delayedProfile.release(); await delayedProfile.finished;
+    await expect(providerSelect).toHaveValue('deepl');
+    await expect(settingDialog.getByLabel('Azure 区域', { exact: true })).toBeHidden();
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+    await settingDialog.getByLabel('翻译 API Key', { exact: true }).fill('synthetic_native_deepl_key:fx');
+    await settingDialog.getByRole('combobox', { name: 'DeepL 接口', exact: true }).selectOption('https://api-free.deepl.com/v2/translate');
+    await settingDialog.getByLabel('本机月度字符上限', { exact: true }).fill('50000');
+    await expect(settingDialog.getByRole('combobox', { name: 'DeepL 接口', exact: true })).toHaveValue('https://api-free.deepl.com/v2/translate');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-account')).toContainText('当前使用：DeepL');
+    await providerSelect.selectOption('openai-compatible');
+    await expect(settingDialog.getByLabel('模型名称', { exact: true })).toBeEnabled();
+    await settingDialog.getByLabel('翻译 API Key', { exact: true }).fill('synthetic_native_custom_key');
+    await settingDialog.getByLabel('完整 API 地址', { exact: true }).fill('https://custom.example.invalid/v1/chat/completions');
+    await settingDialog.getByLabel('本机月度字符上限', { exact: true }).fill('50000');
+    await settingDialog.getByLabel('模型名称', { exact: true }).fill('');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-settings-error')).toContainText('模型名称');
+    await settingDialog.getByLabel('模型名称', { exact: true }).fill('vendor/test-model-for-reading');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-account')).toContainText('当前使用：自定义');
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+    await settingDialog.getByLabel('完整 API 地址', { exact: true }).fill('https://another.example.invalid/v1/chat/completions');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-settings-error')).toContainText('新密钥');
+    await settingDialog.getByLabel('完整 API 地址', { exact: true }).fill('https://custom.example.invalid/v1/chat/completions');
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translationLanding.frame.locator('#translation-settings-status')).toContainText('未发送测试请求');
+    const profileRequests = translationLanding.calls.filter(call => call.params?.name === 'paperdesk_reader_translation');
+    assert.equal(profileRequests.some(call => call.params.arguments.operation === 'translate'), false);
+    assert.ok(profileRequests.some(call => call.params.arguments.provider === 'openai-compatible' && call.params.arguments.model === 'vendor/test-model-for-reading'));
+    const baiduReuse = profileRequests.findLast(call => call.params.arguments.operation === 'configure' && call.params.arguments.provider === 'baidu');
+    assert.equal(baiduReuse.params.arguments.apiKey, undefined); assert.equal(baiduReuse.params.arguments.appId, undefined);
+    await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).focus();
+    await translationLanding.page.keyboard.press('Tab'); await expect(providerSelect).toBeFocused();
+    await onTranslationPreview?.(translationLanding.page, 'native-translation-settings');
+    await translationLanding.close();
+
+    const translating = await harness({ pageNumber: 2 }); await ready(translating, 2);
+    const translationBefore = (await request(`/documents/${book.id}`)).document;
+    await selectText(translating);
+    const translationButton = translating.frame.getByRole('button', { name: '翻译选区', exact: true });
+    const translatedOutput = translating.frame.getByRole('textbox', { name: '翻译结果', exact: true });
+    translating.failNextTranslation(); await translationButton.click();
+    await expect(translating.frame.locator('#translation-error')).toContainText('模拟翻译服务失败');
+    await expect(translatedOutput).toBeHidden();
+    await translationButton.click();
+    await expect(translatedOutput).toHaveValue('测试译文：A short introduction');
+    await expect(translatedOutput).toHaveAttribute('readonly', '');
+    await onTranslationPreview?.(translating.page, 'native-translation-result');
+    await expect(translating.frame.locator('#translation-origin')).toContainText('PDF 第 2 页');
+    await expect(translating.frame.locator('#translation-origin')).toContainText('自定义（OpenAI 兼容）');
+    translating.failNextTranslation(); await translationButton.click();
+    await expect(translating.frame.locator('#translation-error')).toBeVisible();
+    await expect(translatedOutput).toHaveValue('测试译文：A short introduction');
+    const outbound = translating.calls.filter(call => call.params?.name === 'paperdesk_reader_translation' && call.params.arguments.operation === 'translate');
+    assert.ok(outbound.length >= 3);
+    assert.ok(outbound.every(call => call.params.arguments.text === 'A short introduction' && call.params.arguments.to === 'zh'));
+    for (const call of translating.calls.filter(call => call.params?.name === 'paperdesk_reader_translation')) {
+      assert.equal(call.result?.structuredContent, undefined);
+      assert.doesNotMatch(JSON.stringify(call.result?.content), /A short introduction|测试译文|synthetic_native/);
+    }
+    assert.equal(translating.messages.length, 0); assert.equal(translating.updates.some(hasContext), false);
+    assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, translationBefore.notesRevision);
+    const delayedTranslation = translating.holdNext(entry => entry.params?.name === 'paperdesk_reader_translation' && entry.params.arguments.operation === 'translate');
+    await translationButton.click(); await delayedTranslation.entered;
+    await translating.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '取消共享', exact: true }).click();
+    await selectText(translating, '1 Introduction');
+    delayedTranslation.release(); await delayedTranslation.finished;
+    await expect(translatedOutput).toBeHidden();
+    await translationButton.click(); await expect(translatedOutput).toHaveValue('测试译文：1 Introduction');
+    await translating.page.setViewportSize({ width: 688, height: 1000 });
+    await translating.frame.getByRole('dialog', { name: '共享预览', exact: true }).getByRole('button', { name: '取消共享', exact: true }).click();
+    await translating.frame.getByRole('button', { name: '翻译设置', exact: true }).click();
+    const narrowSettings = translating.frame.getByRole('dialog', { name: '翻译设置', exact: true });
+    await expect(narrowSettings).toBeVisible();
+    await onTranslationPreview?.(translating.page, 'native-translation-settings-narrow');
+    const settingsBox = await narrowSettings.boundingBox(); assert.ok(settingsBox.x >= 0 && settingsBox.x + settingsBox.width <= 688);
+    await expect(narrowSettings.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+    await narrowSettings.getByRole('combobox', { name: '翻译服务', exact: true }).selectOption('baidu');
+    await expect(translating.frame.locator('#translation-account')).toContainText('查看：百度翻译 · 已配置');
+    await narrowSettings.getByRole('button', { name: '保存翻译设置', exact: true }).click();
+    await expect(translating.frame.locator('#translation-account')).toContainText('当前使用：百度翻译');
+    await translating.page.keyboard.press('Escape'); await expect(narrowSettings).toBeHidden();
+    await expect(translating.frame.getByRole('button', { name: '翻译设置', exact: true })).toBeFocused();
+    assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, translationBefore.notesRevision);
+    await translating.close();
+
+    const noOcrTranslation = await harness({ documentId: scan.id }); await ready(noOcrTranslation, 1);
+    await noOcrTranslation.frame.getByRole('button', { name: '框选区域', exact: true }).click(); await drag(noOcrTranslation, [.15,.15], [.6,.5]);
+    await expect(noOcrTranslation.frame.getByRole('button', { name: '翻译选区', exact: true })).toBeDisabled();
+    await expect(noOcrTranslation.frame.locator('#translation-hint')).toContainText('不进行 OCR');
+    assert.equal(noOcrTranslation.calls.some(call => call.params?.name === 'paperdesk_reader_translation'), false);
+    await noOcrTranslation.close();
+    for (const provider of ['baidu', 'azure', 'deepl', 'openai-compatible']) await client.callTool({ name: 'paperdesk_reader_translation', arguments: { operation: 'clear', provider } });
+    console.log('PASS: native translation settings, explicit private results, failure recovery, stale selection protection and narrow modal leave notes and model context unchanged');
 
     for (const item of harnesses) {
       assert.deepEqual(item.errors, [], 'Native reader must not raise uncaught browser exceptions');

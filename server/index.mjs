@@ -9,16 +9,16 @@ const { app, close } = createApp();
 const server = app.listen(port, '127.0.0.1', () => {
   console.log(`Paperdesk 已启动：http://127.0.0.1:${port}`);
 });
-server.on('error', (error) => {
+server.on('error', async (error) => {
   console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用。请关闭其他实例，或设置 PORT 后重试。` : error.message);
-  close();
+  await close();
   process.exitCode = 1;
 });
 let stopping = false;
 function shutdown() {
   if (stopping) return;
   stopping = true;
-  server.close(() => { close(); process.exit(0); });
+  server.close(async () => { await close(); process.exit(0); });
   setTimeout(() => { server.closeAllConnections(); }, 5000).unref();
 }
 process.on('SIGINT', shutdown);

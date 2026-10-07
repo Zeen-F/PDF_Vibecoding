@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 import { pluginWorkflow } from '../tests/plugin.browser.mjs';
 import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
 import { libraryThemesWorkflow } from '../tests/library-themes.browser.mjs';
+import { translationWorkflow, translationTestOptions } from '../tests/translation.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -562,7 +563,7 @@ try {
   try { await access(join(root, 'dist/index.html')); }
   catch { throw new Error('Build the application first with npm run build, or run npm run check.'); }
   tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-browser-'));
-  runtime = createApp({ dataDir: join(tempDir, 'data') });
+  runtime = createApp({ dataDir: join(tempDir, 'data'), translationOptions: translationTestOptions() });
   appServer = runtime.app.listen(0, '127.0.0.1');
   await once(appServer, 'listening');
   // Vite serves the unchanged source-based harness; the smoke test uses the production build.
@@ -584,8 +585,15 @@ try {
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
   await libraryThemesWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
+  const visualDir = process.env.PAPERDESK_TRANSLATION_VISUAL_DIR;
+  if (visualDir) await mkdir(visualDir, { recursive: true, mode: 0o700 });
+  const onTranslationPreview = visualDir ? async (page, label) => {
+    if (!/^[a-z0-9-]+$/.test(label)) throw new Error('Invalid translation preview filename');
+    await page.screenshot({ path: join(visualDir, `${label}.png`), fullPage: true, animations: 'disabled' });
+  } : undefined;
+  await translationWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview });
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
-  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
+  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

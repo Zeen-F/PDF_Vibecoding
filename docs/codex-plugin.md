@@ -2,7 +2,7 @@
 
 插件通过本机 HTTP API 连接已有纸间工作区，MCP 使用官方 SDK 的 stdio 传输。它不直接打开 SQLite，不复制个人文献到插件缓存，也不把本机阅读器发布到公网。
 
-0.8.0 在既有阅读与选区讨论上增加单层文件夹和四套阅读皮肤。唯一问答路径仍是当前 Work／Codex 对话；分类和外观操作不会发送消息或共享模型上下文。预览确认后发问，回答留在当前对话；只有明确要求记录时才追加笔记。
+0.9.0 保留单层文件夹和四套阅读皮肤，并增加软件内多服务 API 文字选区翻译。翻译设置与译文只在阅读器内显示，配置说明见 [软件内翻译](translation.md)。唯一问答路径仍是当前 Work／Codex 对话；分类和外观操作不会发送消息或共享模型上下文。预览确认后发问，回答留在当前对话；只有明确要求记录时才追加笔记。
 
 ## 本机安装
 
@@ -95,13 +95,13 @@ npm run plugin:install
 
 每次工具操作及 UI resource 读取前都会重新确认 loopback 地址、`service: paperdesk`、API 版本和配置中的 `libraryId`。连接不符即停止，不跟随 HTTP 重定向、不尝试其他库。
 
-## 原生阅读面板（0.8.0）
+## 原生阅读面板（0.9.0）
 
-`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v8.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
+`paperdesk_open_reader` 关联 `ui://paperdesk/reader-v9.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
 
 面板直接绘制单页 PNG、页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
 
-9 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`，以及新增的 `paperdesk_reader_library`、`paperdesk_reader_organize`、`paperdesk_reader_theme`。新增工具分别读分类／主题、创建／重命名／移除文件夹或移动文献、保存皮肤，结果仅在 `_meta.library` 返回。文献列表与共享读取复用已有公共工具，总计 17 个工具。
+10 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`，以及新增的 `paperdesk_reader_library`、`paperdesk_reader_organize`、`paperdesk_reader_theme` 和 `paperdesk_reader_translation`。分类和主题工具读写结果在 `_meta.library` 返回；翻译设置状态与译文在 `_meta.translationSettings`、`_meta.translation` 返回。文献列表与共享读取复用已有公共工具，总计 18 个工具。
 
 完整页面图片、页文字、目录、笔记及分类／皮肤结果只放在结果 `_meta`，不放进 `content` 或 `structuredContent`。专用工具声明 `_meta.ui.visibility: ["app"]`，模型只使用前述 8 个普通文献工具。界面显示和模型共享是两个独立动作。
 
@@ -120,8 +120,12 @@ node --test tests/plugin-mcp.test.mjs
 npm run check
 ```
 
-协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个公共工具及 9 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突，并检查选区问题快照、消息能力降级和笔记刷新保护。0.8.0 还需检查跨分页分类、拖动／键盘移动、删除确认、错误恢复、草稿保护及四套皮肤持久化。测试范围描述不是本轮已通过的声明，实际结果见版本记录。模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
+协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个公共工具及 10 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突，并检查选区问题快照、消息能力降级和笔记刷新保护。0.8.0 还需检查跨分页分类、拖动／键盘移动、删除确认、错误恢复、草稿保护及四套皮肤持久化。测试范围描述不是本轮已通过的声明，实际结果见版本记录。模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
 
 包同时提供 portable `plugin.json`/typed `mcp.json` 与旧客户端的 `.codex-plugin/plugin.json`/`.mcp.json`。依据 [OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[OpenAI UI 扩展](https://developers.openai.com/plugins/build/extensions) 与 [MCP Apps 规范](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)。
 
-本轮实现与验证状态见 [0.8.0 变更记录](history/codex-plugin-0.8.0.md)。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
+本轮实现与验证状态见 [0.9.0 变更记录](history/codex-plugin-0.9.0.md)。[0.8.0 变更记录](history/codex-plugin-0.8.0.md)保留文件夹和皮肤的原验证结果。[0.7.0 恢复记录](history/codex-plugin-0.7.0.md) 保留恢复当前对话问答路径时的证据。[0.3.0 选区讨论记录](history/codex-plugin-0.3.0.md) 和 [0.2.0 打开流程记录](history/codex-plugin-0.2.0.md) 保留当时的证据及验收边界。
+
+### 软件直接调用的翻译
+
+原生面板的“翻译设置”与浏览器共用本机配置。`paperdesk_reader_translation` 仅对组件开放，用于设置状态、凭据配置／移除和用户主动文字翻译。密钥不会出现在读回结果中，设置和译文只通过私有 `_meta` 返回；翻译不发送 `ui/message` 或模型上下文，不自动写笔记。没有有效配置时显示配置入口，配置保存本身不测试外部连接。扫描区域尚无 OCR。
