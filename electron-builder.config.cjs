@@ -10,6 +10,7 @@ module.exports = {
   publish: null,
   files: [
     'package.json',
+    'LICENSE',
     'desktop/**/*',
     'server/**/*',
     'shared/**/*',

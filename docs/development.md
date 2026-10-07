@@ -44,6 +44,7 @@ macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run
 | `npm run build` | 准备本地 PDF 资源并构建生产界面 |
 | `npm run test:browser` | Chromium 浏览器回归；需要已有生产构建 |
 | `npm run check` | 依次执行 API 测试、生产构建和浏览器回归 |
+| `npm run browser:dist` | 构建带生产界面的本机浏览器 ZIP，并生成独立校验文件；见 [浏览器发布包](browser-release.md) |
 | `npm run plugin:setup` | 核对当前阅读服务，绑定仓库外的本机插件配置 |
 | `npm run plugin:install` | 完成绑定并向本机 Codex 安装/启用 Paperdesk 插件 |
 

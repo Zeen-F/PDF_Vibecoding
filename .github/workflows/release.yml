@@ -49,6 +49,7 @@ jobs:
       - run: npm run desktop:dist
       - name: Test the packaged application with an isolated library
         run: npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app
+      - run: npm run browser:dist
       - run: npm run release:checksums
       - name: Save verified installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -58,6 +59,8 @@ jobs:
             release/Paperdesk-${{ steps.version.outputs.version }}-mac-arm64.dmg
             release/Paperdesk-${{ steps.version.outputs.version }}-mac-arm64.zip
             release/SHA256SUMS
+            release/Paperdesk-${{ steps.version.outputs.version }}-browser.zip
+            release/SHA256SUMS-browser
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -77,12 +80,16 @@ jobs:
 
           下载包含 DMG、ZIP 及 SHA256SUMS。此版本没有自动更新。
 
+          另提供源码浏览器版 ZIP：解压后使用 Node.js 24+ 执行 npm ci --omit=dev 和 npm start，再打开 http://127.0.0.1:4317；结束时按 Control+C。浏览器版默认把文献库保存在解压目录的 data/，也可设置 PAPERDESK_DATA_DIR。翻译 API 与 Codex 插件需要自行配置，发布包不含密钥或个人文献。
+
           [安装与文献库说明](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/desktop-release.md)
           NOTES
           gh release create "$RELEASE_TAG" \
             "release/Paperdesk-${RELEASE_VERSION}-mac-arm64.dmg" \
             "release/Paperdesk-${RELEASE_VERSION}-mac-arm64.zip" \
+            "release/Paperdesk-${RELEASE_VERSION}-browser.zip" \
             release/SHA256SUMS \
+            release/SHA256SUMS-browser \
             --verify-tag --draft --prerelease \
             --title "Paperdesk ${RELEASE_VERSION}" \
             --notes-file .local/release-notes.md

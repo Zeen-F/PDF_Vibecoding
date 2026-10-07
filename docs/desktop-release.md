@@ -56,6 +56,8 @@ npm run release:checksums
 
 发布前须用隔离文献库检查安装包启动、PDF 导入及渲染、笔记和批注保存、退出与重开，并确认包内不存在私人资料。不要使用正式文献库做自动回归。安装包检查通过后，`release:checksums` 只为当前版本的 DMG 和 ZIP 写入 `SHA256SUMS`，不会收录应用目录或更新元数据。
 
-GitHub Actions 的 **macOS preview release** 工作流运行在 `macos-15` arm64 环境。手动运行只检查和构建，将通过检查的安装包保存为工作流产物。推送与 `package.json` 一致的 `v<版本>` 标签时，全部检查和安装包测试通过后才创建 **Draft / Prerelease**，上传上述三个文件；失败时不创建 Release。现有同名 Release 不自动覆盖。维护者检查安装说明、版本变化与产物后，再手动将草稿发布。
+GitHub Actions 的 **macOS preview release** 工作流运行在 `macos-15` arm64 环境。手动运行只检查和构建，将通过检查的安装包保存为工作流产物。推送与 `package.json` 一致的 `v<版本>` 标签时，全部检查和安装包测试通过后才创建 **Draft / Prerelease**，上传桌面安装包、浏览器 ZIP 及各自的校验文件；失败时不创建 Release。现有同名 Release 不自动覆盖。维护者检查安装说明、版本变化与产物后，再手动将草稿发布。
+
+另行提供带构建界面的 [本机浏览器 ZIP](browser-release.md)，需要 Node.js 24+。项目已按用户选择采用 [MIT 许可证](../LICENSE)；历史已发布桌面包的许可证作为 Release 的独立附件提供，后续桌面构建包含许可证正文。
 
 工作流配置存在不代表远端检查已通过；以本次运行结果及实际安装包验收为准。版本号在 `package.json` 与锁文件中保持一致，不自动添加许可证或公开仓库。

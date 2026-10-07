@@ -3,6 +3,7 @@
   "version": "1.1.0-beta.4",
   "description": "A local PDF reading, annotation and notes workspace",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "main": "desktop/main.mjs",
   "engines": {
@@ -23,7 +24,8 @@
     "desktop:pack": "npm run build && node scripts/prepare-desktop-assets.mjs && electron-builder --config electron-builder.config.cjs --dir --mac --arm64 --publish never",
     "desktop:dist": "npm run build && node scripts/prepare-desktop-assets.mjs && electron-builder --config electron-builder.config.cjs --mac dmg zip --arm64 --publish never",
     "test:desktop": "node scripts/test-desktop.mjs",
-    "release:checksums": "node scripts/release-checksums.mjs"
+    "release:checksums": "node scripts/release-checksums.mjs",
+    "browser:dist": "npm run build && node scripts/package-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
