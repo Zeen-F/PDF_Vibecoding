@@ -62,7 +62,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       if (useClock) await page.clock.install();
       const item = { page, close: () => page.close() }; harnesses.push(item);
       const calls = [], updates = [], messages = [], links = [], errors = [], network = [], holds = [];
-      let initialized = false, messageResult = { isError: false }, translationFailure = false;
+      let initialized = false, messageResult = { isError: false }, translationFailure = false, translationTestFailure = false;
       const holdNext = (predicate, phase = 'after') => {
         const hold = { predicate, phase, used: false, entered: deferred(), release: deferred(), finished: deferred() }; holds.push(hold);
         return { entered: hold.entered.promise, finished: hold.finished.promise, release: () => hold.release.resolve() };
@@ -78,12 +78,13 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
         if (message.method === 'ui/initialize') {
-          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.9.0' });
+          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.10.0' });
           result = { protocolVersion: '2026-01-26', hostInfo: { name: 'isolated-browser-host', version: '1.0.0' }, hostCapabilities: capabilities };
         }
         else if (message.method === 'ui/notifications/initialized') { initialized = true; return; }
         else if (message.method === 'tools/call') {
           if (translationFailure && message.params.name === 'paperdesk_reader_translation' && message.params.arguments.operation === 'translate') { translationFailure = false; result = { isError: true, content: [{ type: 'text', text: '纸间翻译操作未完成。' }], _meta: { translation: { error: '模拟翻译服务失败，请重试。', status: 502 } } }; }
+          else if (translationTestFailure && message.params.name === 'paperdesk_reader_translation' && message.params.arguments.operation === 'test') { translationTestFailure = false; result = { isError: true, content: [{ type: 'text', text: '纸间翻译测试未完成。' }], _meta: { translationTest: { error: '测试失败：凭据或权限不可用，请核对所选服务的账号设置。', category: 'authentication', status: 502 } } }; }
           else result = await client.callTool(message.params);
         }
         else if (message.method === 'ui/update-model-context') { updates.push(message.params); result = {}; }
@@ -126,6 +127,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       Object.assign(item, { page, frame, calls, updates, messages, links, errors, network, url, holdNext, initialNotesHold,
         setMessageResult(value) { messageResult = value; },
         failNextTranslation() { translationFailure = true; },
+        failNextTranslationTest() { translationTestFailure = true; },
         sessionId: () => calls.filter(call => call.method === 'tools/call' && call.params.name === 'paperdesk_reader_session').at(-1)?.params.arguments.sessionId,
         async notify(result) { await page.evaluate(value => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: value }, '*'), result); },
         async close() { for (const hold of holds) hold.release.resolve(); if (!page.isClosed()) { await page.evaluate(() => document.getElementById('native-panel').contentWindow.postMessage({ jsonrpc: '2.0', id: 'test-teardown', method: 'ui/resource-teardown', params: {} }, '*')).catch(() => {}); await expect.poll(() => page.evaluate(() => window.nativeMessages.some(message => message.id === 'test-teardown' && !message.method)), { timeout: 5000 }).toBe(true).catch(() => {}); await page.close(); } },
@@ -632,6 +634,45 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
     await expect(translationLanding.frame.locator('#translation-settings-error')).toContainText('模型名称');
     await settingDialog.getByLabel('模型名称', { exact: true }).fill('vendor/test-model-for-reading');
+    const testButton = settingDialog.getByRole('button', { name: '测试翻译', exact: true });
+    const testOutput = settingDialog.getByRole('textbox', { name: '翻译测试结果', exact: true });
+    const nativeTestBefore = (await request('/translation/settings?provider=openai-compatible')).settings;
+    const testNotesBefore = (await request(`/documents/${book.id}`)).document.notesRevision;
+    const testCalls = () => translationLanding.calls.filter(call => call.params?.name === 'paperdesk_reader_translation' && call.params.arguments.operation === 'test');
+    assert.equal(testCalls().length, 0, 'Opening and saving profiles must not automatically test them');
+    await testButton.click();
+    await expect(testOutput).toHaveValue('测试译文：Hello, Paperdesk.');
+    await expect(testOutput).toHaveAttribute('readonly', '');
+    await expect(translationLanding.frame.locator('#translation-test-status')).toContainText('测试成功');
+    await expect(translationLanding.frame.locator('#translation-test-status')).toContainText('毫秒');
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('synthetic_native_custom_key');
+    assert.equal(testCalls().length, 1);
+    assert.deepEqual(testCalls()[0].params.arguments, { operation: 'test', provider: 'openai-compatible', monthlyLimit: 50000, apiKey: 'synthetic_native_custom_key', endpoint: 'https://custom.example.invalid/v1/chat/completions', model: 'vendor/test-model-for-reading' });
+    const nativeTestAfter = (await request('/translation/settings?provider=openai-compatible')).settings;
+    for (const key of ['configured', 'activeProvider', 'endpoint', 'model', 'monthlyLimit']) assert.equal(nativeTestAfter[key], nativeTestBefore[key], `Testing must not save or activate ${key}`);
+    translationLanding.failNextTranslationTest(); await testButton.click();
+    await expect(translationLanding.frame.locator('#translation-test-error')).toContainText('凭据或权限');
+    await expect(testOutput).toBeHidden();
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('synthetic_native_custom_key');
+    await expect(settingDialog.getByLabel('模型名称', { exact: true })).toHaveValue('vendor/test-model-for-reading');
+    const delayedTest = translationLanding.holdNext(entry => entry.params?.name === 'paperdesk_reader_translation' && entry.params.arguments.operation === 'test');
+    await testButton.click(); await delayedTest.entered;
+    await expect(testButton).toBeDisabled();
+    await expect(settingDialog.getByRole('button', { name: '保存翻译设置', exact: true })).toBeDisabled();
+    await settingDialog.getByLabel('模型名称', { exact: true }).fill('edited-during-test');
+    delayedTest.release(); await delayedTest.finished;
+    await expect(testButton).toBeEnabled(); await expect(testOutput).toBeHidden();
+    await expect(translationLanding.frame.locator('#translation-test-status')).toBeEmpty();
+    await expect(settingDialog.getByLabel('模型名称', { exact: true })).toHaveValue('edited-during-test');
+    await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('synthetic_native_custom_key');
+    assert.equal((await request(`/documents/${book.id}`)).document.notesRevision, testNotesBefore);
+    assert.equal(translationLanding.messages.length, 0); assert.equal(translationLanding.updates.some(hasContext), false);
+    for (const tested of testCalls()) {
+      assert.equal(tested.result?.structuredContent, undefined);
+      assert.equal(tested.result?._meta.translationSettings, undefined);
+      assert.doesNotMatch(JSON.stringify(tested.result?.content), /Hello|测试译文|synthetic_native/);
+    }
+    await settingDialog.getByLabel('模型名称', { exact: true }).fill('vendor/test-model-for-reading');
     await settingDialog.getByRole('button', { name: '保存翻译设置', exact: true }).click();
     await expect(translationLanding.frame.locator('#translation-account')).toContainText('当前使用：自定义');
     await expect(settingDialog.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
@@ -692,6 +733,35 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     await onTranslationPreview?.(translating.page, 'native-translation-settings-narrow');
     const settingsBox = await narrowSettings.boundingBox(); assert.ok(settingsBox.x >= 0 && settingsBox.x + settingsBox.width <= 688);
     await expect(narrowSettings.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+    const narrowTest = narrowSettings.getByRole('button', { name: '测试翻译', exact: true });
+    for (const provider of ['baidu', 'azure', 'deepl', 'openai-compatible']) {
+      await narrowSettings.getByRole('combobox', { name: '翻译服务', exact: true }).selectOption(provider);
+      await expect(narrowTest).toBeEnabled();
+      const activeBefore = (await request('/translation/settings')).settings.provider;
+      await narrowTest.click();
+      await expect(narrowSettings.getByRole('textbox', { name: '翻译测试结果', exact: true })).toHaveValue('测试译文：Hello, Paperdesk.');
+      await expect(narrowSettings.getByLabel('翻译 API Key', { exact: true })).toHaveValue('');
+      assert.equal((await request('/translation/settings')).settings.provider, activeBefore, 'Testing an inactive saved profile must not activate it');
+      const lastTest = translating.calls.findLast(call => call.params?.name === 'paperdesk_reader_translation' && call.params.arguments.operation === 'test');
+      assert.equal(lastTest.params.arguments.apiKey, undefined); assert.equal(lastTest.result._meta.translationTest.provider, provider);
+    }
+    await onTranslationPreview?.(translating.page, 'native-translation-test-narrow');
+    const profileTest = translating.holdNext(entry => entry.params?.name === 'paperdesk_reader_translation' && entry.params.arguments.operation === 'test');
+    await narrowTest.click(); await profileTest.entered;
+    await narrowSettings.getByRole('combobox', { name: '翻译服务', exact: true }).selectOption('azure');
+    await expect(translating.frame.locator('#translation-account')).toContainText('查看：Azure');
+    profileTest.release(); await profileTest.finished;
+    await expect(narrowTest).toBeEnabled();
+    await expect(narrowSettings.getByRole('textbox', { name: '翻译测试结果', exact: true })).toBeHidden();
+    await expect(translating.frame.locator('#translation-test-status')).toBeEmpty();
+    const closedTest = translating.holdNext(entry => entry.params?.name === 'paperdesk_reader_translation' && entry.params.arguments.operation === 'test');
+    await narrowTest.click(); await closedTest.entered;
+    await translating.page.keyboard.press('Escape'); await expect(narrowSettings).toBeHidden();
+    closedTest.release(); await closedTest.finished;
+    await translating.frame.getByRole('button', { name: '翻译设置', exact: true }).click();
+    await expect(narrowTest).toBeEnabled();
+    await expect(narrowSettings.getByRole('textbox', { name: '翻译测试结果', exact: true })).toBeHidden();
+    await expect(translating.frame.locator('#translation-test-status')).toBeEmpty();
     await narrowSettings.getByRole('combobox', { name: '翻译服务', exact: true }).selectOption('baidu');
     await expect(translating.frame.locator('#translation-account')).toContainText('查看：百度翻译 · 已配置');
     await narrowSettings.getByRole('button', { name: '保存翻译设置', exact: true }).click();
@@ -708,6 +778,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     assert.equal(noOcrTranslation.calls.some(call => call.params?.name === 'paperdesk_reader_translation'), false);
     await noOcrTranslation.close();
     for (const provider of ['baidu', 'azure', 'deepl', 'openai-compatible']) await client.callTool({ name: 'paperdesk_reader_translation', arguments: { operation: 'clear', provider } });
+    console.log('PASS: native fixed-sample translation tests preserve unsaved forms, saved profiles, notes and private context across edit/profile/close races');
     console.log('PASS: native translation settings, explicit private results, failure recovery, stale selection protection and narrow modal leave notes and model context unchanged');
 
     for (const item of harnesses) {

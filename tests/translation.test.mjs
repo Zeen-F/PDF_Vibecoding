@@ -22,7 +22,7 @@ async function fixture(t, { timeoutMs = 15_000 } = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'paperdesk-translation-'));
   let runtime, server, base, handler, sleepHandler;
   let time = Date.parse('2026-10-07T00:00:00Z'), active = 0, peak = 0;
-  const calls = [], sleeps = [];
+  const calls = [], sleeps = [], receivedRequests = [];
   const fakeFetch = async (url, options) => {
     const fields = new URLSearchParams(options.body);
     const call = { url, options, fields, time }; calls.push(call); active++; peak = Math.max(peak, active);
@@ -33,7 +33,9 @@ async function fixture(t, { timeoutMs = 15_000 } = {}) {
   const translationOptions = { fetchImpl: fakeFetch, clock: { now: () => time, sleep: async ms => { sleeps.push(ms); if (sleepHandler) return sleepHandler(ms); time += ms; } }, timeoutMs };
   async function start() {
     runtime = createApp({ dataDir, translationOptions });
-    server = runtime.app.listen(0, '127.0.0.1'); await once(server, 'listening');
+    server = runtime.app.listen(0, '127.0.0.1');
+    server.on('request', req => req.once('end', () => receivedRequests.push({ path: req.url, method: req.method })));
+    await once(server, 'listening');
     base = `http://127.0.0.1:${server.address().port}`;
   }
   async function stop() {
@@ -42,7 +44,7 @@ async function fixture(t, { timeoutMs = 15_000 } = {}) {
   }
   await start(); t.after(async () => { await stop(); await rm(dataDir, { recursive: true, force: true }); });
   const lib = {
-    dataDir, calls, sleeps, get peak() { return peak; }, get runtime() { return runtime; }, get base() { return base; },
+    dataDir, calls, sleeps, receivedRequests, get peak() { return peak; }, get runtime() { return runtime; }, get base() { return base; },
     setHandler(value) { handler = value; }, setSleep(value) { sleepHandler = value; }, setTime(value) { time = Date.parse(value); },
     async restart() { await stop(); await start(); },
     request(route, method = 'GET', body, headers = {}) {
@@ -253,8 +255,8 @@ test('pending work is bounded and shutdown discards unsent queued requests witho
   lib.setHandler(() => new Promise(() => {}));
   const waiting = Array.from({ length: 8 }, (_, i) => lib.request(translateUrl, 'POST', { text: 'pending-' + i }));
   await until(() => lib.calls.length === 1);
-  // Let all local HTTP handlers enqueue while the provider stays unresolved.
-  await delay(20);
+  // Wait for every HTTP body to arrive, rather than assuming a scheduling delay.
+  await until(() => lib.receivedRequests.filter(req => req.path === translateUrl && req.method === 'POST').length === 8);
   await rejected(await lib.request(translateUrl, 'POST', { text: 'overflow' }), 429);
   await lib.runtime.close();
   for (const response of await Promise.all(waiting)) await rejected(response, 503);
@@ -272,6 +274,7 @@ test('cache is bounded to 200 entries and translation cannot change notes, schem
   const before = await lib.json('/api/documents/' + doc.id);
   for (let i = 0; i < 201; i++) await lib.translate('entry-' + i);
   assert.equal(readSidecar(lib, db => db.prepare('SELECT COUNT(*) AS n FROM cache').get().n), 200);
+  await lib.json('/api/translation/test', 'POST', { provider: 'baidu' });
   assert.deepEqual(await lib.json('/api/documents/' + doc.id), before);
   assert.deepEqual(await readFile(path.join(lib.dataDir, 'pdfs', doc.id + '.pdf')), sample);
   const primary = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
@@ -501,4 +504,189 @@ test('zero limits survive profile switches and credentials/origins cannot borrow
   await lib.json(configUrl, 'PUT', { provider: 'azure', apiKey: 'replacement-synthetic-key' });
   assert.equal((await lib.json(configUrl)).settings.usedCharacters, 0); assert.equal((await lib.translate('cached')).translation.cached, false);
   assert.equal(lib.calls.length, 3);
+});
+
+const testUrl = '/api/translation/test', testText = 'Hello, Paperdesk.', testCharacters = Array.from(testText).length;
+const testCandidates = {
+  baidu: { provider: 'baidu', appId: APP_ID, apiKey: KEY, tier: 'standard' },
+  azure: { provider: 'azure', apiKey: AZURE_KEY, region: 'eastasia' },
+  deepl: { provider: 'deepl', apiKey: DEEPL_KEY },
+  'openai-compatible': { provider: 'openai-compatible', apiKey: CUSTOM_KEY, endpoint: customEndpoint, model: 'fixture-model' },
+};
+async function rejectedTest(response, status, category, privateValues = []) {
+  assert.equal(response.status, status);
+  const text = await response.text(), body = JSON.parse(text);
+  assert.deepEqual(Object.keys(body).sort(), ['category', 'error']);
+  assert.equal(body.category, category); assert.equal(typeof body.error, 'string');
+  for (const value of privateValues) assert.ok(!text.includes(value), 'Test diagnostics cannot contain credentials or raw upstream details');
+}
+
+test('connection tests use all four adapters with the fixed sample and never save or activate unsaved credentials', async t => {
+  for (const [provider, candidate] of Object.entries(testCandidates)) {
+    const lib = await fixture(t); lib.setHandler(providerMock);
+    const initial = await lib.json(configUrl);
+    const primaryBefore = await readFile(path.join(lib.dataDir, 'paperdesk.sqlite'));
+    for (let i = 0; i < 2; i++) {
+      const result = await lib.json(testUrl, 'POST', candidate);
+      assert.deepEqual(Object.keys(result), ['test']);
+      assert.deepEqual(Object.keys(result.test).sort(), ['characters', 'elapsedMs', 'provider', 'sourceText', 'translatedText']);
+      assert.equal(result.test.provider, provider); assert.equal(result.test.sourceText, testText); assert.equal(result.test.characters, testCharacters);
+      assert.equal(typeof result.test.translatedText, 'string'); assert.ok(Number.isInteger(result.test.elapsedMs) && result.test.elapsedMs >= 0);
+      assert.ok(!JSON.stringify(result).includes(candidate.apiKey)); assert.ok(!JSON.stringify(result).includes(APP_ID));
+    }
+    assert.equal(lib.calls.length, 2, 'Repeated tests must perform two fresh provider requests');
+    assert.equal(lib.peak, 1); assert.ok(lib.calls[1].time - lib.calls[0].time >= 1000);
+    assert.deepEqual(await lib.json(configUrl), initial);
+    assert.equal((await lib.json(configUrl + '?provider=' + provider)).settings.configured, false);
+    readSidecar(lib, db => {
+      assert.equal(db.prepare('SELECT count(*) AS n FROM profiles').get().n, 0);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM cache').get().n, 0);
+      assert.equal(db.prepare('SELECT sum(characters) AS n FROM usage').get().n, testCharacters * 2);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+    });
+    for (const suffix of ['', '-wal']) {
+      try {
+        const bytes = await readFile(path.join(lib.dataDir, 'translation.sqlite' + suffix));
+        assert.ok(!bytes.includes(Buffer.from(candidate.apiKey))); assert.ok(!bytes.includes(Buffer.from(APP_ID)));
+      } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+    }
+    assert.deepEqual(await readFile(path.join(lib.dataDir, 'paperdesk.sqlite')), primaryBefore);
+    const call = lib.calls[0]; assert.equal(call.options.redirect, 'error');
+    if (provider === 'baidu') {
+      assert.equal(call.fields.get('q'), testText); assert.equal(call.fields.get('from'), 'en'); assert.equal(call.fields.get('to'), 'zh');
+      assert.equal(call.fields.get('sign'), md5(APP_ID + testText + call.fields.get('salt') + KEY));
+    } else if (provider === 'azure') {
+      assert.deepEqual(jsonCall(call), [{ Text: testText }]); assert.equal(new URL(call.url).searchParams.get('from'), 'en'); assert.equal(new URL(call.url).searchParams.get('to'), 'zh-Hans');
+      assert.equal(call.options.headers['Ocp-Apim-Subscription-Key'], AZURE_KEY); assert.equal(call.options.headers['Ocp-Apim-Subscription-Region'], 'eastasia');
+    } else if (provider === 'deepl') {
+      assert.deepEqual(jsonCall(call), { text: [testText], source_lang: 'EN', target_lang: 'ZH' }); assert.equal(call.options.headers.Authorization, 'DeepL-Auth-Key ' + DEEPL_KEY);
+    } else {
+      assert.deepEqual(jsonCall(call).messages[1], { role: 'user', content: testText }); assert.equal(jsonCall(call).model, 'fixture-model');
+      assert.equal(call.options.headers.Authorization, 'Bearer ' + CUSTOM_KEY);
+    }
+    await lib.restart(); assert.equal((await lib.json(configUrl + '?provider=' + provider)).settings.configured, false);
+    await lib.json(configUrl, 'PUT', candidate); assert.equal((await lib.json(configUrl)).settings.usedCharacters, testCharacters * 2);
+  }
+});
+
+test('testing an inactive saved profile reuses its key but cannot activate it, mutate its configuration or use its cache', async t => {
+  const lib = await fixture(t); lib.setHandler(providerMock);
+  await lib.json(configUrl, 'PUT', testCandidates.azure); await lib.translate(testText, { from: 'en' });
+  await lib.configure();
+  const before = readSidecar(lib, db => ({ profiles: db.prepare('SELECT * FROM profiles ORDER BY provider').all(), active: db.prepare('SELECT * FROM active_settings').all(), cache: db.prepare('SELECT * FROM cache').all() }));
+  await lib.json(testUrl, 'POST', { provider: 'azure', apiKey: '', region: 'westus', monthlyLimit: 777 });
+  await lib.json(testUrl, 'POST', { provider: 'azure' });
+  assert.equal(lib.calls.length, 3); assert.equal(lib.calls[1].options.headers['Ocp-Apim-Subscription-Region'], 'westus');
+  assert.equal(lib.calls[2].options.headers['Ocp-Apim-Subscription-Region'], 'eastasia');
+  assert.equal(lib.calls[2].options.headers['Ocp-Apim-Subscription-Key'], AZURE_KEY);
+  assert.deepEqual(readSidecar(lib, db => ({ profiles: db.prepare('SELECT * FROM profiles ORDER BY provider').all(), active: db.prepare('SELECT * FROM active_settings').all(), cache: db.prepare('SELECT * FROM cache').all() })), before);
+  assert.equal((await lib.json(configUrl)).settings.activeProvider, 'baidu');
+  assert.equal((await lib.json(configUrl + '?provider=azure')).settings.usedCharacters, testCharacters * 3);
+  await rejectedTest(await lib.request(testUrl, 'POST', { provider: 'azure', endpoint: 'https://other.example/translate' }), 400, 'configuration');
+  assert.equal(lib.calls.length, 3, 'A saved key cannot be forwarded to a different origin');
+  await lib.json(testUrl, 'POST', { provider: 'azure', endpoint: 'https://other.example/translate', apiKey: 'ephemeral-key' });
+  assert.equal(new URL(lib.calls.at(-1).url).origin, 'https://other.example');
+  assert.equal((await lib.json(configUrl + '?provider=azure')).settings.endpoint, 'https://api.cognitive.microsofttranslator.com/translate');
+});
+
+test('connection tests obey the candidate monthly limit and reserve failures without borrowing other accounts or caches', async t => {
+  const lib = await fixture(t); lib.setHandler(providerMock); await lib.configure({ monthlyLimit: 0 });
+  await rejectedTest(await lib.request(testUrl, 'POST', { provider: 'baidu' }), 429, 'quota'); assert.equal(lib.calls.length, 0);
+  assert.equal((await lib.json(configUrl)).settings.monthlyLimit, 0);
+  const candidate = { ...testCandidates.azure, monthlyLimit: testCharacters * 2 };
+  lib.setHandler(() => new Response('secret upstream body', { status: 401 }));
+  await rejectedTest(await lib.request(testUrl, 'POST', candidate), 502, 'authentication', ['secret upstream body']);
+  lib.setHandler(providerMock); await lib.json(testUrl, 'POST', candidate);
+  await rejectedTest(await lib.request(testUrl, 'POST', candidate), 429, 'quota'); assert.equal(lib.calls.length, 2);
+  await lib.restart();
+  await rejectedTest(await lib.request(testUrl, 'POST', candidate), 429, 'quota'); assert.equal(lib.calls.length, 2);
+  await lib.json(testUrl, 'POST', { ...candidate, apiKey: 'different-ephemeral-account' }); assert.equal(lib.calls.length, 3);
+  assert.equal((await lib.json(configUrl)).settings.activeProvider, 'baidu'); assert.equal((await lib.json(configUrl)).settings.monthlyLimit, 0);
+  readSidecar(lib, db => {
+    assert.equal(db.prepare('SELECT count(*) AS n FROM profiles').get().n, 1);
+    assert.equal(db.prepare('SELECT sum(characters) AS n FROM usage').get().n, testCharacters * 3);
+  });
+});
+
+test('connection-test errors are finite safe categories while the existing translation error response remains unchanged', async t => {
+  const lib = await fixture(t, { timeoutMs: 70 });
+  const secrets = [KEY, APP_ID, 'PRIVATE_UPSTREAM_DETAIL'];
+  const captured = [], originalError = console.error; console.error = (...values) => captured.push(values.join(' ')); t.after(() => { console.error = originalError; });
+  const upstream = [
+    ['52003', 'authentication', 502], ['54001', 'authentication', 502], ['54004', 'quota', 502], ['54003', 'quota', 429],
+    ['52001', 'timeout', 504], ['52002', 'connection', 502], ['UNKNOWN_PROVIDER_CODE', 'response', 502],
+  ];
+  for (const [code, category, status] of upstream) {
+    lib.setHandler(() => Response.json({ error_code: code, error_msg: secrets.join(' ') }));
+    await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.baidu), status, category, [...secrets, code]);
+  }
+  for (const status of [400, 401, 403, 404, 429, 456]) {
+    lib.setHandler(() => new Response(secrets.join(' '), { status }));
+    await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.azure), status < 429 ? 502 : 429, [400, 404].includes(status) ? 'configuration' : status < 429 ? 'authentication' : 'quota', secrets);
+  }
+  lib.setHandler(() => new Response('{"not-json": PRIVATE_UPSTREAM_DETAIL', { status: 200 }));
+  await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.azure), 502, 'response', secrets);
+  lib.setHandler(() => Response.json({ choices: [{ message: { content: { private: KEY } } }] }));
+  await rejectedTest(await lib.request(testUrl, 'POST', testCandidates['openai-compatible']), 502, 'response', secrets);
+  lib.setHandler(() => { throw new Error(secrets.join(' ')); });
+  await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.deepl), 502, 'connection', secrets);
+  lib.setHandler(() => new Promise(() => {}));
+  await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.deepl), 504, 'timeout', secrets);
+  assert.equal(lib.calls.length, 17);
+  assert.equal(readSidecar(lib, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), testCharacters * 17);
+  assert.equal(readSidecar(lib, db => db.prepare('SELECT count(*) AS n FROM cache').get().n), 0);
+  assert.ok(captured.every(line => secrets.every(value => !line.includes(value))));
+  await lib.configure(); lib.setHandler(() => new Response('PRIVATE_UPSTREAM_DETAIL', { status: 401 }));
+  await rejected(await lib.request(translateUrl, 'POST', { text: 'normal translation still has only error' }), 502, secrets);
+});
+
+test('connection-test configuration, JSON and foreign-origin errors never send arbitrary text or echo private fields', async t => {
+  const lib = await fixture(t);
+  for (const body of [
+    {}, [], { ...testCandidates.baidu, text: 'PRIVATE_SELECTED_TEXT' }, { ...testCandidates.azure, from: 'auto' },
+    { ...testCandidates.deepl, to: 'en' }, { provider: 'openai-compatible', apiKey: CUSTOM_KEY, endpoint: customEndpoint },
+    { ...testCandidates['openai-compatible'], endpoint: 'https://user:secret@example.com/chat/completions' },
+    { ...testCandidates.azure, monthlyLimit: -1 }, { ...testCandidates.baidu, PRIVATE_SECRET_FIELD: 'secret' },
+  ]) await rejectedTest(await lib.request(testUrl, 'POST', body), 400, 'configuration', ['PRIVATE_SELECTED_TEXT', 'PRIVATE_SECRET_FIELD', CUSTOM_KEY]);
+  for (const Origin of ['null', 'https://foreign.example']) {
+    await rejected(await lib.request(testUrl, 'POST', testCandidates.azure, { Origin }), 403);
+  }
+  const malformed = await fetch(lib.base + testUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"apiKey":"PRIVATE_JSON_SECRET", bad' });
+  await rejectedTest(malformed, 400, 'configuration', ['PRIVATE_JSON_SECRET']);
+  const oversized = await fetch(lib.base + testUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey: 'x'.repeat(4_000_000) }) });
+  await rejectedTest(oversized, 413, 'configuration');
+  assert.equal(lib.calls.length, 0); assert.ok(!(await readdir(lib.dataDir)).includes('translation.sqlite'));
+});
+
+test('queued tests bind the saved tested profile revision, ignore unrelated active switches and never send after expiry', async t => {
+  const lib = await fixture(t); lib.setHandler(providerMock); await lib.configure();
+  let gate = deferred(); lib.setHandler(async call => { await gate.promise; return providerMock(call); });
+  const first = lib.request(translateUrl, 'POST', { text: 'hold one' }); await until(() => lib.calls.length === 1);
+  const tested = lib.request(testUrl, 'POST', testCandidates.azure); await delay(10);
+  await lib.json(configUrl, 'PUT', testCandidates.deepl); gate.resolve();
+  assert.equal((await first).status, 200); assert.equal((await tested).status, 200); assert.equal(lib.calls.length, 2);
+  assert.equal((await lib.json(configUrl)).settings.activeProvider, 'deepl');
+  await lib.json(configUrl, 'PUT', testCandidates.azure);
+  await lib.json(configUrl, 'PUT', testCandidates.deepl);
+  gate = deferred(); const before = lib.calls.length;
+  const second = lib.request(translateUrl, 'POST', { text: 'hold two' }); await until(() => lib.calls.length === before + 1);
+  const stale = lib.request(testUrl, 'POST', testCandidates.azure); await delay(10);
+  await lib.json(configUrl, 'PUT', { ...testCandidates.azure, apiKey: 'new-saved-key' }); gate.resolve();
+  assert.equal((await second).status, 200); await rejectedTest(await stale, 409, 'changed'); assert.equal(lib.calls.length, before + 1);
+  const expiring = await fixture(t, { timeoutMs: 80 }); expiring.setHandler(() => new Promise(() => {})); expiring.setSleep(() => new Promise(() => {}));
+  const timed = expiring.request(testUrl, 'POST', testCandidates.azure); await until(() => expiring.calls.length === 1);
+  const queued = expiring.request(testUrl, 'POST', testCandidates.deepl);
+  await rejectedTest(await timed, 504, 'timeout'); await rejectedTest(await queued, 504, 'timeout');
+  await delay(30); assert.equal(expiring.calls.length, 1); assert.equal(readSidecar(expiring, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), testCharacters);
+});
+
+test('test and translation queues share their capacity and close cancels only unsent tests without late provider calls', async t => {
+  const lib = await fixture(t, { timeoutMs: 2000 }); await lib.configure(); lib.setHandler(() => new Promise(() => {}));
+  const first = lib.request(translateUrl, 'POST', { text: 'active' }); await until(() => lib.calls.length === 1);
+  const pending = Array.from({ length: 7 }, () => lib.request(testUrl, 'POST', testCandidates.azure));
+  await until(() => lib.receivedRequests.filter(req => req.path === testUrl && req.method === 'POST').length === 7);
+  await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.deepl), 429, 'quota');
+  await lib.runtime.close(); await rejected(await first, 503);
+  for (const response of await Promise.all(pending)) await rejectedTest(response, 503, 'stopped');
+  assert.equal(lib.calls.length, 1); assert.equal(readSidecar(lib, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), 6);
 });

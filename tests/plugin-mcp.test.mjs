@@ -84,10 +84,10 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
 
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
-    assert.equal(client.getServerVersion().version, '0.9.0');
-    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v9.html');
+    assert.equal(client.getServerVersion().version, '0.10.0');
+    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v10.html');
     for (const file of ['plugins/paperdesk/plugin.json', 'plugins/paperdesk/.codex-plugin/plugin.json']) {
-      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.9.0');
+      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.10.0');
     }
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme', 'paperdesk_reader_translation'].sort());
@@ -386,4 +386,59 @@ test('translation adapter is app-only, maps strict operations and never exposes 
     const invalid = await call(client, item.name, args); assert.equal(invalid.isError, true); assert.ok(!JSON.stringify(invalid).includes(secret));
   }
   assert.equal(received.length, count, 'Invalid operation arguments must not reach the service');
+});
+
+test('translation test forwards only candidate settings and returns finite private diagnostics without saving', async t => {
+  const secret = 'UNSAVED_TEST_SECRET', sample = 'Hello, Paperdesk.', received = [];
+  let failureCategory, malformed = false;
+  const server = createServer(async (request, response) => {
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/api/plugin/status') { response.end(JSON.stringify({ service: 'paperdesk', apiVersion: 1, instanceId: 'test', libraryId })); return; }
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+    received.push({ path: request.url, method: request.method, body });
+    if (failureCategory) { response.statusCode = 502; response.end(JSON.stringify({ error: `${secret} PRIVATE_UPSTREAM_BODY`, category: failureCategory })); return; }
+    response.end(JSON.stringify({ test: { provider: body.provider, sourceText: malformed ? 'PRIVATE_SOURCE' : sample, translatedText: 'PRIVATE_TEST_RESULT', characters: [...sample].length, elapsedMs: 25, apiKey: secret }, settings: { apiKey: secret } }));
+  });
+  const baseUrl = await listen(server); t.after(() => stop(server));
+  const client = await clientFor(t, { baseUrl, libraryId });
+  const toolName = 'paperdesk_reader_translation';
+  const onlyPrivate = result => {
+    assert.equal(result.structuredContent, undefined);
+    assert.doesNotMatch(JSON.stringify(result.content), /PRIVATE|Hello|UNSAVED/);
+    assert.doesNotMatch(JSON.stringify(result), /UNSAVED_TEST_SECRET|PRIVATE_UPSTREAM_BODY/);
+    assert.equal(result._meta.translationSettings, undefined);
+    assert.equal(result._meta.translation, undefined);
+    return result._meta.translationTest;
+  };
+  const candidates = [
+    { provider: 'baidu', appId: 'synthetic-account', apiKey: secret, tier: 'standard', monthlyLimit: 50000 },
+    { provider: 'azure', apiKey: secret, endpoint: 'https://api.cognitive.microsofttranslator.com/translate', region: 'eastasia', monthlyLimit: 2000000 },
+    { provider: 'deepl', endpoint: 'https://api-free.deepl.com/v2/translate', monthlyLimit: 50000 },
+    { provider: 'openai-compatible', apiKey: secret, endpoint: 'https://test.example.invalid/v1/chat/completions', model: 'candidate-model', monthlyLimit: 50000 },
+  ];
+  for (const candidate of candidates) {
+    const result = await call(client, toolName, { operation: 'test', ...candidate });
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(onlyPrivate(result), { provider: candidate.provider, sourceText: sample, translatedText: 'PRIVATE_TEST_RESULT', characters: [...sample].length, elapsedMs: 25 });
+    assert.deepEqual(received.at(-1), { path: '/api/translation/test', method: 'POST', body: candidate });
+  }
+  const count = received.length;
+  for (const extra of [{ text: 'PRIVATE_ARBITRARY_TEXT' }, { from: 'en' }, { to: 'zh' }, { other: secret }]) {
+    const result = await call(client, toolName, { operation: 'test', ...candidates[0], ...extra });
+    assert.equal(result.isError, true); assert.doesNotMatch(JSON.stringify(result), /PRIVATE_ARBITRARY_TEXT|UNSAVED_TEST_SECRET/);
+  }
+  assert.equal(received.length, count, 'Test rejects arbitrary translation scope before any provider request');
+  for (const category of ['authentication', 'quota', 'timeout', 'connection', 'configuration', 'response', 'changed', 'stopped', 'unknown', secret]) {
+    failureCategory = category;
+    const result = await call(client, toolName, { operation: 'test', ...candidates[0] });
+    assert.equal(result.isError, true);
+    const failure = onlyPrivate(result);
+    assert.equal(failure.category, category === secret ? 'unknown' : category); assert.equal(failure.status, 502);
+    assert.ok(failure.error.length > 0);
+  }
+  failureCategory = undefined; malformed = true;
+  const result = await call(client, toolName, { operation: 'test', ...candidates[0] });
+  assert.equal(result.isError, true); assert.equal(onlyPrivate(result).category, 'response');
+  assert.ok(received.every(item => item.path === '/api/translation/test' && item.method === 'POST'), 'Tests never save, activate, clear or translate document text');
 });
