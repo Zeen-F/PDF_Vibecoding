@@ -81,6 +81,8 @@ try {
   assert.equal(security.contextIsolation, true);
   assert.equal(security.sandbox, true);
   assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
+  assert.equal(await page.evaluate(async () => (await navigator.permissions.query({ name: 'clipboard-write' })).state), 'granted');
+  assert.equal(await page.evaluate(async () => (await navigator.permissions.query({ name: 'clipboard-read' })).state), 'denied');
   console.log(`PASS: ${label} desktop starts with bundled Node ${security.node} and an isolated sandboxed window`);
 
   const imported = page.waitForResponse(response => response.url() === baseUrl + '/api/documents' && response.request().method() === 'POST');

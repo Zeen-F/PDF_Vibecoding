@@ -124,8 +124,12 @@ function createWindow() {
       sandbox: true, nodeIntegration: false, webSecurity: true,
     },
   });
-  window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  window.webContents.session.setPermissionCheckHandler(() => false);
+  const canWriteClipboard = (contents, permission, origin) => permission === 'clipboard-sanitized-write'
+    && contents === window.webContents && isReaderUrl(contents.getURL()) && isReaderUrl(origin);
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(canWriteClipboard(contents, permission, details.requestingUrl || contents.getURL()));
+  });
+  window.webContents.session.setPermissionCheckHandler((contents, permission, origin) => canWriteClipboard(contents, permission, origin));
   window.webContents.setWindowOpenHandler(({ url }) => {
     // Only the existing translation account link may open the system browser.
     if (url === 'https://fanyi-api.baidu.com/access/0/1') void shell.openExternal(url);
