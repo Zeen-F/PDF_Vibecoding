@@ -45,6 +45,8 @@ export async function pluginWorkflow({ context, base }) {
     await page.mouse.move(box.x + 1, box.y + box.height / 2); await page.mouse.down();
     await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
     await expect(page.getByRole('button', { name: '交给 Codex', exact: true })).toBeVisible();
+    const nativeQuote = await page.evaluate(() => window.getSelection()?.toString());
+    await expect(page.locator('.selection-summary p')).toHaveText(nativeQuote);
     const quote = await page.locator('.selection-summary p').textContent();
     assert.ok(quote.includes('short introduction'));
     assert.equal((await getContext(reader.sessionId())).selection, null, 'Selecting text alone must remain private');
