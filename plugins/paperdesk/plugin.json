@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "paperdesk",
-  "version": "0.8.0",
-  "description": "在本机纸间阅读和分类文献，选择阅读皮肤，按需在当前 Work／Codex 对话讨论选区，明确要求后追加笔记。",
+  "version": "0.9.0",
+  "description": "本机 PDF 阅读、分类和皮肤，支持多服务 API 选区翻译；按需在当前 Work／Codex 对话讨论选区。",
   "author": {
     "name": "Paperdesk"
   },
@@ -10,8 +10,8 @@
     "com.openai": {
       "interface": {
         "displayName": "纸间 Paperdesk",
-        "shortDescription": "本机 PDF 分类、阅读与选区讨论",
-        "longDescription": "在原生面板整理单层文件夹、拖动文献和选择四套阅读皮肤。预览后在当前 Work／Codex 对话中讨论选区；只共享不会启动回答，明确要求后才追加笔记。",
+        "shortDescription": "本机 PDF 阅读、选区翻译与讨论",
+        "longDescription": "整理单层文件夹、拖动文献和选择四套阅读皮肤。配置百度、Azure、DeepL 或自定义 OpenAI 兼容 API 后在阅读器直接翻译文字选区，不使用 Codex 模型。阅读问题仍在当前 Work／Codex 对话讨论，明确要求后才追加笔记。",
         "developerName": "Paperdesk",
         "category": "Productivity",
         "capabilities": [

@@ -13,6 +13,7 @@ import { notesRevision, revisionValue, registerPluginApi } from './plugin-api.mj
 import { createReaderRenderer, readerPageQuery, readerPageText, ReaderRenderError } from './reader-render.mjs';
 import { migrateLibrary, registerLibraryApi } from './library.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
+import { registerTranslationApi } from './translation.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -211,7 +212,7 @@ function snippet(text, needle) {
 }
 
 /** Create a local app with its own persistent database. The caller owns its HTTP server. */
-export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.join(rootDir, 'data') } = {}) {
+export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.join(rootDir, 'data'), translationOptions } = {}) {
   dataDir = path.resolve(dataDir);
   const pdfDir = path.join(dataDir, 'pdfs');
   mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
@@ -339,6 +340,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     HttpError, objectBody, stringValue, pageValue, rectanglesValue,
   });
   registerLibraryApi({ app, db, documentOr404, serializeDocument, transaction, HttpError, objectBody });
+  const translationApi = registerTranslationApi({ app, dataDir, HttpError, options: translationOptions });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.get('/api/documents', (_req, res) => {
@@ -560,5 +562,5 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   let closed = false;
-  return { app, close() { if (!closed) { closed = true; pluginApi.close(); tocCache.clear(); db.close(); } return readerRenderer.close(); } };
+  return { app, close() { if (!closed) { closed = true; pluginApi.close(); tocCache.clear(); db.close(); } return Promise.all([translationApi.close(), readerRenderer.close()]); } };
 }

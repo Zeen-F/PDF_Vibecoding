@@ -18,6 +18,9 @@
 :root[data-theme=night]{--ink:#d8ded5;--paper:#252c2a;--canvas:#171d1b;--soft:#2d3531;--input:#202723;--line:#455047;--muted:#acb8a8;--forest:#1b2420;--side-ink:#e0e9db;--side-muted:#aebfaa;--side-hover:#2e3d32;--side-selected:#3c4e3e;--side-line:#50644e;--action:#a4bb90;--action-hover:#bed2ab;--action-ink:#202d1e;--hover:#3a473a;--accent:#c8a276;--quote:#343e30;--warning-bg:#46372b;--warning-ink:#edc597;--scrim:#070d0acf;color-scheme:dark}
 body,input,textarea,select{color:var(--ink)}button,input,textarea,select{font:inherit}select{max-width:100%;border:1px solid var(--line);border-radius:4px;background:var(--input);padding:6px;font-size:11px}input,textarea{background:var(--input)}button:hover{background:var(--hover)}button:focus-visible,a:focus-visible,input:focus,textarea:focus,select:focus-visible{outline-color:var(--accent)}.status-line,.toolbar{background:var(--soft);color:var(--muted)}.status-line:before{background:var(--action)}.page-scroll{background:var(--canvas)}.pager,.welcome,.welcome h2,.welcome p,.welcome small,.page-caption,.loading,.toc-expand,.toc-jump small,.panel-message,.text-pane summary,.text-pane p,.modal small,.modal p,.question-editor,.browser-fallback a{color:var(--muted)}.toolbar [aria-pressed=true],.primary{background:var(--action);color:var(--action-ink)}.primary:hover{background:var(--action-hover)}.toc-jump[aria-current=page]{background:var(--hover)}.text-pane,.text-actions button,.question-actions button,#review-notes{border-color:var(--line)}.share-state{background:var(--quote);color:var(--ink);border-color:var(--line)}.share-state button{border-color:var(--line)}.modal-wrap{background:var(--scrim)}.modal{background:var(--paper)}.modal blockquote{background:var(--quote);border-color:var(--accent)}.modal img{border-color:var(--line)}.browser-fallback{background:var(--soft)}.error-box{background:var(--warning-bg);color:var(--warning-ink);border-color:var(--line)}.error-box button{border-color:var(--accent)}#note-error,.dirty{color:var(--warning-ink)!important}.library{padding-top:17px;color:var(--side-ink)}.library-heading{padding-bottom:12px;color:var(--side-muted)}.library-empty,.library-footer,.document-item small{color:var(--side-muted)}.library-footer{border-color:var(--side-line)}.document-item{color:var(--side-ink);margin:0}.document-item:hover{background:var(--side-hover)}.document-item[aria-current=true]{background:var(--side-selected);border-color:var(--accent)}.library-tools{display:flex;align-items:center;gap:8px;padding:0 4px 12px}.library-tools button{color:var(--side-ink);border-color:var(--side-line);padding:6px;font-size:10px}.library-tools button:hover,.folder-row:hover{background:var(--side-hover)}.folder-list{max-height:26vh;overflow:auto;border-block:1px solid var(--side-line);padding:7px 0;margin-bottom:8px}.folder-row{display:flex;width:100%;gap:8px;align-items:center;text-align:left;color:var(--side-ink);font-size:11px;padding:8px}.folder-row span{flex:1;overflow-wrap:anywhere}.folder-row small{font:10px Georgia,serif;color:var(--side-muted)}.folder-row[aria-current=true]{background:var(--side-selected)}.folder-row.drop-target{outline:2px dashed var(--side-muted);outline-offset:-3px}.folder-actions{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:8px}.folder-actions button{color:var(--side-muted);font-size:10px;padding:5px}.folder-actions button:hover{background:var(--side-hover)}.folder-editor{font-size:11px;padding:8px;border:1px solid var(--side-line);border-radius:4px;margin-bottom:10px}.folder-editor input{width:100%;padding:7px;margin:7px 0}.folder-editor-actions{display:flex;justify-content:flex-end;gap:4px}.folder-editor button{color:var(--side-ink);border-color:var(--side-line);font-size:10px;padding:5px}.document-entry{margin-bottom:8px;border-radius:4px}.document-entry[draggable=true]{cursor:grab}.document-entry.dragging{opacity:.5}.move-document{display:block;margin:0 10px 10px;width:calc(100% - 20px);background:var(--forest);color:var(--side-muted);border-color:var(--side-line);font-size:10px}.theme-control{display:flex;align-items:center;gap:8px;font-size:10px;white-space:nowrap}.theme-control select{width:76px}.library-hint{font-size:10px;color:var(--side-muted);line-height:1.7;padding:0 8px 8px}.document-list{overscroll-behavior:contain}.folder-confirm-text{margin-top:16px!important;color:var(--ink)!important}@media(max-width:680px){.theme-control>span{display:none}.theme-control select{width:64px;padding:5px;font-size:10px}.app-header{gap:5px}.browser-button{max-width:85px;white-space:normal}}
 </style>
+<style>
+.translation-card{margin-top:18px;border-block:1px solid var(--line);padding:14px 0}.translation-card h3{font-size:13px;font-weight:500;margin:0 0 8px}.translation-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}.translation-controls label{display:flex;gap:6px;align-items:center;font-size:11px}.translation-card textarea{width:100%;min-height:140px;resize:vertical;padding:12px;line-height:1.8;font-size:12px}.translation-card p{white-space:pre-wrap;overflow-wrap:anywhere}.translation-settings-wrap{z-index:30}.translation-settings{display:flex;flex-direction:column;gap:13px}.translation-settings>label{display:flex;flex-direction:column;gap:6px;font-size:12px}.translation-settings input,.translation-settings select{width:100%;padding:9px}.translation-settings p{line-height:1.9}.translation-settings .modal-actions{margin-top:4px}#translation-error,#translation-settings-error{color:var(--warning-ink);font-size:11px;line-height:1.8}.translation-account{padding:10px;background:var(--soft);border:1px solid var(--line);border-radius:4px}.translation-top{font-size:11px;border-color:var(--line);white-space:nowrap}#translation-origin{margin:12px 0 7px;color:var(--muted);font-size:10px}@media(max-width:760px){.app-header{height:auto;min-height:68px;flex-wrap:wrap;padding-block:10px}.header-title{flex-basis:34%;}.translation-top{font-size:10px;padding:7px}.translation-settings-wrap{padding:12px}.translation-settings{padding:18px}.translation-controls{gap:6px}}
+</style>
 </head>
 <body>
 <header class="app-header">
@@ -25,6 +28,7 @@ body,input,textarea,select{color:var(--ink)}button,input,textarea,select{font:in
   <div class="brand">纸间<small>PAPERDESK</small></div>
   <div class="header-title"><small>LOCAL READING SPACE</small><h1 id="document-title">让阅读，留下一点痕迹。</h1></div>
   <label class="theme-control"><span>阅读皮肤</span><select id="reader-theme" aria-label="阅读皮肤" disabled><option value="forest">森林</option><option value="sand">暖砂</option><option value="slate">雾蓝</option><option value="night">夜读</option></select></label>
+  <button id="translation-settings-open" class="translation-top" disabled>翻译设置</button>
   <button id="browser-button" class="browser-button">在浏览器打开</button>
 </header>
 <div id="status" class="status-line" role="status">正在连接纸间…</div>
@@ -52,8 +56,9 @@ body,input,textarea,select{color:var(--ink)}button,input,textarea,select{font:in
     <div id="share-state" class="share-state" hidden><span>此选区已共享到本机阅读会话；已进入对话的内容无法收回。</span><button id="ask-shared">继续提问</button><button id="clear-share">取消共享</button></div>
   </main>
 </div>
-<div id="preview-wrap" class="modal-wrap" hidden><section class="modal" role="dialog" aria-modal="true" aria-label="共享预览"><small id="preview-origin"></small><h2>共享预览</h2><p>核对下方选区，再选择如何讨论。回答显示在当前 Codex 对话中，只有你要求时才写入笔记。</p><img id="preview-image" alt="选区预览" hidden><blockquote id="preview-quote" hidden></blockquote><section class="reading-questions" aria-label="阅读讨论"><p>把这段内容交给 Codex：</p><div class="question-actions"><button id="explain-selection">解释选区</button><button id="summarize-selection">提炼要点</button><button id="custom-question" aria-expanded="false" aria-controls="question-editor">自定义提问</button></div><div id="question-editor" class="question-editor" hidden><label for="reading-question">向 Codex 提问</label><textarea id="reading-question" maxlength="4000" placeholder="例如：这个公式成立需要哪些条件？"></textarea><button id="send-question" class="primary" disabled>发送问题</button></div><p id="question-status" role="status"></p><div id="question-fallback" class="question-fallback" hidden><p id="question-fallback-hint"></p><textarea id="question-copy" aria-label="待发送问题" readonly></textarea><button id="copy-question">复制提问</button></div></section><div class="modal-actions"><button id="cancel-preview">取消共享</button><button id="confirm-share">交给 Codex</button></div></section></div>
+<div id="preview-wrap" class="modal-wrap" hidden><section class="modal" role="dialog" aria-modal="true" aria-label="共享预览"><small id="preview-origin"></small><h2>共享预览</h2><p>核对下方选区，再选择如何讨论。回答显示在当前 Codex 对话中，只有你要求时才写入笔记。</p><img id="preview-image" alt="选区预览" hidden><blockquote id="preview-quote" hidden></blockquote><section id="translation-card" class="translation-card" aria-label="选区翻译"><h3 id="translation-card-title">选区翻译</h3><p id="translation-hint">点击后仅将此处选中的文字发送给当前启用的翻译服务，结果只显示在本面板，不发送到当前对话或写入笔记。</p><div class="translation-controls"><label>原文语言<select id="translation-from" aria-label="原文语言"><option value="auto">自动检测</option><option value="en">英语</option><option value="zh">中文</option></select></label><label>译文语言<select id="translation-to" aria-label="译文语言"><option value="zh">中文</option><option value="en">英语</option></select></label><button id="translate-selection" class="primary">翻译选区</button></div><p id="translation-status" role="status"></p><p id="translation-error" role="alert" hidden></p><div id="translation-result" hidden><p id="translation-origin"></p><textarea id="translation-output" aria-label="翻译结果" readonly></textarea></div></section><section class="reading-questions" aria-label="阅读讨论"><p>把这段内容交给 Codex：</p><div class="question-actions"><button id="explain-selection">解释选区</button><button id="summarize-selection">提炼要点</button><button id="custom-question" aria-expanded="false" aria-controls="question-editor">自定义提问</button></div><div id="question-editor" class="question-editor" hidden><label for="reading-question">向 Codex 提问</label><textarea id="reading-question" maxlength="4000" placeholder="例如：这个公式成立需要哪些条件？"></textarea><button id="send-question" class="primary" disabled>发送问题</button></div><p id="question-status" role="status"></p><div id="question-fallback" class="question-fallback" hidden><p id="question-fallback-hint"></p><textarea id="question-copy" aria-label="待发送问题" readonly></textarea><button id="copy-question">复制提问</button></div></section><div class="modal-actions"><button id="cancel-preview">取消共享</button><button id="confirm-share">交给 Codex</button></div></section></div>
 <div id="folder-confirm-wrap" class="modal-wrap" hidden><section class="modal" role="dialog" aria-modal="true" aria-label="删除文件夹"><small>LIBRARY</small><h2>删除文件夹</h2><p id="folder-confirm-text" class="folder-confirm-text"></p><div class="modal-actions"><button id="cancel-folder-remove">取消删除</button><button id="confirm-folder-remove" class="primary">确认删除文件夹</button></div></section></div>
+<div id="translation-settings-wrap" class="modal-wrap translation-settings-wrap" hidden><section class="modal translation-settings" role="dialog" aria-modal="true" aria-label="翻译设置"><small>TRANSLATION</small><h2>翻译设置</h2><p>每个服务独立保存凭据。选择服务只查看配置；保存后启用。保存不会试发翻译请求，只有点击“翻译选区”才发送选中文字。</p><label>翻译服务<select id="translation-provider" aria-label="翻译服务"><option value="baidu">百度翻译</option><option value="azure">Azure Translator</option><option value="deepl">DeepL</option><option value="openai-compatible">自定义（OpenAI 兼容）</option></select></label><p id="translation-account" class="translation-account">正在读取设置…</p><label id="translation-app-id-field">百度 APP ID<input id="translation-app-id" aria-label="百度 APP ID" autocomplete="off" maxlength="256" placeholder="已配置时留空保留"></label><label>翻译 API Key<input id="translation-api-key" aria-label="翻译 API Key" type="password" autocomplete="new-password" placeholder="已配置时留空保留；换服务地址需新密钥"></label><label id="translation-endpoint-field" hidden>完整 API 地址<input id="translation-endpoint" aria-label="完整 API 地址" type="url" autocomplete="off" maxlength="2048" placeholder="包含完整 API 路径"></label><label id="translation-deepl-field" hidden>DeepL 接口<select id="translation-deepl" aria-label="DeepL 接口"><option value="https://api-free.deepl.com/v2/translate">免费接口（api-free）</option><option value="https://api.deepl.com/v2/translate">付费接口（api）</option></select></label><label id="translation-region-field" hidden>Azure 区域<input id="translation-region" aria-label="Azure 区域" autocomplete="off" maxlength="100" placeholder="按控制台要求填写，可选"></label><label id="translation-model-field" hidden>模型名称<input id="translation-model" aria-label="模型名称" autocomplete="off" maxlength="256" placeholder="填写服务商实际提供的模型名称"></label><label id="translation-tier-field">接口版本<select id="translation-tier" aria-label="接口版本"><option value="standard">标准版 · 每月 5 万字符</option><option value="advanced">高级版 · 每月 100 万字符</option></select></label><label>本机月度字符上限<input id="translation-limit" aria-label="本机月度字符上限" type="number" min="0" max="10000000" step="1" value="50000"></label><p id="translation-provider-help"></p><p id="translation-usage">用量只是本机保护性估算，不包含其他应用或设备；实际额度与计费以服务商控制台为准。</p><p id="translation-settings-status" role="status"></p><p id="translation-settings-error" role="alert" hidden></p><div class="modal-actions"><button id="translation-clear">清除翻译凭据</button><button id="translation-settings-close">关闭翻译设置</button><button id="translation-settings-save" class="primary">保存翻译设置</button></div></section></div>
 <script>
 'use strict';
 const config = __PAPERDESK_CONFIG__;
@@ -73,6 +78,10 @@ let draftSelection = null, sharedSelection = null, dragging = null, regionMode =
 let sessionQueue = Promise.resolve(), contextQueue = Promise.resolve(), contextPending = false, contextPublished = false;
 let shareBusy = false, questionTask = null, questionUncertain = false, noteRefreshing = false, noteLoadVersion = 0;
 let heartbeat, savePromise;
+const translationProviders={baidu:'百度翻译',azure:'Azure Translator',deepl:'DeepL','openai-compatible':'自定义（OpenAI 兼容）'};
+const translationDefaultEndpoints={azure:'https://api.cognitive.microsofttranslator.com/translate',deepl:'https://api-free.deepl.com/v2/translate','openai-compatible':''};
+let selectedTranslationProvider='baidu',translationActiveProvider=null;
+let translationSettings=null, translationGeneration=0, translationTask=null, translationSettingsGeneration=0, translationSettingsBusy=false, translationSettingsWriting=false, translationFocus=null;
 const pending = new Map();
 try { const origin = new URL(document.referrer).origin; if (origin !== 'null') { hostOrigin = origin; originLocked = true; } } catch {}
 function status(text) { elements.status.textContent = text; }
@@ -84,12 +93,12 @@ function request(method, params, cleanup = false) {
   if (disposed || (closing && !cleanup)) return Promise.reject(new Error('阅读面板正在关闭。'));
   return new Promise((resolve,reject) => {
     const id = nextId++;
-    const timeout = method === 'tools/call' && params.name === 'paperdesk_reader_page' ? 50000 : 15000;
+    const timeout = method === 'tools/call' && params.name === 'paperdesk_reader_page' ? 50000 : method === 'tools/call' && params.name === 'paperdesk_reader_translation' && params.arguments?.operation === 'translate' ? 40000 : 15000;
     const timer = setTimeout(() => { pending.delete(id); const cause=new Error('宿主没有及时响应。');cause.uncertain=true;reject(cause); }, timeout);
     pending.set(id,{resolve,reject,timer}); send({jsonrpc:'2.0',id,method,params});
   });
 }
-const toolNames = new Set(['paperdesk_list_documents','paperdesk_reader_page','paperdesk_reader_get_notes','paperdesk_reader_save_notes','paperdesk_reader_toc','paperdesk_reader_session','paperdesk_reader_close','paperdesk_get_context','paperdesk_reader_library','paperdesk_reader_organize','paperdesk_reader_theme']);
+const toolNames = new Set(['paperdesk_list_documents','paperdesk_reader_page','paperdesk_reader_get_notes','paperdesk_reader_save_notes','paperdesk_reader_toc','paperdesk_reader_session','paperdesk_reader_close','paperdesk_get_context','paperdesk_reader_library','paperdesk_reader_organize','paperdesk_reader_theme','paperdesk_reader_translation']);
 async function tool(name,args,cleanup=false) {
   if (!capabilities.serverTools) throw new Error('当前宿主未提供面板工具能力，请在对话中调用纸间工具，或在浏览器打开阅读器。');
   if (!toolNames.has(name)) throw new Error('不支持的阅读操作。');
@@ -97,8 +106,9 @@ async function tool(name,args,cleanup=false) {
   if (result?.isError) {
     const content = result.content?.find(item=>item.type==='text')?.text;
     let parsed; try { parsed=JSON.parse(content); } catch {}
-    const failure = new Error(result.structuredContent?.error || parsed?.error || content || '纸间请求失败。');
-    failure.status = result.structuredContent?.status || parsed?.status;
+    const translationFailure=name==='paperdesk_reader_translation'?result._meta?.translation:null;
+    const failure = new Error(translationFailure?.error || result.structuredContent?.error || parsed?.error || content || '纸间请求失败。');
+    failure.status = translationFailure?.status || result.structuredContent?.status || parsed?.status;
     throw failure;
   }
   return result;
@@ -130,7 +140,92 @@ function updateControls() {
   for(const name of ['confirm-share','explain-selection','summarize-selection','custom-question'])elements[name].disabled=selectionBusy;
   elements['send-question'].disabled=selectionBusy||!elements['reading-question'].value.trim();
   $('ask-shared').disabled=!sharedSelection||closing||shareBusy||Boolean(questionTask);
-  updateLink();renderLibraryControls();
+  updateLink();renderLibraryControls();renderTranslationControls();
+}
+function renderTranslationControls() {
+  $('translation-settings-open').disabled=!capabilities.serverTools||closing;
+  const unsupported=draftSelection?.kind!=='text';
+  $('translate-selection').disabled=unsupported||Boolean(translationTask)||closing;
+  for(const name of ['translation-from','translation-to'])$(name).disabled=unsupported||Boolean(translationTask)||closing;
+  $('translation-card-title').textContent='选区翻译'+(translationProviders[translationActiveProvider]?' · '+translationProviders[translationActiveProvider]:'');
+  $('translation-hint').textContent=unsupported?'扫描区域暂不支持翻译；不进行 OCR。文字页可展开“本页文字”，选中一小段后预览。':'点击后仅将此处选中的文字发送给当前启用的翻译服务，结果只显示在本面板，不发送到当前对话或写入笔记。';
+  $('translation-provider').disabled=translationSettingsWriting||Boolean(translationTask)||closing;
+  for(const name of ['translation-app-id','translation-api-key','translation-tier','translation-limit','translation-endpoint','translation-deepl','translation-region','translation-model','translation-settings-save','translation-clear'])$(name).disabled=translationSettingsBusy||Boolean(translationTask)||closing;
+  $('translation-clear').disabled=translationSettingsBusy||Boolean(translationTask)||closing||!translationSettings?.configured;
+}
+function renderTranslationFields() {
+  const provider=selectedTranslationProvider;
+  $('translation-app-id-field').hidden=provider!=='baidu';$('translation-tier-field').hidden=provider!=='baidu';$('translation-endpoint-field').hidden=!['azure','openai-compatible'].includes(provider);$('translation-deepl-field').hidden=provider!=='deepl';$('translation-region-field').hidden=provider!=='azure';$('translation-model-field').hidden=provider!=='openai-compatible';
+  $('translation-limit').max=String(provider==='baidu'?($('translation-tier').value==='advanced'?1000000:50000):10000000);
+  $('translation-provider-help').textContent=provider==='baidu'?'百度额度取决于实际开通的接口版本。本机上限可调低，0 表示暂停新的发送。':provider==='azure'?'Azure 免费额度仅适用于实际开通的 F0 资源，请在控制台核对。这里的字符上限只是本机保护，不代表免费额度。':provider==='deepl'?'DeepL 当前试用额度为总量 100 万字符，不是每月重置；API Free 与 Pro 使用不同接口。请以实际账户额度和计费为准。':'填写完整的 /chat/completions 地址及服务商实际支持的模型名称，不猜测模型。外部地址须为 HTTPS，仅本机允许 HTTP；更换主机须填写新密钥。价格由所用服务决定，本机字符上限不是费用预算。';
+}
+function resetTranslation() {
+  translationGeneration++;translationTask=null;$('translation-output').value='';$('translation-result').hidden=true;$('translation-status').textContent='';$('translation-error').hidden=true;
+}
+function acceptTranslationSettings(value,display=false) {
+  if(!value||!Object.hasOwn(translationProviders,value.provider)||typeof value.configured!=='boolean'||!['standard','advanced'].includes(value.tier))throw new Error('翻译设置读取不完整，请重试。');
+  translationActiveProvider=value.activeProvider||value.provider;
+  if(display){selectedTranslationProvider=value.provider;$('translation-provider').value=value.provider;$('translation-tier').value=value.tier;$('translation-limit').value=String(value.monthlyLimit);$('translation-endpoint').value=value.endpoint||translationDefaultEndpoints[value.provider]||'';$('translation-deepl').value=value.endpoint||translationDefaultEndpoints.deepl;$('translation-region').value=value.region||'';$('translation-model').value=value.model||'';renderTranslationFields();}
+  if(display||value.provider===selectedTranslationProvider){
+    translationSettings=value;
+    $('translation-account').textContent='当前使用：'+translationProviders[translationActiveProvider]+'；查看：'+translationProviders[value.provider]+' · '+(value.configured?'已配置'+(value.appIdHint?' · '+value.appIdHint:''):'未配置');
+    $('translation-usage').textContent=(value.month||'本月')+' 本机估算：已用 '+value.usedCharacters+' 字符，剩余 '+value.remainingCharacters+' 字符；单次最多 '+value.maxCharacters+' 字符、'+value.maxBytes+' UTF-8 字节。用量不包含其他应用或设备；实际额度、免费条件和计费以服务商控制台为准。';
+  }
+  renderTranslationControls();return value;
+}
+async function loadTranslationProfile(provider) {
+  const generation=++translationSettingsGeneration;translationSettings=null;if(provider){selectedTranslationProvider=provider;$('translation-tier').value='standard';$('translation-limit').value=provider==='azure'?'2000000':'50000';$('translation-endpoint').value=translationDefaultEndpoints[provider]||'';$('translation-deepl').value=translationDefaultEndpoints.deepl;$('translation-region').value='';$('translation-model').value='';}
+  $('translation-settings-error').hidden=true;$('translation-settings-status').textContent='正在读取设置…';$('translation-app-id').value='';$('translation-api-key').value='';translationSettingsBusy=true;renderTranslationFields();renderTranslationControls();
+  try{const result=await tool('paperdesk_reader_translation',{operation:'status',...(provider?{provider}:{})});if(generation!==translationSettingsGeneration||closing)return;acceptTranslationSettings(metadata(result,'translationSettings'),true);$('translation-settings-status').textContent='保存后启用所选服务，不会发送测试请求。';}
+  catch(cause){if(generation===translationSettingsGeneration&&!closing){$('translation-settings-error').textContent=cause.message;$('translation-settings-error').hidden=false;$('translation-settings-status').textContent='';}}
+  finally{if(generation===translationSettingsGeneration){translationSettingsBusy=false;translationSettingsWriting=false;renderTranslationControls();}}
+}
+function openTranslationSettings() {
+  if(closing)return;translationFocus=document.activeElement;$('translation-settings-wrap').hidden=false;$('translation-settings-close').focus();return loadTranslationProfile();
+}
+function closeTranslationSettings() {
+  translationSettingsGeneration++;$('translation-settings-wrap').hidden=true;$('translation-app-id').value='';$('translation-api-key').value='';translationSettingsBusy=false;translationSettingsWriting=false;renderTranslationControls();if(translationFocus?.isConnected)translationFocus.focus();
+}
+async function changeTranslationSettings(operation) {
+  if(translationSettingsBusy||translationTask||closing)return;
+  const generation=translationSettingsGeneration,provider=selectedTranslationProvider,args={operation,provider};
+  const fail=message=>{$('translation-settings-error').textContent=message;$('translation-settings-error').hidden=false;};
+  if(operation==='configure'){
+    const limit=Number($('translation-limit').value),tier=$('translation-tier').value,maximum=provider==='baidu'?(tier==='advanced'?1000000:50000):10000000;
+    if(!$('translation-limit').value||!Number.isSafeInteger(limit)||limit<0||limit>maximum){fail('请填写不超过 '+maximum+' 的非负整数字符上限。');return;}
+    args.monthlyLimit=limit;const apiKey=$('translation-api-key').value.trim();if(apiKey.length>4096){fail('API Key 超过 4096 个字符，请核对完整凭据。');return;}if(apiKey)args.apiKey=apiKey;
+    if(provider==='baidu'){args.tier=tier;const appId=$('translation-app-id').value.trim();if(appId)args.appId=appId;}
+    else{
+      args.endpoint=(provider==='deepl'?$('translation-deepl').value:$('translation-endpoint').value).trim();
+      let url;try{url=new URL(args.endpoint);}catch{fail('请输入有效的完整 API 地址。');return;}
+      if(url.username||url.password||url.hash||!['https:','http:'].includes(url.protocol)||(url.protocol==='http:'&&!['127.0.0.1','localhost','[::1]'].includes(url.hostname))){fail('外部 API 必须使用不含账号密码的 HTTPS 地址，仅本机允许 HTTP。');return;}
+      if(provider==='openai-compatible'&&!url.pathname.endsWith('/chat/completions')){fail('自定义地址必须包含完整的 /chat/completions 路径。');return;}
+      if(translationSettings?.configured&&translationSettings.endpoint&&new URL(translationSettings.endpoint).origin!==url.origin&&!apiKey){fail('更换服务主机后请填写新密钥，不会把原密钥发送给新主机。');return;}
+      if(provider==='azure')args.region=$('translation-region').value.trim();
+      if(provider==='openai-compatible'){args.model=$('translation-model').value.trim();if(!args.model){fail('请填写服务商实际提供的模型名称。');return;}}
+    }
+  }
+  translationSettingsBusy=true;translationSettingsWriting=true;$('translation-settings-error').hidden=true;$('translation-settings-status').textContent=operation==='clear'?'正在清除所选服务的本机凭据…':'正在保存本机设置…';renderTranslationControls();
+  try{const result=await tool('paperdesk_reader_translation',args);if(generation!==translationSettingsGeneration||closing)return;acceptTranslationSettings(metadata(result,'translationSettings'),true);$('translation-app-id').value='';$('translation-api-key').value='';$('translation-settings-status').textContent=operation==='clear'?'所选服务的本机凭据已清除，其他配置和用量记录保留。':'翻译设置已保存并启用，未发送测试请求。';}
+  catch(cause){if(generation===translationSettingsGeneration&&!closing){$('translation-settings-error').textContent=cause.message;$('translation-settings-error').hidden=false;$('translation-settings-status').textContent='未确认设置保存成功，请核对后再试。';}}
+  finally{if(generation===translationSettingsGeneration){translationSettingsBusy=false;translationSettingsWriting=false;renderTranslationControls();}}
+}
+async function translateSelection() {
+  if(closing||translationTask||draftSelection?.kind!=='text'||!current)return;
+  const owner={generation:translationGeneration,documentId:current.id,page,quote:draftSelection.text,title:current.title||current.filename};translationTask=owner;$('translation-error').hidden=true;$('translation-status').textContent='正在检查本机翻译设置…';renderTranslationControls();
+  const valid=()=>translationTask===owner&&owner.generation===translationGeneration&&current?.id===owner.documentId&&page===owner.page&&!elements['preview-wrap'].hidden&&!closing;
+  try{
+    const statusResult=await tool('paperdesk_reader_translation',{operation:'status'});if(!valid())return;
+    const settings=acceptTranslationSettings(metadata(statusResult,'translationSettings'));
+    if(!settings.configured)throw new Error('请先打开“翻译设置”配置并启用翻译服务。');
+    if(Array.from(owner.quote).length>settings.maxCharacters||new TextEncoder().encode(owner.quote).length>settings.maxBytes)throw new Error('选区超过单次翻译限制，请缩小到 '+settings.maxCharacters+' 字符及 '+settings.maxBytes+' UTF-8 字节以内。');
+    const from=$('translation-from').value,to=$('translation-to').value;owner.provider=settings.provider;$('translation-status').textContent='正在通过 '+translationProviders[owner.provider]+' 翻译这段选中文字…';
+    const result=await tool('paperdesk_reader_translation',{operation:'translate',text:owner.quote,from,to});if(!valid())return;
+    const translated=metadata(result,'translation');if(typeof translated.translatedText!=='string')throw new Error('翻译结果不完整，请重试。');
+    acceptTranslationSettings(metadata(result,'translationSettings'));
+    $('translation-origin').textContent=owner.title+' · PDF 第 '+owner.page+' 页 · '+(translationProviders[translated.provider||owner.provider]||'翻译服务');$('translation-output').value=translated.translatedText;$('translation-result').hidden=false;$('translation-status').textContent=translated.cached?'已读取本机缓存译文。':'翻译完成，仅显示在本面板。';
+  }catch(cause){if(valid()){$('translation-error').textContent=cause.message;$('translation-error').hidden=false;$('translation-status').textContent='翻译未完成。已有译文和笔记未被改写。';}}
+  finally{if(translationTask===owner){translationTask=null;renderTranslationControls();}}
 }
 function checkedLibrary(value) {
   if(!value||!themes.has(value.theme)||!Array.isArray(value.folders)||value.folders.some(folder=>!UUID.test(folder.id||'')||typeof folder.name!=='string'||!Number.isSafeInteger(folder.documentCount)||folder.documentCount<0))throw new Error('文献分类数据不完整，请重新读取。');
@@ -243,7 +338,7 @@ function inject(payload,version,cleanup=false) {
   contextQueue=task.catch(()=>{});return task.finally(()=>{if(version===contextVersion)contextPending=false;});
 }
 function resetSharing({publish=true,cleanup=false}={}) {
-  contextVersion++;draftSelection=null;sharedSelection=null;dragging=null;elements['region-box'].hidden=true;elements['preview-wrap'].hidden=true;elements['share-state'].hidden=true;
+  resetTranslation();contextVersion++;draftSelection=null;sharedSelection=null;dragging=null;elements['region-box'].hidden=true;elements['preview-wrap'].hidden=true;elements['share-state'].hidden=true;
   questionUncertain=false;elements['question-fallback'].hidden=true;
   const work=[];if(publish&&current)work.push(queueSession(snapshot(),cleanup));
   if(contextPublished||contextPending)work.push(inject({content:[]},contextVersion,cleanup));
@@ -359,7 +454,7 @@ async function crop(rect) {
   }throw new Error('选区图片过大，请框选较小的区域。');
 }
 function preview(selection) {
-  draftSelection=selection;elements['preview-origin'].textContent='PDF 第 '+page+' 页 · '+(selection.kind==='region'?'区域':'引文');elements['preview-image'].hidden=selection.kind!=='region';elements['preview-quote'].hidden=selection.kind!=='text';
+  resetTranslation();draftSelection=selection;elements['preview-origin'].textContent='PDF 第 '+page+' 页 · '+(selection.kind==='region'?'区域':'引文');elements['preview-image'].hidden=selection.kind!=='region';elements['preview-quote'].hidden=selection.kind!=='text';
   if(selection.kind==='region')elements['preview-image'].src=selection.preview;else elements['preview-quote'].textContent=selection.text;
   questionUncertain=false;elements['question-editor'].hidden=true;elements['custom-question'].setAttribute('aria-expanded','false');elements['reading-question'].value='';elements['question-status'].textContent='';elements['question-fallback'].hidden=true;
   elements['preview-wrap'].hidden=false;updateControls();elements['confirm-share'].focus();
@@ -433,7 +528,7 @@ async function applyDeepLink(link) {
   try{let doc=documents.find(item=>item.id===link.documentId);while(!doc&&nextOffset!==null){await loadLibrary();doc=documents.find(item=>item.id===link.documentId);}if(!doc)throw new Error('这篇文献不在当前资料库中。');if(link.page>doc.pageCount)throw new Error('指定页码超出文献范围。');await openDocument(doc,link.page);}catch(cause){error(cause.message,()=>applyDeepLink(link));}
 }
 async function teardown() {
-  if(closing||disposed)return;closing=true;clearInterval(heartbeat);documentVersion++;pageVersion++;updateControls();
+  if(closing||disposed)return;closing=true;closeTranslationSettings();resetTranslation();clearInterval(heartbeat);documentVersion++;pageVersion++;updateControls();
   try{await resetSharing({cleanup:true});const task=sessionQueue.then(()=>tool('paperdesk_reader_close',{sessionId},true));sessionQueue=task.catch(()=>{});await task;await contextQueue;}catch{}
   disposed=true;for(const task of pending.values()){clearTimeout(task.timer);task.reject(new Error('阅读面板已关闭。'));}pending.clear();
 }
@@ -450,6 +545,22 @@ window.addEventListener('message',event=>{
   }else if(message.method==='ping'){send({jsonrpc:'2.0',id:message.id,result:{}});}
   else if(message.method==='ui/resource-teardown'){teardown().finally(()=>send({jsonrpc:'2.0',id:message.id,result:{}}));}
 });
+$('translation-settings-open').addEventListener('click',openTranslationSettings);
+$('translation-settings-close').addEventListener('click',closeTranslationSettings);
+$('translation-settings-save').addEventListener('click',()=>changeTranslationSettings('configure'));
+$('translation-clear').addEventListener('click',()=>changeTranslationSettings('clear'));
+$('translate-selection').addEventListener('click',translateSelection);
+$('translation-provider').addEventListener('change',()=>loadTranslationProfile($('translation-provider').value));
+$('translation-tier').addEventListener('change',()=>{const maximum=$('translation-tier').value==='advanced'?1000000:50000,previous=Number($('translation-limit').value);$('translation-limit').max=String(maximum);$('translation-limit').value=String($('translation-limit').value!==''&&Number.isSafeInteger(previous)&&previous>=0?Math.min(previous,maximum):maximum);});
+for(const id of ['translation-app-id','translation-api-key','translation-limit','translation-endpoint','translation-region','translation-model'])$(id).addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();changeTranslationSettings('configure');}});
+document.addEventListener('keydown',event=>{
+  if($('translation-settings-wrap').hidden)return;
+  if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();closeTranslationSettings();return;}
+  if(event.key==='Tab'){
+    const controls=Array.from($('translation-settings-wrap').querySelectorAll('button,input,select')).filter(element=>!element.disabled&&!element.closest('[hidden]')),first=controls[0],last=controls.at(-1);
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+  }
+},true);
 $('library-toggle').addEventListener('click',()=>{elements.library.hidden=!elements.library.hidden;elements['library-toggle'].setAttribute('aria-expanded',String(!elements.library.hidden));elements['library-toggle'].setAttribute('aria-label',elements.library.hidden?'展开文献栏':'收起文献栏');});
 $('library-more').addEventListener('click',()=>loadLibrary(true).catch(()=>{}));
 $('reader-theme').addEventListener('change',()=>{const theme=$('reader-theme').value;$('reader-theme').value=library.theme;if(themes.has(theme)&&theme!==library.theme)organizeLibrary('paperdesk_reader_theme',{theme});});
@@ -505,8 +616,8 @@ window.addEventListener('resize',()=>{if(dragging){dragging=null;elements['regio
 window.addEventListener('beforeunload',event=>{if(dirty()){event.preventDefault();event.returnValue='';}});
 async function initialize() {
   hideError();clearInterval(heartbeat);status('正在连接纸间…');
-  try{const result=await request('ui/initialize',{appInfo:{name:'paperdesk-reader',version:'0.8.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']},protocolVersion:'2026-01-26'});
-    capabilities=result.hostCapabilities||{};send({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}});
+  try{const result=await request('ui/initialize',{appInfo:{name:'paperdesk-reader',version:'0.9.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']},protocolVersion:'2026-01-26'});
+    capabilities=result.hostCapabilities||{};renderTranslationControls();send({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}});
     if(!capabilities.serverTools){elements['library-list'].replaceChildren();const message='当前宿主没有面板工具能力。请在对话中使用纸间工具，或在浏览器继续阅读。';status(message);error(message,initialize);showLink();return;}
     await loadLibrary(true);ready=true;status('选择一篇文献开始阅读。页面与笔记只在面板中显示，选区需确认后才共享。');
     heartbeat=setInterval(()=>{if(current&&!closing)announceSession();},10000);

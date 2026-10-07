@@ -84,14 +84,14 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
 
   await t.test('initialization discovers the exact tool set, read/write hints and UI resource', async () => {
     assert.equal(client.getServerVersion().name, 'paperdesk');
-    assert.equal(client.getServerVersion().version, '0.8.0');
-    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v8.html');
+    assert.equal(client.getServerVersion().version, '0.9.0');
+    assert.equal(READER_RESOURCE, 'ui://paperdesk/reader-v9.html');
     for (const file of ['plugins/paperdesk/plugin.json', 'plugins/paperdesk/.codex-plugin/plugin.json']) {
-      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.8.0');
+      assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.9.0');
     }
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme'].sort());
-    assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 9);
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme', 'paperdesk_reader_translation'].sort());
+    assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 10);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_append_note').annotations.readOnlyHint, false);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_get_notes').annotations.readOnlyHint, true);
     const open = tools.find(tool => tool.name === 'paperdesk_open_reader');
@@ -308,4 +308,82 @@ test('tiny text windows advance across astral characters without splitting them'
     combined += part.text; offset = part.nextOffset;
   } while (offset !== null);
   assert.equal(combined, '😀文𠮷');
+});
+
+test('translation adapter is app-only, maps strict operations and never exposes private data to model content', async t => {
+  const secret = 'TEST_ONLY_KEY_8fe1', account = 'TEST_ONLY_ACCOUNT_7', quote = 'PRIVATE_TRANSLATION_QUOTE';
+  const defaults = { configured: false, appIdHint: '', tier: 'standard', monthlyLimit: 50000, month: '2026-10', usedCharacters: 0, remainingCharacters: 50000, maxCharacters: 1000, maxBytes: 6000 };
+  const profiles = Object.fromEntries(['baidu', 'azure', 'deepl', 'openai-compatible'].map(provider => [provider, { ...defaults, provider }])); let activeProvider = 'baidu';
+  const received = []; let fail = false;
+  const server = createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+    response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/api/plugin/status') { response.end(JSON.stringify({ service: 'paperdesk', apiVersion: 1, instanceId: 'test', libraryId })); return; }
+    received.push({ path: request.url, method: request.method, body });
+    if (fail) { response.statusCode = 502; response.end(JSON.stringify({ error: `${secret} ${quote} upstream private failure` })); return; }
+    const url = new URL(request.url, 'http://localhost');
+    const selected = body?.provider || url.searchParams.get('provider') || activeProvider;
+    if (url.pathname === '/api/translation/settings') {
+      if (request.method === 'PUT') { profiles[selected] = { ...profiles[selected], configured: true, appIdHint: 'TEST…7', tier: body.tier || 'standard', monthlyLimit: body.monthlyLimit, endpoint: body.endpoint, region: body.region, model: body.model }; activeProvider = selected; }
+      if (request.method === 'DELETE') profiles[selected] = { ...profiles[selected], configured: false, appIdHint: '' };
+      const settings = { ...profiles[selected], activeProvider };
+      // Deliberately include unexpected private fields: the adapter must pick
+      // only the published masked settings, not forward arbitrary API extras.
+      response.end(JSON.stringify({ settings: { ...settings, apiKey: secret, appId: account } })); return;
+    }
+    if (request.url === '/api/translation' && request.method === 'POST') {
+      response.end(JSON.stringify({ translation: { provider: activeProvider, translatedText: 'PRIVATE_RESULT', from: body.from, to: body.to, cached: false, characters: [...body.text].length, unexpectedSecret: secret }, settings: { ...profiles[activeProvider], activeProvider } })); return;
+    }
+    response.statusCode = 404; response.end('{}');
+  });
+  const baseUrl = await listen(server); t.after(() => stop(server));
+  const client = await clientFor(t, { baseUrl, libraryId });
+  const item = (await client.listTools()).tools.find(tool => tool.name === 'paperdesk_reader_translation');
+  assert.deepEqual(item._meta.ui.visibility, ['app']); assert.equal(item._meta['openai/visibility'], 'private');
+  assert.equal(item.annotations.readOnlyHint, false); assert.equal(item.annotations.openWorldHint, true); assert.equal(item.annotations.idempotentHint, false);
+  const uiOnly = result => {
+    assert.equal(result.structuredContent, undefined);
+    assert.doesNotMatch(JSON.stringify(result.content), /TEST_ONLY|PRIVATE_TRANSLATION|PRIVATE_RESULT|upstream/);
+    assert.ok(!JSON.stringify(result).includes(secret)); assert.ok(!JSON.stringify(result).includes(account));
+    return result;
+  };
+  const status = uiOnly(await call(client, item.name, { operation: 'status' })); assert.equal(status._meta.translationSettings.configured, false);
+  const configured = uiOnly(await call(client, item.name, { operation: 'configure', appId: account, apiKey: secret, tier: 'standard', monthlyLimit: 40000 }));
+  assert.equal(configured._meta.translationSettings.configured, true);
+  assert.deepEqual(received.at(-1), { path: '/api/translation/settings', method: 'PUT', body: { appId: account, apiKey: secret, tier: 'standard', monthlyLimit: 40000 } });
+  assert.equal(received.some(request => request.path === '/api/translation'), false, 'Saving settings must not translate or probe the provider');
+  await call(client, item.name, { operation: 'configure', tier: 'advanced', monthlyLimit: 50000 });
+  assert.deepEqual(received.at(-1).body, { tier: 'advanced', monthlyLimit: 50000 }, 'Omitted credentials stay omitted');
+  const result = uiOnly(await call(client, item.name, { operation: 'translate', text: quote, from: 'en', to: 'zh' }));
+  assert.equal(result._meta.translation.translatedText, 'PRIVATE_RESULT'); assert.equal(result._meta.translation.unexpectedSecret, undefined);
+  assert.deepEqual(received.at(-1), { path: '/api/translation', method: 'POST', body: { text: quote, from: 'en', to: 'zh' } });
+  fail = true;
+  const failed = uiOnly(await call(client, item.name, { operation: 'translate', text: quote, from: 'auto', to: 'zh' }));
+  assert.equal(failed.isError, true); assert.equal(failed._meta.translation.status, 502); assert.match(failed._meta.translation.error, /未完成/);
+  fail = false;
+  assert.equal(uiOnly(await call(client, item.name, { operation: 'status' }))._meta.translationSettings.configured, true);
+  assert.equal(uiOnly(await call(client, item.name, { operation: 'clear' }))._meta.translationSettings.configured, false);
+  assert.deepEqual(received.at(-1), { path: '/api/translation/settings', method: 'DELETE', body: undefined });
+  const azureBody = { provider: 'azure', apiKey: secret, endpoint: 'https://api.cognitive.microsofttranslator.com/translate', region: 'eastasia', monthlyLimit: 2000000 };
+  const azure = uiOnly(await call(client, item.name, { operation: 'configure', ...azureBody }));
+  assert.equal(azure._meta.translationSettings.activeProvider, 'azure'); assert.equal(azure._meta.translationSettings.region, 'eastasia');
+  assert.deepEqual(received.at(-1), { path: '/api/translation/settings', method: 'PUT', body: azureBody });
+  const baiduProfile = uiOnly(await call(client, item.name, { operation: 'status', provider: 'baidu' }));
+  assert.equal(baiduProfile._meta.translationSettings.provider, 'baidu'); assert.equal(baiduProfile._meta.translationSettings.activeProvider, 'azure');
+  assert.equal(received.at(-1).path, '/api/translation/settings?provider=baidu');
+  await call(client, item.name, { operation: 'configure', provider: 'deepl', apiKey: secret, endpoint: 'https://api-free.deepl.com/v2/translate', monthlyLimit: 50000 });
+  const customBody = { provider: 'openai-compatible', apiKey: secret.repeat(60), endpoint: 'https://translator.example.invalid/v1/chat/completions', model: 'vendor/actual-model-name', monthlyLimit: 75000 };
+  const custom = uiOnly(await call(client, item.name, { operation: 'configure', ...customBody }));
+  assert.notEqual(custom.isError, true); assert.equal(custom._meta.translationSettings.model, customBody.model); assert.equal(custom._meta.translationSettings.endpoint, customBody.endpoint);
+  assert.deepEqual(received.at(-1).body, customBody); assert.equal(custom._meta.translationSettings.activeProvider, 'openai-compatible');
+  const customResult = uiOnly(await call(client, item.name, { operation: 'translate', text: quote, from: 'auto', to: 'en' }));
+  assert.equal(customResult._meta.translation.provider, 'openai-compatible');
+  await call(client, item.name, { operation: 'clear', provider: 'azure' }); assert.equal(received.at(-1).path, '/api/translation/settings?provider=azure');
+  assert.equal((await call(client, item.name, { operation: 'status', provider: 'deepl' }))._meta.translationSettings.configured, true);
+  const count = received.length;
+  for (const args of [{ operation: 'status', apiKey: secret }, { operation: 'translate', text: quote }, { operation: 'configure', tier: 'standard' }, { operation: 'clear', extra: secret }, { operation: 'status', provider: secret }, { operation: 'translate', text: quote, from: 'auto', to: 'zh', endpoint: 'https://wrong.example.invalid' }]) {
+    const invalid = await call(client, item.name, args); assert.equal(invalid.isError, true); assert.ok(!JSON.stringify(invalid).includes(secret));
+  }
+  assert.equal(received.length, count, 'Invalid operation arguments must not reach the service');
 });
