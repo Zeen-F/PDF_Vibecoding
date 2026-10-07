@@ -89,6 +89,10 @@ npm start
 - [Codex 插件](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.4/docs/codex-plugin.md)
 - [反馈问题](https://github.com/Zeen-F/PDF_Vibecoding/issues) · [贡献约定](CONTRIBUTING.md)
 
+## 文件安排
+
+源码放在 `src/`、`server/` 等目录；说明集中在 `docs/`，测试放在 `tests/`。本机安装包放在 `release/`，验收材料集中在忽略的 `.local/`；文献库不会进入 Git。详细目录与本机整理规则见 [仓库与工作区安排](docs/repository-layout.md)。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。第三方依赖保留各自的许可证。
