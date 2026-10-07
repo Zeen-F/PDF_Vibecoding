@@ -258,8 +258,15 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     throw error;
   }
   const app = express();
+  let closed = false;
+  let closing;
+  function acceptingRequests(_req, _res, next) {
+    if (closed) return next(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
+    next();
+  }
   app.disable('x-powered-by');
   app.use(localRequestOnly);
+  app.use(acceptingRequests);
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -269,6 +276,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   // Only reader snapshots carry a transient PNG. Keep the existing note limit.
   app.use('/api/reader-sessions', express.json({ limit: '2.5mb' }));
   app.use(express.json({ limit: '2mb' }));
+  app.use(acceptingRequests);
   const upload = multer({
     storage: multer.diskStorage({ destination: incomingDir, filename: (_req, _file, callback) => callback(null, `${randomUUID()}.upload`) }),
     limits: { files: 1, fields: 0, parts: 1 },
@@ -284,6 +292,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   }
   let importQueue = Promise.resolve();
   function queueImport(work) {
+    if (closed) return Promise.reject(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
     const pending = importQueue.then(work);
     importQueue = pending.catch(() => {});
     return pending;
@@ -295,7 +304,9 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   const touchDocument = db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?');
   const readerRenderer = createReaderRenderer();
   const tocCache = new Map();
+  const pendingToc = new Set();
   function documentToc(doc) {
+    if (closed) return Promise.reject(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
     if (tocCache.has(doc.id)) {
       const cached = tocCache.get(doc.id);
       tocCache.delete(doc.id);
@@ -309,6 +320,9 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
         throw new HttpError(422, '暂时无法读取这份 PDF 的目录，请检查原始文件后重试。');
       }
     })();
+    // Cache eviction must not make a still-running task invisible to close().
+    pendingToc.add(pending);
+    void pending.then(() => pendingToc.delete(pending), () => pendingToc.delete(pending));
     tocCache.set(doc.id, pending);
     if (tocCache.size > 8) tocCache.delete(tocCache.keys().next().value);
     void pending.catch(() => { if (tocCache.get(doc.id) === pending) tocCache.delete(doc.id); });
@@ -561,6 +575,31 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     console.error('Paperdesk request failed:', error);
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
-  let closed = false;
-  return { app, close() { if (!closed) { closed = true; pluginApi.close(); tocCache.clear(); db.close(); } return Promise.all([translationApi.close(), readerRenderer.close()]); } };
+  return {
+    app,
+    close() {
+      if (closing) return closing;
+      closed = true;
+      pluginApi.close();
+      closing = (async () => {
+        try {
+          // Forced HTTP disconnection does not cancel asynchronous PDF work.
+          // Keep SQLite open until every admitted import and TOC task settles.
+          const [resources] = await Promise.all([
+            Promise.allSettled([
+              Promise.resolve().then(() => translationApi.close()),
+              Promise.resolve().then(() => readerRenderer.close()),
+            ]),
+            Promise.allSettled([importQueue, ...pendingToc]),
+          ]);
+          const failures = resources.filter(result => result.status === 'rejected');
+          if (failures.length) throw new AggregateError(failures.map(result => result.reason), '本机阅读资源未能完整关闭。');
+        } finally {
+          tocCache.clear();
+          db.close();
+        }
+      })();
+      return closing;
+    },
+  };
 }

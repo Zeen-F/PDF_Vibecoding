@@ -1,8 +1,10 @@
 {
   "name": "paperdesk",
-  "version": "1.0.1",
+  "version": "1.1.0-beta.1",
+  "description": "A local PDF reading, annotation and notes workspace",
   "private": true,
   "type": "module",
+  "main": "desktop/main.mjs",
   "engines": {
     "node": ">=24.0.0"
   },
@@ -16,7 +18,12 @@
     "check": "npm run test:api && npm run build && npm run test:browser",
     "predev": "node scripts/prepare-assets.mjs",
     "plugin:setup": "node scripts/setup-plugin.mjs",
-    "plugin:install": "node scripts/setup-plugin.mjs --install"
+    "plugin:install": "node scripts/setup-plugin.mjs --install",
+    "desktop": "npm run build && electron .",
+    "desktop:pack": "npm run build && node scripts/prepare-desktop-assets.mjs && electron-builder --config electron-builder.config.cjs --dir --mac --arm64 --publish never",
+    "desktop:dist": "npm run build && node scripts/prepare-desktop-assets.mjs && electron-builder --config electron-builder.config.cjs --mac dmg zip --arm64 --publish never",
+    "test:desktop": "node scripts/test-desktop.mjs",
+    "release:checksums": "node scripts/release-checksums.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -31,6 +38,8 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "electron": "44.6.0",
+    "electron-builder": "26.15.3",
     "vite": "8.3.2"
   }
 }

@@ -26,6 +26,8 @@ npm run check
 
 ## 日常使用
 
+**macOS 桌面预览版**面向 Apple Silicon Mac，提供可下载的 DMG／ZIP 安装包，内置运行环境和独立窗口。文献库保存在应用之外；可从“文件 → 打开已有文献库…”继续使用已正常停止的现有库。安装、数据与发布说明见 [桌面预览版](docs/desktop-release.md)。下面的启动方式继续适用于源码浏览器版。
+
 首次运行或更新代码后，先构建界面：
 
 ```sh
@@ -97,6 +99,7 @@ npm start
 - [项目背景与已确认需求](docs/project-context.md)
 - [架构与数据流](docs/architecture.md) · [API 契约](API.md)
 - [开发指南](docs/development.md) · [贡献流程](CONTRIBUTING.md) · [后续候选工作](docs/roadmap.md)
+- [桌面安装包与 GitHub Release](docs/desktop-release.md)
 - [1.0.1 历史验收摘要](docs/history/1.0.1.md) · [原交付验收记录](验收记录.md)
 
 源码位于 `src/` 与 `server/`，测试位于 `tests/`。界面使用 React / Vite，PDF 渲染与文字层使用 Mozilla PDF.js，存储使用 Node.js SQLite。依赖版本锁定在 `package-lock.json`。示例 PDF 是原创练习材料，不是研究论文或实验结果。

@@ -1,0 +1,88 @@
+name: macOS preview release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Verify release version and runner architecture
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.arch !== 'arm64') throw new Error('The macOS build requires an arm64 runner.');
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid release version.');
+          if (process.env.RELEASE_REF.startsWith('refs/tags/') && process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error('The release tag must match package.json.');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+      - run: npm ci
+      - run: npx playwright install chromium
+      - run: npm run check
+      - run: npm run test:desktop
+      - run: npm run desktop:dist
+      - name: Test the packaged application with an isolated library
+        run: npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app
+      - run: npm run release:checksums
+      - name: Save verified installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Paperdesk-${{ steps.version.outputs.version }}-mac-arm64
+          path: |
+            release/Paperdesk-${{ steps.version.outputs.version }}-mac-arm64.dmg
+            release/Paperdesk-${{ steps.version.outputs.version }}-mac-arm64.zip
+            release/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Create a draft prerelease for a version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > .local/release-notes.md <<NOTES
+          纸间 Paperdesk 的 macOS Apple Silicon 预览版。下载 DMG 后将 Paperdesk 拖入“应用程序”，无需另行安装 Node.js。
+
+          PDF、笔记和批注保存在本机文献库；安装包不包含个人文献。首次打开使用独立文献库，也可以从应用菜单选择已有纸间文献库。
+
+          本版本未经过 Apple 开发者签名或公证。首次打开若被 macOS 阻止，请按安装说明在“系统设置 → 隐私与安全性”中处理。
+
+          下载包含 DMG、ZIP 及 SHA256SUMS。此版本没有自动更新。
+
+          [安装与文献库说明](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/desktop-release.md)
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            "release/Paperdesk-${RELEASE_VERSION}-mac-arm64.dmg" \
+            "release/Paperdesk-${RELEASE_VERSION}-mac-arm64.zip" \
+            release/SHA256SUMS \
+            --verify-tag --draft --prerelease \
+            --title "Paperdesk ${RELEASE_VERSION}" \
+            --notes-file .local/release-notes.md

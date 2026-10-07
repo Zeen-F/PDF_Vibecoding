@@ -46,7 +46,10 @@ export function createReaderRenderer({ timeoutMs = 30_000, maxQueue = 4 } = {}) 
     active = job;
     let child;
     try {
-      child = fork(workerFile, [], { execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced' });
+      child = fork(workerFile, [], {
+        execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced',
+        env: { ...process.env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },
+      });
     } catch {
       active = null;
       settle(job, new ReaderRenderError(503, '无法启动页面渲染进程，请检查本机运行环境。'));

@@ -36,6 +36,8 @@ Mac 启动器会在缺少依赖或构建产物时准备运行；已有 `dist/` �
 
 ## 检查
 
+macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run desktop:dist` 生成，`npm run test:desktop` 检查独立窗口；打包后运行 `npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app` 再验收。所有桌面测试使用临时用户设置和文献库。构建与发布顺序见 [桌面预览版](desktop-release.md)。
+
 | 命令 | 范围 |
 | --- | --- |
 | `npm test` / `npm run test:api` | API 集成测试 |

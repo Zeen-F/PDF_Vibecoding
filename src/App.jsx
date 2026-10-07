@@ -36,6 +36,14 @@ export default function App() {
   const librarySearchPending=useRef(false);
   const [selection,setSelection]=useState(null),[modal,setModal]=useState(false),[comment,setComment]=useState(''),[color,setColor]=useState('yellow'),[annotationBusy,setAnnotationBusy]=useState(false),[focused,setFocused]=useState(null),[focusTick,setFocusTick]=useState(0);
   const [loading,setLoading]=useState(true),[opening,setOpening]=useState(false),[importing,setImporting]=useState(false),[toast,setToast]=useState(null),[dragging,setDragging]=useState(false),[exporting,setExporting]=useState(false);
+  const [desktopSwitching,setDesktopSwitching]=useState(false);
+  useEffect(()=>window.paperdeskDesktop?.onLibrarySwitch(setDesktopSwitching),[]);
+  const desktopBusy=useRef(false);desktopBusy.current=importing||opening||exporting;
+  useEffect(()=>window.paperdeskDesktop?.onFlushRequest(async()=>{
+    if(desktopBusy.current)throw new Error('导入、打开或导出尚未完成，请稍候再关闭。');
+    await notesRef.current?.flush();
+    if(notesRef.current?.isDirty())throw new Error('仍有未保存的笔记，请确认保存后重试。');
+  }),[]);
   const currentIdRef=useRef(current?.id);currentIdRef.current=current?.id;
   const input=useRef(null),notesRef=useRef(null),openToken=useRef(0),toastTimer=useRef(null),searchSequence=useRef(0);
   const notify=useCallback((message,type='error')=>{setToast({message,type});clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(null),type==='error'?11000:5000);},[]);
@@ -107,7 +115,7 @@ export default function App() {
     if(!current)return;setExporting(true);
     try{await notesRef.current?.flush();const response=await fetch(`/api/documents/${current.id}/export`);if(!response.ok){const e=await response.json();throw new Error(e.error||'导出失败');}const blob=await response.blob();const url=URL.createObjectURL(blob),a=window.document.createElement('a');a.href=url;a.download=`${current.title.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)||'paper-notes'}.md`;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);notify('Markdown 已导出，包含笔记与全部批注。','success');}catch(err){notify(`导出未完成：${err.message}`);}finally{setExporting(false);}
   };
-  return <div className="app-shell" onDragOver={e=>{if(e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)){e.preventDefault();return;}if(e.dataTransfer.types.includes('Files')){e.preventDefault();setDragging(true);}}} onDrop={e=>{e.preventDefault();setDragging(false);if(!e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)&&e.dataTransfer.files.length)importFiles(e.dataTransfer.files);}}>
+  return <div className="app-shell" inert={desktopSwitching||undefined} aria-busy={desktopSwitching} onDragOver={e=>{if(e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)){e.preventDefault();return;}if(e.dataTransfer.types.includes('Files')){e.preventDefault();setDragging(true);}}} onDrop={e=>{e.preventDefault();setDragging(false);if(!e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)&&e.dataTransfer.files.length)importFiles(e.dataTransfer.files);}}>
     <input ref={input} className="hidden-input" type="file" accept=".pdf,application/pdf" multiple aria-label="选择 PDF 文件" onChange={e=>importFiles(e.target.files)}/>
     <aside id="library-panel" className={`sidebar library-sidebar ${showLibrary?'':'collapsed'}`} aria-label="文献栏" inert={modal||!showLibrary||undefined}>
       <LibraryPanel documents={documents} currentId={current?.id} loading={loading} importing={importing} query={query} onQuery={setQuery} onClearSearch={()=>{setQuery('');setFind('');}} onImport={()=>input.current.click()} onDemo={demo} onOpen={openDocument} onRefresh={refresh} onFolderChange={folderChanged} searchCount={searching?'…':results.length} searchResults={<>{searching?<p className="library-empty">正在检索…</p>:results.length?results.map((r,i)=><button className={`search-result ${current?.id===r.documentId?'active':''}`} key={`${r.documentId}-${r.source}-${r.page}-${i}`} onClick={()=>searchJump(r)}><span className="result-source">{sourceNames[r.source]||'正文'} · 第 {r.page||1} 页</span><b>{r.title}</b><span className="result-snippet"><MarkedText text={r.snippet} query={query.trim()}/></span><ArrowUpRight className="result-arrow" size={14}/></button>):<p className="library-empty">没有找到“{query}”<small>试试更短的关键词。扫描件暂不支持全文搜索。</small></p>}{results.length>=100&&<p className="library-empty">仅显示前 100 条，请缩小搜索范围。</p>}</>}/>
