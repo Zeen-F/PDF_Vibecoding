@@ -26,6 +26,7 @@ const label = appBundle ? 'packaged' : 'source';
 const env = { ...process.env, PAPERDESK_DESKTOP_USER_DATA: userData, PAPERDESK_DESKTOP_PORT: '0' };
 delete env.ELECTRON_RUN_AS_NODE;
 let application, fixture, document, baseUrl;
+let readerSessionId;
 const errors = [];
 const originalPdf = await readFile(path.join(root, 'public/examples/reading-demo.pdf'));
 const pdfHash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -35,6 +36,10 @@ async function launch() {
   const result = await electron.launch({ executablePath, args: appBundle ? [] : [root], cwd: temporary, env, chromiumSandbox: true, timeout: 60_000 });
   application = result;
   const page = await result.firstWindow();
+  readerSessionId = null;
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/api/reader-sessions/')) readerSessionId = request.url().split('/').at(-1);
+  });
   await result.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
   await page.bringToFront();
   page.on('pageerror', error => errors.push(error.message));
@@ -98,6 +103,8 @@ try {
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到本机');
   assert.equal((await request(`/documents/${document.id}`)).document.notesZh, notes);
+  const importToast = page.getByRole('button', { name: '关闭提示', exact: true });
+  if (await importToast.isVisible()) await importToast.click();
 
   const heading = page.locator('.textLayer span').filter({ hasText: /^Reading with intention$/ });
   await expect(heading).toBeVisible();
@@ -111,6 +118,13 @@ try {
   await page.mouse.up();
   const selectionDiagnostic = await page.evaluate(() => ({ text: window.getSelection()?.toString(), focused: window.document.hasFocus(), inert: window.document.querySelector('.app-shell').inert }));
   console.log('Desktop pointer selection:', JSON.stringify(selectionDiagnostic));
+  await expect(page.locator('.selection-summary p')).toHaveText('Reading with intention');
+  assert.match(readerSessionId, /^[0-9a-f-]{36}$/);
+  await page.getByRole('button', { name: '交给 Codex', exact: true }).click();
+  await page.keyboard.press('Shift');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.locator('.codex-status')).toHaveAttribute('data-shared', 'true');
+  await expect.poll(async () => (await request(`/reader-context?sessionId=${readerSessionId}`)).selection?.text).toBe('Reading with intention');
   await page.getByRole('button', { name: '高亮并批注', exact: true }).click();
   const annotationDialog = page.getByRole('dialog', { name: /高亮与批注/ });
   await expect(annotationDialog.locator('blockquote')).toHaveText('Reading with intention');

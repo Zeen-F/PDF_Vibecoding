@@ -86,8 +86,16 @@ export function useCodexContext({ document, page, selection, notesDirty, onDocum
       if (stopped || leaving) fetch(endpoint, { method: 'DELETE', keepalive: true }).catch(() => {});
     };
     sender.current = () => { generation++; void send(); };
-    const visibility = () => { generation++; void send(); };
+    const clearShared = () => {
+      shareAttempt.current++; setShared(null);
+      latest.current = { ...latest.current, selection: null, shareId: null };
+    };
+    const visibility = () => {
+      if (window.document.visibilityState === 'hidden') clearShared();
+      generation++; void send();
+    };
     const leave = () => {
+      clearShared();
       leaving = true; generation++;
       const state = latest.current;
       if (state.document) publish(state, false);

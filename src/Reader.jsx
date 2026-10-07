@@ -95,6 +95,13 @@ export default function Reader({ document, page, onPage, annotations, selection,
     const state = latest.current;
     if (state.selectionLocked || (value && value.documentId !== state.documentId)) return;
     if (value) { pendingJump.current = null; jumpInFlight.current = null; syncPage(value.page, 'selection'); }
+    const previous = state.selection;
+    // Pointer/key release also samples when a preview action is clicked. Keep
+    // the confirmed source identity if its text and page geometry did not change.
+    if (value?.kind === 'text' && previous?.kind === 'text'
+      && value.documentId === previous.documentId && value.page === previous.page && value.quote === previous.quote
+      && value.rects.length === previous.rects.length
+      && value.rects.every((rect, index) => ['x', 'y', 'width', 'height'].every(key => Math.abs(rect[key] - previous.rects[index][key]) < 1e-8))) return;
     state.onSelection(value);
   }, [syncPage]);
   const activateTile = useCallback(number => {
