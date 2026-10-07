@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "paperdesk",
-  "version": "0.6.0",
-  "description": "连接本机纸间 PDF 阅读器，使用专用浏览器向普通 ChatGPT 提问、追问并查看回答，也可选择 Codex 讨论。",
+  "version": "0.7.0",
+  "description": "连接本机纸间 PDF 阅读器，按需共享选区并在当前 Work／Codex 对话中提问，明确要求后追加笔记。",
   "author": {
     "name": "Paperdesk"
   },
@@ -10,8 +10,8 @@
     "com.openai": {
       "interface": {
         "displayName": "纸间 Paperdesk",
-        "shortDescription": "本机 PDF 阅读与 ChatGPT 问答",
-        "longDescription": "预览选区后向普通 ChatGPT 提问，纸间管理专用浏览器，无需独立 EGO。首次登录或验证在连接窗口完成；可沿用原选区和上一问答继续提问。Codex 讨论可选，回答不自动写入笔记。",
+        "shortDescription": "本机 PDF 阅读、选区讨论与笔记",
+        "longDescription": "在原生面板阅读本机文献，预览后在当前 Work／Codex 对话中解释选区、提炼要点或自定义提问。只共享不会启动回答；聊天内容仅在明确要求时追加到单一笔记区。",
         "developerName": "Paperdesk",
         "category": "Productivity",
         "capabilities": [
@@ -20,8 +20,8 @@
         ],
         "defaultPrompt": [
           "打开纸间阅读器",
-          "打开纸间，向普通 ChatGPT 提问",
-          "在当前 Codex 对话解释我共享的选区",
+          "解释我在纸间共享的选区",
+          "提炼我共享选区的要点",
           "把刚才的回答记到这篇文献的笔记里"
         ],
         "brandColor": "#687C60"

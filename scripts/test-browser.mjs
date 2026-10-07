@@ -11,8 +11,6 @@ import { bookmarkedPdf, unverifiedContentsPdf, verifiedContentsPdf, writeLargeUp
 import { graphicsOnlyPdf } from '../tests/fixtures/scan-browser.mjs';
 import { pluginWorkflow } from '../tests/plugin.browser.mjs';
 import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
-import { chatgptHandoffWorkflow } from '../tests/chatgpt-handoff.browser.mjs';
-import { createChatgptRunnerFixture, chatgptAutomationWorkflow } from '../tests/chatgpt-automation.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -563,8 +561,7 @@ try {
   try { await access(join(root, 'dist/index.html')); }
   catch { throw new Error('Build the application first with npm run build, or run npm run check.'); }
   tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-browser-'));
-  const chatgptFixture = createChatgptRunnerFixture();
-  runtime = createApp({ dataDir: join(tempDir, 'data'), chatgptRunner: chatgptFixture.runner });
+  runtime = createApp({ dataDir: join(tempDir, 'data') });
   appServer = runtime.app.listen(0, '127.0.0.1');
   await once(appServer, 'listening');
   // Vite serves the unchanged source-based harness; the smoke test uses the production build.
@@ -586,9 +583,7 @@ try {
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
-  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, chatgptFixture });
-  await chatgptHandoffWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
-  await chatgptAutomationWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, fixture: chatgptFixture });
+  await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {
