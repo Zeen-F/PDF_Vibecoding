@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { expect } from '@playwright/test';
 import { createApp } from '../server/app.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
+import { waitForImportReady } from './browser-import.mjs';
 
 export async function vaultWorkflow({context,root,onPreview}) {
   const fixture=await mkdtemp(path.join(tmpdir(),'paperdesk-vault-browser-'));
@@ -190,6 +191,7 @@ export async function vaultWorkflow({context,root,onPreview}) {
     await expect(sidebar.getByRole('button',{name:`打开 Obsidian PDF：${freshRelative}`,exact:true})).toBeVisible();
     assert.equal((await documentList()).length,1,'Background refresh must only list newly discovered PDFs');
     await expect(page.getByRole('button',{name:'全部文献',exact:true}).locator('small')).toHaveText('3');
+    await waitForImportReady(page);
     const uploaded=page.waitForResponse(response=>response.url()===`${base}/api/documents`&&response.request().method()==='POST');
     await page.getByLabel('选择 PDF 文件').setInputFiles({name:'阅读 #示例.pdf',mimeType:'application/pdf',buffer:importedBytes});
     const uploadedResponse=await uploaded;assert.equal(uploadedResponse.status(),201);const imported=(await uploadedResponse.json()).document;
@@ -200,6 +202,7 @@ export async function vaultWorkflow({context,root,onPreview}) {
     await editor.fill('外部 PDF 导入后的笔记');await page.getByRole('button',{name:'保存',exact:true}).click();
     await expect(page.locator('.save-row [role="status"]')).toHaveText('已保存到 Obsidian 仓库');
     assert.ok((await readFile(path.join(vaultDir,'Paperdesk','Notes',`${imported.id}.md`),'utf8')).includes('外部 PDF 导入后的笔记'));
+    await waitForImportReady(page);
     await expect(page.getByLabel('PDF 第 1 页',{exact:true})).toBeVisible();
     await expect(page.locator('.pdf-paper')).not.toHaveClass(/is-loading/);
     await onPreview?.(page,'vault-imported-sidebar');
@@ -207,19 +210,23 @@ export async function vaultWorkflow({context,root,onPreview}) {
     await expect.poll(()=>page.locator('.search-result').count()).toBeGreaterThan(0);await expect(sidebarOther).toBeVisible();
     await expect(sidebar).toContainText('文件名与路径匹配');await expect(sidebarSource).toHaveCount(0);
     await page.getByRole('button',{name:'清空搜索',exact:true}).click();
+    await waitForImportReady(page);
     const duplicate=page.waitForResponse(response=>response.url()===`${base}/api/documents`&&response.request().method()==='POST');
     await page.getByLabel('选择 PDF 文件').setInputFiles({name:'同内容新名称.pdf',mimeType:'application/pdf',buffer:importedBytes});
     const duplicateResponse=await duplicate;assert.equal(duplicateResponse.status(),200);assert.equal((await duplicateResponse.json()).document.id,imported.id);
     await expect(page.locator('.toast')).toContainText('这份 PDF 已在文献库中');
+    await waitForImportReady(page);
     const dropped=await page.evaluateHandle(bytes=>{const data=new DataTransfer();data.items.add(new File([new Uint8Array(bytes)],'拖入同一文件.pdf',{type:'application/pdf'}));return data;},[...importedBytes]);
     const droppedUpload=page.waitForResponse(response=>response.url()===`${base}/api/documents`&&response.request().method()==='POST');
     await page.locator('.app-shell').dispatchEvent('drop',{dataTransfer:dropped});await dropped.dispose();
     const droppedResponse=await droppedUpload;assert.equal(droppedResponse.status(),200);assert.equal((await droppedResponse.json()).document.id,imported.id);
     await expect(page.locator('.toast')).toContainText('这份 PDF 已在文献库中');
+    await waitForImportReady(page);
     const sourceDuplicate=page.waitForResponse(response=>response.url()===`${base}/api/documents`&&response.request().method()==='POST');
     await page.getByLabel('选择 PDF 文件').setInputFiles({name:'已有资料副本.pdf',mimeType:'application/pdf',buffer:sourceBytes});
     const sourceDuplicateResponse=await sourceDuplicate;assert.equal(sourceDuplicateResponse.status(),200);assert.equal((await sourceDuplicateResponse.json()).document.id,doc.id);
     await expect(editor).toHaveValue('Paperdesk 初始理解');
+    await waitForImportReady(page);
     assert.deepEqual(await readdir(path.join(vaultDir,'Paperdesk','PDFs')),[`${imported.id}.pdf`]);
     assert.equal(hash(await readFile(sourcePdf)),hash(sourceBytes));assert.equal(hash(await readFile(otherPdf)),hash(otherBytes));
     assert.equal((await documentList()).length,2);assert.equal(uploads.length,4);

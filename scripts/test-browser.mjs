@@ -18,6 +18,7 @@ import { annotationDraftWorkflow } from '../tests/annotation-drafts.browser.mjs'
 import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
 import { vaultWorkflow } from '../tests/vault.browser.mjs';
 import { bookmarkWorkflow } from '../tests/bookmarks.browser.mjs';
+import { waitForImportReady } from '../tests/browser-import.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -70,6 +71,7 @@ async function readingWorkflow(context) {
   const library = await (await fetch(`${base}/api/documents`)).json();
   assert.deepEqual(library.documents, [], 'Browser tests must begin with an isolated empty library');
   await page.goto(base);
+  await waitForImportReady(page);
   const imported = page.waitForResponse(response => response.url() === `${base}/api/documents` && response.request().method() === 'POST');
   await page.getByLabel('选择 PDF 文件').setInputFiles(join(root, 'public/examples/reading-demo.pdf'));
   const response = await imported;
@@ -78,6 +80,7 @@ async function readingWorkflow(context) {
   assert.equal(document.pageCount, 2);
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
   await expect(page.locator('.textLayer span').first()).toBeVisible();
+  await waitForImportReady(page);
 
   const notes = '## 浏览器验收\n\n相位裕度需要结合工作条件。\n\nCompare the claim with the evidence.';
   const editor = page.getByRole('textbox', { name: '笔记', exact: true });
@@ -226,11 +229,7 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
   await page.goto(base);
 
   async function importFixture(name, buffer) {
-    // The hidden input bypasses the disabled import button. Wait for startup
-    // restoration or the previous document switch to finish before changing it.
-    const importButton = page.getByRole('button', { name: '导入 PDF', exact: true });
-    await expect(page.getByRole('spinbutton', { name: '页码', exact: true })).toBeEnabled();
-    await expect(importButton).toBeEnabled();
+    await waitForImportReady(page);
     const pending = page.waitForResponse(response => response.url() === `${base}/api/documents` && response.request().method() === 'POST');
     await page.getByLabel('选择 PDF 文件').setInputFiles({ name, mimeType: 'application/pdf', buffer });
     const response = await pending;
@@ -238,7 +237,7 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
     const { document } = await response.json();
     await expect(page.getByRole('heading', { name: document.title, exact: true })).toBeVisible();
     await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
-    await expect(importButton).toBeEnabled();
+    await waitForImportReady(page);
     return document;
   }
 
@@ -371,6 +370,7 @@ async function largeUploadWorkflow(context) {
   const expectedSize = await writeLargeUploadPdf(fixture);
   assert.ok(expectedSize > 50 * 1024 * 1024, 'Regression fixture must cross the former 50 MiB cap');
   await page.goto(base);
+  await waitForImportReady(page);
   const pending = page.waitForResponse(response => response.url() === `${base}/api/documents` && response.request().method() === 'POST', { timeout: 120000 });
   await page.getByLabel('选择 PDF 文件').setInputFiles(fixture);
   const response = await pending;
@@ -381,6 +381,7 @@ async function largeUploadWorkflow(context) {
   await expect(page.getByRole('heading', { name: document.title, exact: true })).toBeVisible();
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible({ timeout: 30000 });
   await expect(page.locator('.textLayer')).toContainText('Original large upload exercise');
+  await waitForImportReady(page);
   console.log('PASS: a generated PDF larger than 50 MiB imports through the browser file picker and renders');
   await page.close();
 }
@@ -391,6 +392,7 @@ async function scanRegionWorkflow(context) {
   const base = `http://127.0.0.1:${appServer.address().port}`;
   const bytes = graphicsOnlyPdf();
   await page.goto(base);
+  await waitForImportReady(page);
   const imported = page.waitForResponse(response => response.url() === `${base}/api/documents` && response.request().method() === 'POST');
   await page.getByLabel('选择 PDF 文件').setInputFiles({ name: 'original-scan-region-exercise.pdf', mimeType: 'application/pdf', buffer: bytes });
   const response = await imported;
@@ -401,6 +403,7 @@ async function scanRegionWorkflow(context) {
   await expect(page.getByRole('heading', { name: document.title, exact: true })).toBeVisible();
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
   await expect(page.locator('.textLayer span')).toHaveCount(0);
+  await waitForImportReady(page);
 
   const paper = page.locator('.pdf-paper');
   const regionMode = page.getByRole('button', { name: '区域批注', exact: true });
