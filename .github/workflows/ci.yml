@@ -23,5 +23,15 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Configure reliable Ubuntu apt mirrors
+        shell: bash
+        run: |
+          printf 'https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:2\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          printf '%s\n' \
+            'Acquire::http::Timeout "30";' \
+            'Acquire::https::Timeout "30";' \
+            'Acquire::Retries "2";' \
+            | sudo tee /etc/apt/apt.conf.d/99-paperdesk-network >/dev/null
       - run: npx playwright install --with-deps chromium
       - run: npm run check

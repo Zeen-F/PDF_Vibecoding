@@ -20,6 +20,7 @@ jobs:
       contents: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      PAPERDESK_VERIFICATION_ROOT: .local/beta5-verification/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -40,16 +41,68 @@ jobs:
           if (process.env.RELEASE_REF.startsWith('refs/tags/') && process.env.RELEASE_TAG !== `v${version}`) {
             throw new Error('The release tag must match package.json.');
           }
+          if (!readFileSync(`docs/history/${version}.md`, 'utf8').trim()) {
+            throw new Error('The release must have a non-empty version change record.');
+          }
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
           NODE
       - run: npm ci
       - run: npx playwright install chromium
       - run: npm run check
       - run: npm run test:desktop
+      - name: Test source desktop reliability with an isolated library
+        run: PAPERDESK_ACCEPTANCE_DIR="$PAPERDESK_VERIFICATION_ROOT/source" npm run test:desktop:reliability
       - run: npm run desktop:dist
       - name: Test the packaged application with an isolated library
         run: npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app
+      - name: Test packaged desktop reliability with an isolated library
+        run: PAPERDESK_ACCEPTANCE_DIR="$PAPERDESK_VERIFICATION_ROOT/packaged" npm run test:desktop:reliability -- --packaged release/mac-arm64/Paperdesk.app
+      - run: npm run browser:dist
       - run: npm run release:checksums
+      - name: Prepare compact verification evidence
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { mkdir, readFile, writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+          const root = path.resolve(process.env.PAPERDESK_VERIFICATION_ROOT);
+          const evidence = path.join(root, 'evidence');
+          await mkdir(evidence, { recursive: true });
+          // Export only test outcomes. Profiles, library records, settings, PDFs,
+          // screenshots, caches and raw diagnostic bodies stay on the runner.
+          const summaries = [];
+          for (const kind of ['source', 'packaged']) {
+            let result;
+            try { result = JSON.parse(await readFile(path.join(root, kind, 'results.json'), 'utf8')); }
+            catch (error) {
+              summaries.push({ kind, status: error.code === 'ENOENT' ? 'not-run' : 'unreadable-evidence' });
+              continue;
+            }
+            const groups = (result.groups || []).map(({ name, status, durationMs }) => ({ name, status, durationMs }));
+            summaries.push({ kind, status: result.status, startedAt: result.startedAt, finishedAt: result.finishedAt,
+              groups, rendererErrorCount: result.rendererErrors?.length || 0,
+              automationErrorCount: result.automationErrors?.length || 0,
+              dialogAcknowledgementRaceCount: result.dialogAcknowledgementRaces?.length || 0,
+              powerLossTest: result.abnormalExitInjection?.powerLossTest === true });
+          }
+          await writeFile(path.join(evidence, 'verification-summary.json'), JSON.stringify({
+            workflowStatus: process.env.JOB_STATUS, runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT, summaries,
+          }, null, 2) + '\n');
+          if (process.env.JOB_STATUS === 'success' && summaries.some(result => result.status !== 'passed')) {
+            throw new Error('A successful release run must have passed source and packaged reliability evidence.');
+          }
+          NODE
+      - name: Save compact verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Paperdesk-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PAPERDESK_VERIFICATION_ROOT }}/evidence/verification-summary.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Save verified installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -58,17 +111,24 @@ jobs:
             release/Paperdesk-${{ steps.version.outputs.version }}-mac-arm64.dmg
             release/Paperdesk-${{ steps.version.outputs.version }}-mac-arm64.zip
             release/SHA256SUMS
+            release/Paperdesk-${{ steps.version.outputs.version }}-browser.zip
+            release/SHA256SUMS-browser
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
       - name: Create a draft prerelease for a version tag
-        if: startsWith(github.ref, 'refs/tags/')
+        if: success() && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cat > .local/release-notes.md <<NOTES
+          mkdir -p .local
+          cat "docs/history/${RELEASE_VERSION}.md" > .local/release-notes.md
+          cat >> .local/release-notes.md <<NOTES
+
+          ---
+
           纸间 Paperdesk 的 macOS Apple Silicon 预览版。下载 DMG 后将 Paperdesk 拖入“应用程序”，无需另行安装 Node.js。
 
           PDF、笔记和批注保存在本机文献库；安装包不包含个人文献。首次打开使用独立文献库，也可以从应用菜单选择已有纸间文献库。
@@ -77,12 +137,16 @@ jobs:
 
           下载包含 DMG、ZIP 及 SHA256SUMS。此版本没有自动更新。
 
+          另提供源码浏览器版 ZIP：解压后使用 Node.js 24+ 执行 npm ci --omit=dev 和 npm start，再打开 http://127.0.0.1:4317；结束时按 Control+C。浏览器版默认把文献库保存在解压目录的 data/，也可设置 PAPERDESK_DATA_DIR。翻译 API 与 Codex 插件需要自行配置，发布包不含密钥或个人文献。
+
           [安装与文献库说明](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/desktop-release.md)
           NOTES
           gh release create "$RELEASE_TAG" \
             "release/Paperdesk-${RELEASE_VERSION}-mac-arm64.dmg" \
             "release/Paperdesk-${RELEASE_VERSION}-mac-arm64.zip" \
+            "release/Paperdesk-${RELEASE_VERSION}-browser.zip" \
             release/SHA256SUMS \
+            release/SHA256SUMS-browser \
             --verify-tag --draft --prerelease \
             --title "Paperdesk ${RELEASE_VERSION}" \
             --notes-file .local/release-notes.md

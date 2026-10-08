@@ -17,7 +17,7 @@ const appBundle = values.packaged ? path.resolve(values.packaged) : null;
 if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Desktop acceptance requires an Apple Silicon Mac.');
 const executablePath = appBundle ? path.join(appBundle, 'Contents/MacOS/Paperdesk') : createRequire(import.meta.url)('electron');
 await access(executablePath);
-const artifactDir = path.join(root, '.local/desktop-verification');
+const artifactDir = path.join(root, '.local/verification/desktop');
 await mkdir(artifactDir, { recursive: true });
 const temporary = await mkdtemp(path.join(tmpdir(), 'paperdesk-desktop-'));
 const userData = path.join(temporary, 'profile');

@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect as playwrightExpect } from '@playwright/test';
 import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
+import { LAUNCHER_PROTOCOL, PRODUCT_VERSION } from '../shared/service-identity.mjs';
 
 const expect = playwrightExpect.configure({ timeout: 10_000 });
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -188,7 +189,7 @@ try {
     assert.equal(await page.evaluate(() => typeof window.paperdeskDesktop?.onFlushRequest), 'function');
     const status = await api('/plugin/status');
     assert.equal(status.libraryId, createHash('sha256').update(path.resolve(library)).digest('hex'));
-    assert.equal(status.productVersion, '1.1.0-beta.4'); assert.equal(status.launcherProtocol, 1);
+    assert.equal(status.productVersion, PRODUCT_VERSION); assert.equal(status.launcherProtocol, LAUNCHER_PROTOCOL);
     assert.equal((await api('/documents')).documents.length, 0);
     summary.runtime = runtime; summary.identity = status; summary.initialOrigin = base;
     a = await importPdf(aFile); b = await importPdf(bFile); await openBook(a);
