@@ -24,4 +24,4 @@
 
 ## Windows 内容
 
-用户提及 Windows、Win、远程电脑、那台电脑上的内容，或提供 Windows 路径时，优先通过 SSH 别名 `windows-laptop-cpee7pvm` 检查连接并在目标主机只读查找。先从用户给出的路径开始；没有路径时，才搜索用户 Documents、Desktop、Downloads、OneDrive 和 D 盘等合理位置。连接失败要报告实际 Tailscale／SSH 错误，不得误报文件不存在。未获修改授权时，只连接、搜索、读取；不得创建替代项目目录或覆盖、删除文件。特定项目位置以用户当次指令及本机私有资料为准。
+用户提及 Windows、Win、远程电脑、那台电脑上的内容，或提供 Windows 路径时，优先通过 SSH 别名 用户已配置的 Windows SSH 主机别名 检查连接并在目标主机只读查找。先从用户给出的路径开始；没有路径时，才搜索用户 Documents、Desktop、Downloads、OneDrive 和 D 盘等合理位置。连接失败要报告实际 Tailscale／SSH 错误，不得误报文件不存在。未获修改授权时，只连接、搜索、读取；不得创建替代项目目录或覆盖、删除文件。特定项目位置以用户当次指令及本机私有资料为准。

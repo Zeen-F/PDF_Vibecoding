@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
+import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
 
 test('merging notes preserves exact Unicode, Markdown and whitespace, including a whitespace-only source', () => {
@@ -72,7 +73,7 @@ test('single-note saves and exports preserve legacy content without rewriting or
     const en = '\n## Evidence\n\n```text\ngm/ID = 12\n```\n\n[Original source](https://example.com/)  \n';
     assert.equal((await patch({ notesZh: zh, notesEn: en })).status, 200);
     const before = storedNotes();
-    assert.equal(before.version, 3);
+    assert.equal(before.version, CURRENT_SCHEMA);
     const expected = `${zh}\n\n---\n\n${en}`;
     assert.equal(await exportNotes(), expected);
     const loaded = await readDocument();
@@ -125,6 +126,6 @@ test('single-note saves and exports preserve legacy content without rewriting or
     assert.equal(cleared.notesEn, '');
     assert.equal(await exportNotes(), '（暂无笔记）');
     assert.equal(await exportNotes(), '（暂无笔记）');
-    assert.equal(storedNotes().version, 3);
+    assert.equal(storedNotes().version, CURRENT_SCHEMA);
   });
 });

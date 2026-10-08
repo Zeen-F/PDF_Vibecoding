@@ -9,9 +9,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { deflateSync } from 'node:zlib';
 import { request as httpRequest } from 'node:http';
 import { createApp } from '../server/app.mjs';
+import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf as scanPdf } from './fixtures/scan-browser.mjs';
 import { MAX_NOTE_LENGTH } from '../shared/notes.mjs';
+import { LAUNCHER_PROTOCOL, PRODUCT_VERSION } from '../shared/service-identity.mjs';
 
 const rect = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
 const revision = (zh, en) => createHash('sha256').update(JSON.stringify([zh, en])).digest('hex');
@@ -70,9 +72,11 @@ test('plugin identity and page reads are scoped to one library and preserve orig
   const doc = await lib.app.upload(source);
   assert.equal(doc.notesRevision, revision('', ''));
   const before = await lib.app.get('/api/plugin/status');
-  assert.deepEqual(Object.keys(before).sort(), ['apiVersion', 'instanceId', 'libraryId', 'service']);
+  assert.deepEqual(Object.keys(before).sort(), ['apiVersion', 'instanceId', 'launcherProtocol', 'libraryId', 'productVersion', 'service']);
   assert.equal(before.service, 'paperdesk');
   assert.equal(before.apiVersion, 1);
+  assert.equal(before.productVersion, PRODUCT_VERSION);
+  assert.equal(before.launcherProtocol, LAUNCHER_PROTOCOL);
   assert.equal(before.libraryId, createHash('sha256').update(path.resolve(lib.dataDir)).digest('hex'));
   assert.ok(!JSON.stringify(before).includes(lib.dataDir));
   assert.equal((await lib.app.get('/api/plugin/status')).instanceId, before.instanceId);
@@ -106,8 +110,8 @@ test('plugin identity and page reads are scoped to one library and preserve orig
   assert.equal(after.libraryId, before.libraryId);
   const db = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
   try {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
-    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map(row => row.name), ['annotations', 'documents', 'folders', 'library_preferences', 'pages']);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA);
+    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
   } finally { db.close(); }
   assert.deepEqual(await readFile(path.join(lib.dataDir, 'pdfs', `${doc.id}.pdf`)), source);
   assert.deepEqual(Buffer.from(await (await fetch(`${lib.app.base}/api/documents/${doc.id}/file`)).arrayBuffer()), source);

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
 import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
+import { libraryIdentity, LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION } from '../shared/service-identity.mjs';
 
 const SESSION_TTL = 30_000;
 const REQUEST_TTL = 10 * 60_000;
@@ -94,7 +95,7 @@ function validPng(bytes) {
 
 export function registerPluginApi({ app, db, dataDir, documentOr404, serializeDocument, transaction, HttpError, objectBody, stringValue, pageValue, rectanglesValue }) {
   const instanceId = randomUUID();
-  const libraryId = createHash('sha256').update(dataDir).digest('hex');
+  const libraryId = libraryIdentity(dataDir);
   const sessions = new Map();
   const requests = new Map();
   const findPage = db.prepare('SELECT text FROM pages WHERE document_id = ? AND page = ?');
@@ -139,7 +140,7 @@ export function registerPluginApi({ app, db, dataDir, documentOr404, serializeDo
     return { sessionId: session.sessionId, documentId: session.documentId, page: session.page, updatedAt: session.updatedAt };
   }
 
-  app.get('/api/plugin/status', (_req, res) => res.json({ service: 'paperdesk', apiVersion: 1, instanceId, libraryId }));
+  app.get('/api/plugin/status', (_req, res) => res.json({ service: 'paperdesk', apiVersion: SERVICE_API_VERSION, instanceId, libraryId, productVersion: PRODUCT_VERSION, launcherProtocol: LAUNCHER_PROTOCOL }));
   app.get('/api/documents/:id/pages/:page', (req, res) => {
     const doc = documentOr404(req.params.id);
     if (!/^[1-9]\d*$/.test(req.params.page)) throw new HttpError(400, '页码必须是正整数。');

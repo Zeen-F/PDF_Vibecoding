@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
+import { CURRENT_SCHEMA } from '../shared/library.mjs';
 
 function scanPdf() {
   const stream = 'q\n0.8 g 50 50 300 500 re f\n0.2 g 80 470 200 40 re f\nQ\n';
@@ -202,7 +203,7 @@ test('v1 migration preserves complete old records and original bytes, is idempot
   const before = databaseSnapshot(file);
   app = await start(dataDir);
   const migrated = databaseSnapshot(file);
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, CURRENT_SCHEMA);
   assert.equal(migrated.integrity, 'ok');
   assert.deepEqual(migrated.documents, before.documents.map(row => ({ ...row, folder_id: null })));
   assert.deepEqual(migrated.pages, before.pages);
@@ -251,11 +252,11 @@ test('schema migration rollback and future-version refusal leave versioned data 
   await mkdir(futureDir);
   const futureFile = join(futureDir, 'paperdesk.sqlite');
   db = new DatabaseSync(futureFile);
-  db.exec("CREATE TABLE future_data (value TEXT); INSERT INTO future_data VALUES ('keep'); PRAGMA user_version = 4;");
+  db.exec(`CREATE TABLE future_data (value TEXT); INSERT INTO future_data VALUES ('keep'); PRAGMA user_version = ${CURRENT_SCHEMA + 1};`);
   db.close();
   assert.throws(() => createApp({ dataDir: futureDir }), /更新版本/);
   db = new DatabaseSync(futureFile, { readOnly: true });
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA + 1);
   assert.equal(db.prepare('SELECT value FROM future_data').get().value, 'keep');
   assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name), ['future_data']);
   db.close();

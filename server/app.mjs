@@ -21,6 +21,9 @@ const MAX_PAGES = 2000;
 const MAX_TEXT = 20_000_000;
 const COLORS = new Set(['yellow', 'green', 'pink']);
 const ANNOTATION_KINDS = new Set(['text', 'region']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RETRY_RETENTION_MS = 30 * 86400_000;
+const MAX_RETRY_RECORDS = 10_000;
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -54,6 +57,16 @@ function pageValue(value, count) {
 
 function colorValue(value) {
   if (!COLORS.has(value)) throw new HttpError(400, '高亮颜色必须是 yellow、green 或 pink。');
+  return value;
+}
+
+function uuidValue(value, label) {
+  if (typeof value !== 'string' || !UUID.test(value)) throw new HttpError(400, `请提供有效的${label} UUID。`);
+  return value.toLowerCase();
+}
+
+function positionSequenceValue(value) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new HttpError(400, '阅读位置序号必须是正安全整数。');
   return value;
 }
 
@@ -250,6 +263,22 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
       db.exec("ALTER TABLE annotations ADD COLUMN kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'region'));");
     }
     migrateLibrary(db);
+    // Additive retry metadata only; original library rows and PDFs stay intact.
+    // Kept in this same migration transaction so a failure restores schema 3.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS annotation_requests (
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL, request_hash TEXT NOT NULL, annotation_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL, PRIMARY KEY(document_id, request_id)
+      );
+      CREATE INDEX IF NOT EXISTS annotation_requests_expiry ON annotation_requests(created_at);
+      CREATE TABLE IF NOT EXISTS reading_position_writers (
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        writer_id TEXT NOT NULL, sequence INTEGER NOT NULL, page INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL, PRIMARY KEY(document_id, writer_id)
+      );
+      CREATE INDEX IF NOT EXISTS reading_position_writers_expiry ON reading_position_writers(updated_at);
+    `);
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA}; COMMIT;`);
     migrating = false;
   } catch (error) {
@@ -258,8 +287,15 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     throw error;
   }
   const app = express();
+  let closed = false;
+  let closing;
+  function acceptingRequests(_req, _res, next) {
+    if (closed) return next(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
+    next();
+  }
   app.disable('x-powered-by');
   app.use(localRequestOnly);
+  app.use(acceptingRequests);
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -269,6 +305,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   // Only reader snapshots carry a transient PNG. Keep the existing note limit.
   app.use('/api/reader-sessions', express.json({ limit: '2.5mb' }));
   app.use(express.json({ limit: '2mb' }));
+  app.use(acceptingRequests);
   const upload = multer({
     storage: multer.diskStorage({ destination: incomingDir, filename: (_req, _file, callback) => callback(null, `${randomUUID()}.upload`) }),
     limits: { files: 1, fields: 0, parts: 1 },
@@ -284,6 +321,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   }
   let importQueue = Promise.resolve();
   function queueImport(work) {
+    if (closed) return Promise.reject(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
     const pending = importQueue.then(work);
     importQueue = pending.catch(() => {});
     return pending;
@@ -295,7 +333,9 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   const touchDocument = db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?');
   const readerRenderer = createReaderRenderer();
   const tocCache = new Map();
+  const pendingToc = new Set();
   function documentToc(doc) {
+    if (closed) return Promise.reject(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
     if (tocCache.has(doc.id)) {
       const cached = tocCache.get(doc.id);
       tocCache.delete(doc.id);
@@ -309,6 +349,9 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
         throw new HttpError(422, '暂时无法读取这份 PDF 的目录，请检查原始文件后重试。');
       }
     })();
+    // Cache eviction must not make a still-running task invisible to close().
+    pendingToc.add(pending);
+    void pending.then(() => pendingToc.delete(pending), () => pendingToc.delete(pending));
     tocCache.set(doc.id, pending);
     if (tocCache.size > 8) tocCache.delete(tocCache.keys().next().value);
     void pending.catch(() => { if (tocCache.get(doc.id) === pending) tocCache.delete(doc.id); });
@@ -428,8 +471,17 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     }
   });
   app.patch('/api/documents/:id', (req, res) => {
-    const body = objectBody(req.body, ['title', 'notesZh', 'notesEn', 'lastPage', 'expectedNotesRevision']);
+    const body = objectBody(req.body, ['title', 'notesZh', 'notesEn', 'lastPage', 'expectedNotesRevision', 'positionWriterId', 'positionSequence']);
     if (Object.hasOwn(body, 'expectedNotesRevision')) revisionValue(body.expectedNotesRevision, HttpError);
+    const sequencedPosition = Object.hasOwn(body, 'positionWriterId') || Object.hasOwn(body, 'positionSequence');
+    let writerId, sequence, positionStale = false, positionReplayed = false;
+    if (sequencedPosition) {
+      if (!Object.hasOwn(body, 'lastPage') || Object.keys(body).some(key => !['lastPage', 'positionWriterId', 'positionSequence'].includes(key))) {
+        throw new HttpError(400, '带序号的阅读位置请求只能包含 lastPage、positionWriterId 和 positionSequence。');
+      }
+      writerId = uuidValue(body.positionWriterId, '阅读窗口');
+      sequence = positionSequenceValue(body.positionSequence);
+    }
     const document = transaction(() => {
       const doc = documentOr404(req.params.id);
       if (!Object.keys(body).some(key => key !== 'expectedNotesRevision')) return serializeDocument(doc);
@@ -442,16 +494,32 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
       const en = Object.hasOwn(body, 'notesEn') ? stringValue(body.notesEn, '英文笔记', 250_000) : doc.notes_en;
       if (changesNotes && mergeNotes(zh, en).length > MAX_NOTE_LENGTH) throw new HttpError(400, `笔记内容最多 ${MAX_NOTE_LENGTH.toLocaleString('en-US')} 个字符。`);
       const lastPage = Object.hasOwn(body, 'lastPage') ? pageValue(body.lastPage, doc.page_count) : doc.last_page;
+      if (sequencedPosition) {
+        const now = Date.now();
+        db.prepare('DELETE FROM reading_position_writers WHERE updated_at <= ?').run(now - RETRY_RETENTION_MS);
+        const writer = db.prepare('SELECT sequence, page FROM reading_position_writers WHERE document_id = ? AND writer_id = ?').get(doc.id, writerId);
+        if (writer && sequence <= writer.sequence) {
+          if (sequence === writer.sequence && lastPage !== writer.page) throw new HttpError(409, '同一阅读位置序号不能用于不同页码。');
+          positionStale = sequence < writer.sequence;
+          positionReplayed = !positionStale;
+          return serializeDocument(doc);
+        }
+        if (!writer && db.prepare('SELECT COUNT(*) AS count FROM reading_position_writers').get().count >= MAX_RETRY_RECORDS) {
+          throw new HttpError(429, '阅读位置保护记录已达到上限，请稍后重试；本次位置未保存。');
+        }
+        db.prepare(`INSERT INTO reading_position_writers(document_id, writer_id, sequence, page, updated_at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(document_id, writer_id) DO UPDATE SET sequence = excluded.sequence, page = excluded.page, updated_at = excluded.updated_at`)
+          .run(doc.id, writerId, sequence, lastPage, now);
+      }
       db.prepare('UPDATE documents SET title = ?, notes_zh = ?, notes_en = ?, last_page = ?, updated_at = ? WHERE id = ?')
         .run(title, zh, en, lastPage, new Date().toISOString(), doc.id);
       return serializeDocument(findDocument.get(doc.id));
     });
-    res.json({ document });
+    res.json(sequencedPosition ? { document, positionStale, positionReplayed } : { document });
   });
   app.post('/api/documents/:id/annotations', (req, res) => {
-    const doc = documentOr404(req.params.id);
-    const body = objectBody(req.body, ['page', 'kind', 'quote', 'comment', 'color', 'rects']);
-    const page = pageValue(body.page, doc.page_count);
+    const body = objectBody(req.body, ['page', 'kind', 'quote', 'comment', 'color', 'rects', 'requestId']);
+    const requestId = Object.hasOwn(body, 'requestId') ? uuidValue(body.requestId, '批注请求') : null;
     const kind = Object.hasOwn(body, 'kind') ? annotationKind(body.kind) : 'text';
     const quote = kind === 'region' && !Object.hasOwn(body, 'quote') ? '' : stringValue(body.quote, '选中文字', 50_000, { nonempty: kind === 'text' });
     if (kind === 'region' && quote !== '') throw new HttpError(400, '区域批注不包含选中文字，请省略 quote 或传入空字符串。');
@@ -459,30 +527,61 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     const color = colorValue(body.color);
     const rects = rectanglesValue(body.rects);
     if (kind === 'region' && rects.length !== 1) throw new HttpError(400, '区域批注必须包含恰好一个页面内的矩形区域。');
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    db.prepare(`INSERT INTO annotations(id, document_id, page, kind, quote, comment, color, rects, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, doc.id, page, kind, quote, comment, color, JSON.stringify(rects), now, now);
-    touchDocument.run(now, doc.id);
-    res.status(201).json({ annotation: serializeAnnotation(findAnnotation.get(id, doc.id)) });
+    const result = transaction(() => {
+      const doc = documentOr404(req.params.id);
+      const page = pageValue(body.page, doc.page_count);
+      const requestHash = createHash('sha256').update(JSON.stringify({ page, kind, quote, comment, color, rects })).digest('hex');
+      const timestamp = Date.now();
+      if (requestId) {
+        db.prepare('DELETE FROM annotation_requests WHERE created_at <= ?').run(timestamp - RETRY_RETENTION_MS);
+        const prior = db.prepare('SELECT request_hash, annotation_id FROM annotation_requests WHERE document_id = ? AND request_id = ?').get(doc.id, requestId);
+        if (prior) {
+          if (prior.request_hash !== requestHash) throw new HttpError(409, '此批注请求标识已用于不同内容，请先核对原请求结果。');
+          const saved = findAnnotation.get(prior.annotation_id, doc.id);
+          if (!saved) throw new HttpError(409, '此请求创建的批注已被删除，请核对后重新创建批注。');
+          return { annotation: serializeAnnotation(saved), replayed: true };
+        }
+        if (db.prepare('SELECT COUNT(*) AS count FROM annotation_requests').get().count >= MAX_RETRY_RECORDS) {
+          throw new HttpError(429, '批注重试保护记录已达到上限，请稍后重试；本次批注未创建。');
+        }
+      }
+      const id = randomUUID(), now = new Date(timestamp).toISOString();
+      db.prepare(`INSERT INTO annotations(id, document_id, page, kind, quote, comment, color, rects, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, doc.id, page, kind, quote, comment, color, JSON.stringify(rects), now, now);
+      touchDocument.run(now, doc.id);
+      if (requestId) db.prepare('INSERT INTO annotation_requests(document_id, request_id, request_hash, annotation_id, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(doc.id, requestId, requestHash, id, timestamp);
+      return { annotation: serializeAnnotation(findAnnotation.get(id, doc.id)), replayed: false };
+    });
+    res.status(result.replayed ? 200 : 201).json(result);
   });
   app.patch('/api/documents/:id/annotations/:annotationId', (req, res) => {
-    documentOr404(req.params.id);
-    const annotation = annotationOr404(req.params.annotationId, req.params.id);
-    const body = objectBody(req.body, ['comment', 'color']);
-    const comment = Object.hasOwn(body, 'comment') ? stringValue(body.comment, '批注评论', 20_000) : annotation.comment;
-    const color = Object.hasOwn(body, 'color') ? colorValue(body.color) : annotation.color;
-    const now = new Date().toISOString();
-    db.prepare('UPDATE annotations SET comment = ?, color = ?, updated_at = ? WHERE id = ?')
-      .run(comment, color, now, annotation.id);
-    touchDocument.run(now, req.params.id);
-    res.json({ annotation: serializeAnnotation(findAnnotation.get(annotation.id, req.params.id)) });
+    const body = objectBody(req.body, ['comment', 'color', 'expectedAnnotationUpdatedAt']);
+    const expected = Object.hasOwn(body, 'expectedAnnotationUpdatedAt') ? stringValue(body.expectedAnnotationUpdatedAt, '批注版本', 100, { nonempty: true }) : null;
+    const annotation = transaction(() => {
+      documentOr404(req.params.id);
+      const saved = annotationOr404(req.params.annotationId, req.params.id);
+      const comment = Object.hasOwn(body, 'comment') ? stringValue(body.comment, '批注评论', 20_000) : saved.comment;
+      const color = Object.hasOwn(body, 'color') ? colorValue(body.color) : saved.color;
+      if (comment === saved.comment && color === saved.color) return serializeAnnotation(saved);
+      if (expected !== null && expected !== saved.updated_at) throw new HttpError(409, '批注已在其他窗口更新，请先读取最新评论再合并保存。');
+      // updatedAt is also the edit token; even two same-millisecond writes differ.
+      const prior = Date.parse(saved.updated_at);
+      const now = new Date(Math.max(Date.now(), Number.isFinite(prior) ? prior + 1 : 0)).toISOString();
+      db.prepare('UPDATE annotations SET comment = ?, color = ?, updated_at = ? WHERE id = ?')
+        .run(comment, color, now, saved.id);
+      touchDocument.run(now, req.params.id);
+      return serializeAnnotation(findAnnotation.get(saved.id, req.params.id));
+    });
+    res.json({ annotation });
   });
   app.delete('/api/documents/:id/annotations/:annotationId', (req, res) => {
-    documentOr404(req.params.id);
-    annotationOr404(req.params.annotationId, req.params.id);
-    db.prepare('DELETE FROM annotations WHERE id = ? AND document_id = ?').run(req.params.annotationId, req.params.id);
-    touchDocument.run(new Date().toISOString(), req.params.id);
+    transaction(() => {
+      documentOr404(req.params.id);
+      annotationOr404(req.params.annotationId, req.params.id);
+      db.prepare('DELETE FROM annotations WHERE id = ? AND document_id = ?').run(req.params.annotationId, req.params.id);
+      touchDocument.run(new Date().toISOString(), req.params.id);
+    });
     res.json({ ok: true });
   });
 
@@ -561,6 +660,31 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     console.error('Paperdesk request failed:', error);
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
-  let closed = false;
-  return { app, close() { if (!closed) { closed = true; pluginApi.close(); tocCache.clear(); db.close(); } return Promise.all([translationApi.close(), readerRenderer.close()]); } };
+  return {
+    app,
+    close() {
+      if (closing) return closing;
+      closed = true;
+      pluginApi.close();
+      closing = (async () => {
+        try {
+          // Forced HTTP disconnection does not cancel asynchronous PDF work.
+          // Keep SQLite open until every admitted import and TOC task settles.
+          const [resources] = await Promise.all([
+            Promise.allSettled([
+              Promise.resolve().then(() => translationApi.close()),
+              Promise.resolve().then(() => readerRenderer.close()),
+            ]),
+            Promise.allSettled([importQueue, ...pendingToc]),
+          ]);
+          const failures = resources.filter(result => result.status === 'rejected');
+          if (failures.length) throw new AggregateError(failures.map(result => result.reason), '本机阅读资源未能完整关闭。');
+        } finally {
+          tocCache.clear();
+          db.close();
+        }
+      })();
+      return closing;
+    },
+  };
 }

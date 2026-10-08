@@ -45,12 +45,28 @@ export async function pluginWorkflow({ context, base }) {
     await page.mouse.move(box.x + 1, box.y + box.height / 2); await page.mouse.down();
     await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 8 }); await page.mouse.up();
     await expect(page.getByRole('button', { name: '交给 Codex', exact: true })).toBeVisible();
+    const nativeQuote = await page.evaluate(() => window.getSelection()?.toString());
+    await expect(page.locator('.selection-summary p')).toHaveText(nativeQuote);
     const quote = await page.locator('.selection-summary p').textContent();
     assert.ok(quote.includes('short introduction'));
     assert.equal((await getContext(reader.sessionId())).selection, null, 'Selecting text alone must remain private');
     await page.getByRole('button', { name: '交给 Codex', exact: true }).click();
+    await page.keyboard.press('Shift');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await expect.poll(async () => (await getContext(reader.sessionId())).selection?.text).toBe(quote);
     assert.equal((await getContext(reader.sessionId())).selection.kind, 'text');
+    await expect(page.locator('.codex-status')).toHaveAttribute('data-shared', 'true');
+    // Headless targets may remain visible together; drive the real lifecycle
+    // listener with a controlled visibility value, then restore the native getter.
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect(page.locator('.codex-status')).toHaveAttribute('data-shared', 'false');
+    await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
+    await expect.poll(async () => (await getContext(reader.sessionId())).selection).toBeNull();
+    await page.getByRole('button', { name: '交给 Codex', exact: true }).click();
+    await expect.poll(async () => (await getContext(reader.sessionId())).selection?.text).toBe(quote);
     await page.getByRole('button', { name: '下一页', exact: true }).click();
     await expect.poll(async () => (await getContext(reader.sessionId())).selection).toBeNull();
     await expect.poll(async () => (await getContext(reader.sessionId())).page).toBe(3);

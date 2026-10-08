@@ -62,6 +62,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 10 }); await page.mouse.up();
     const domText = await page.evaluate(() => window.getSelection()?.toString()); assert.ok(domText?.length > 10);
     await expect(page.getByRole('button', { name: '翻译', exact: true })).toBeVisible();
+    await expect(page.locator('.selection-summary p')).toHaveText(domText);
     const quote = await page.locator('.selection-summary p').textContent(); assert.equal(quote, domText);
     return quote;
   };
