@@ -1,5 +1,5 @@
 // Run against an already imported demo in an isolated app instance.
-// This intentionally edits the active document's Chinese note; do not use personal data.
+// This intentionally edits the active document's single note; do not use personal data.
 // QA_SPACE=9 QA_PAGE=p2 ego-browser nodejs < tests/notes-race.browser.mjs
 // This script uses the documented Ego Lite runtime, and must not run via node --test.
 const assert = (await import('node:assert/strict')).default;
@@ -8,11 +8,11 @@ if (!process.env.QA_SPACE || !process.env.QA_PAGE) throw new Error('Set QA_SPACE
 const task = await taskSpace(Number(process.env.QA_SPACE));
 const page = task.page(process.env.QA_PAGE);
 await page.reload();
-await page.waitForSelector('textarea[aria-label="中文笔记"]', { state: 'visible', timeout: 15000 });
+await page.waitForSelector('textarea[aria-label="笔记"]', { state: 'visible', timeout: 15000 });
 
 const valueA = '## Saved version A\n\nReturn to A after a slow save. 回到版本 A。';
 const valueB = '## In-flight version B\n\nThis older intermediate value must not overwrite A.';
-await page.fill('textarea[aria-label="中文笔记"]', valueA);
+await page.fill('textarea[aria-label="笔记"]', valueA);
 await page.waitForFunction(() => document.querySelector('[aria-label="笔记与批注"] [role="status"]')?.innerText.includes('已保存'), undefined, { timeout: 10000 });
 await page.evaluate(({ valueB }) => {
   window.__qaOriginalFetch = window.fetch;
@@ -37,9 +37,9 @@ await page.evaluate(({ valueB }) => {
 }, { valueB });
 
 try {
-  await page.fill('textarea[aria-label="中文笔记"]', valueB);
+  await page.fill('textarea[aria-label="笔记"]', valueB);
   await page.waitForFunction(() => window.__qaHeld === true, undefined, { timeout: 10000 });
-  await page.fill('textarea[aria-label="中文笔记"]', valueA);
+  await page.fill('textarea[aria-label="笔记"]', valueA);
   // Arm the download before requesting export while B is still blocked.
   const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
   await page.click('button.export-button');
@@ -51,6 +51,7 @@ try {
   assert.ok(documentId, 'The edited document must be identified from its actual save request');
   const record = JSON.parse((await page.fetch(`/api/documents/${documentId}`)).body);
   assert.equal(record.document.notesZh, valueA, 'The newest A must overwrite the queued B');
+  assert.equal(record.document.notesEn, '', 'A single-editor save must not retain a second hidden note');
   const exported = await fs.readFile(outputPath, 'utf8');
   assert.ok(exported.includes(valueA), 'Export must await the final A save');
   assert.ok(!exported.includes(valueB), 'Export must not contain the stale B');

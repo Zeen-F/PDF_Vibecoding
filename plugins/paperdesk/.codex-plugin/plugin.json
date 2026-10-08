@@ -1,0 +1,28 @@
+{
+  "name": "paperdesk",
+  "version": "0.11.0",
+  "description": "本机 PDF 单页／多页阅读、连续滚动、分类和皮肤，支持 API 选区翻译与 Work／Codex 选区讨论。",
+  "author": {
+    "name": "Paperdesk"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "纸间 Paperdesk",
+    "shortDescription": "本机 PDF 阅读、选区翻译与讨论",
+    "longDescription": "按显示器空间选择单页、双页、四页、六页或九页，左右翻页或上下连续阅读，支持适合宽度和适合整屏。整理单层文件夹与四套阅读皮肤；直接调用用户配置的翻译 API，选区讨论仍在当前 Work／Codex 对话中进行，明确要求后才追加笔记。",
+    "developerName": "Paperdesk",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "打开纸间阅读器",
+      "解释我在纸间共享的选区",
+      "提炼我共享选区的要点",
+      "把刚才的回答记到这篇文献的笔记里"
+    ],
+    "brandColor": "#687C60"
+  }
+}

@@ -1,0 +1,46 @@
+/** Desktop preview packaging. Reading data lives outside the application bundle. */
+module.exports = {
+  appId: 'com.paperdesk.desktop',
+  productName: 'Paperdesk',
+  directories: { output: 'release', buildResources: '.local/desktop-assets' },
+  asar: false,
+  // @napi-rs/canvas uses Node-API, so its arm64 binary needs no Electron rebuild.
+  npmRebuild: false,
+  electronDist: 'node_modules/electron/dist',
+  publish: null,
+  files: [
+    'package.json',
+    'LICENSE',
+    'desktop/**/*',
+    'server/**/*',
+    'shared/**/*',
+    'dist/**/*',
+    'public/examples/reading-demo.pdf',
+    '!tests{,/**/*}',
+    '!**/{test,tests,__tests__}/**/*',
+    '!data{,/**/*}',
+    '!.local{,/**/*}',
+    '!release{,/**/*}',
+    '!**/{.env,.env.*}',
+    '!**/*.{sqlite,sqlite-*,db,db-*,log}',
+  ],
+  artifactName: 'Paperdesk-${version}-mac-${arch}.${ext}',
+  mac: {
+    target: [{ target: 'dmg', arch: ['arm64'] }, { target: 'zip', arch: ['arm64'] }],
+    category: 'public.app-category.productivity',
+    icon: '.local/desktop-assets/icon.icns',
+    identity: null,
+    hardenedRuntime: false,
+    notarize: false,
+    extendInfo: { CFBundleDisplayName: '纸间 Paperdesk' },
+  },
+  dmg: {
+    sign: false,
+    title: 'Paperdesk ${version}',
+    window: { width: 540, height: 360 },
+    contents: [
+      { x: 150, y: 170, type: 'file' },
+      { x: 390, y: 170, type: 'link', path: '/Applications' },
+    ],
+  },
+};

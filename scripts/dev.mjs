@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { developmentEnvironment } from './dev-environment.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const apiPort = Number(process.env.DEV_API_PORT || 4318);
@@ -76,7 +77,7 @@ try {
   await assertAvailable(apiPort, 'API');
   await assertAvailable(uiPort, 'UI');
   if (!stopping) {
-    const env = { ...process.env, DEV_API_PORT: String(apiPort), PORT: String(apiPort), PAPERDESK_DATA_DIR: dataDir };
+    const env = developmentEnvironment(process.env, { apiPort, dataDir });
     console.log(`Development UI: http://127.0.0.1:${uiPort}\nDevelopment API: http://127.0.0.1:${apiPort}\nDevelopment data: ${dataDir}`);
     launch('API', ['server/index.mjs'], env);
     launch('Vite', [fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))], env);

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Paperdesk</title>
+  <desc id="description">An open cream book and a sage leaf on a forest green background.</desc>
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="#253e35"/>
+  <path d="M228 378c100-34 191-25 284 30v350c-89-53-183-63-284-31V378Z" fill="#faf9f5"/>
+  <path d="M796 378c-100-34-191-25-284 30v350c89-53 183-63 284-31V378Z" fill="#e8ece1"/>
+  <path d="M512 411v345" stroke="#b4c2ad" stroke-width="16" stroke-linecap="round"/>
+  <path d="M275 466c68-15 133-9 191 15M275 535c68-15 133-9 191 15M275 604c68-15 133-9 191 15" fill="none" stroke="#b4c2ad" stroke-width="16" stroke-linecap="round"/>
+  <path d="M596 232c69-18 133 2 162 65-65 34-132 19-162-65Z" fill="#d2ddc4"/>
+  <path d="m609 239 104 45" fill="none" stroke="#405d4c" stroke-width="12" stroke-linecap="round"/>
+  <path d="M656 366v178l43-27 43 27V362c-28-2-57-1-86 4Z" fill="#be7052"/>
+</svg>
