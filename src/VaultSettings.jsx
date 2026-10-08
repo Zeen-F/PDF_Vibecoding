@@ -25,6 +25,13 @@ export default function VaultSettings({ open, onClose, storage, documentTitle, o
     {storage ? <>
       <div className="vault-location"><span>{vault ? 'Obsidian 仓库' : '本机文献库'}</span><strong>{vault ? storage.vaultName : 'Paperdesk 文献库'}</strong>{vault && <span>资料文件夹：{storage.subdir}</span>}<span>{storage.documentCount} 份文献</span></div>
       <p className="vault-description">{vault ? 'PDF、笔记与批注保存在这个仓库中。你在 Obsidian 中编辑笔记后，Paperdesk 会自动读回；有冲突时保留草稿。' : 'PDF、笔记与批注保存在本机文献库。'}</p>
+      {vault && <section className="vault-rules" aria-label="使用规则"><h3>使用规则</h3><ul>
+        <li>笔记正文可在 Paperdesk 和 Obsidian 两边编辑。</li>
+        <li>批注、标题和分类在 Paperdesk 修改；保留自动生成的批注区与管理状态。</li>
+        <li>保留原始 PDF 及固定文件名，不改名、移动或替换。</li>
+        <li>同一篇文献错开编辑；换设备时等同步完成，再重新读取仓库。</li>
+        <li>冲突不会自动合并。正式正文与草稿保留后，请核对并整理。</li>
+      </ul></section>}
       {vault ? <div className="vault-actions"><button className="secondary-button" disabled={busy} onClick={onRefresh}>{busy ? <LoaderCircle size={15} className="spin"/> : <RefreshCw size={15}/>} 重新读取仓库</button><button className="primary-button" disabled={busy || !documentTitle} onClick={onOpenNote}><ExternalLink size={15}/> 在 Obsidian 中打开笔记</button></div>
         : <p className="vault-description">{window.paperdeskDesktop ? '使用「文件 → 打开 Obsidian 仓库…」选择已有仓库。' : '浏览器版可通过启动时指定 Obsidian 仓库目录接入。'}</p>}
       {vault && documentTitle && <p className="vault-current">当前文献：{documentTitle}</p>}

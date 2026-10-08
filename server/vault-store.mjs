@@ -22,14 +22,16 @@ const utf8 = new TextDecoder('utf-8', { fatal: true });
 const digest = value => createHash('sha256').update(value).digest('hex');
 
 class VaultError extends Error {
-  constructor(message) { super(message); this.name = 'VaultError'; this.status = 409; }
+  constructor(message, code) { super(message); this.name = 'VaultError'; this.status = 409; if (code) this.code = code; }
 }
 const invalid = message => { throw new VaultError(message); };
+const fileConflict = message => { throw new VaultError(message, 'VAULT_FILE_CONFLICT'); };
 function guard(work) {
   try { return work(); }
   catch (error) {
     if (error instanceof VaultError) throw error;
-    throw new VaultError(`Obsidian 文件读写失败，请检查文件权限和磁盘状态：${error.message}`);
+    const failure = new VaultError('Obsidian 文件读写失败，请检查文件权限和磁盘状态；请保留当前草稿并核对原文件。');
+    failure.cause = error; throw failure;
   }
 }
 function object(value, keys, label) {
@@ -198,6 +200,11 @@ function parseDocument(source, id) {
   let state; try { state = JSON.parse(generated.slice(stateStart + STATE_START.length, stateEnd)); }
   catch { invalid('Paperdesk 隐藏元数据 JSON 已损坏，原文件未被覆盖。'); }
   validateState(state, id);
+  const rebuilt = generatedMarkdown(state);
+  const expectedVisible = rebuilt.slice(START.length, rebuilt.indexOf(STATE_START));
+  if (generated.slice(0, stateStart) !== expectedVisible) {
+    invalid('Paperdesk 自动生成的批注区已被修改，原文件未被覆盖。请把额外文字移到笔记正文；批注内容请在 Paperdesk 中修改。');
+  }
   const notes = content.slice(0, start) + content.slice(end + END.length);
   text(notes, MAX_NOTE_LENGTH, 'Obsidian 笔记正文');
   return { state, properties, notes };
@@ -245,6 +252,8 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       checkedPath(canonical, dir, { directory: true });
     }
     for (const dir of [rootDir, pdfDir, notesDir]) ensureDirectory(dir);
+    let libraryEstablished = existsSync(libraryPath) || readdirSync(notesDir).some(name => name.endsWith('.md'))
+      || readdirSync(pdfDir).some(name => name.endsWith('.pdf'));
     const pdfCache = new Map();
     const pdfPath = id => { uuid(id); const target = path.join(pdfDir, `${id}.pdf`); checkedPath(canonical, target, { missing: true }); return target; };
     const notePath = id => { uuid(id); const target = path.join(notesDir, `${id}.md`); checkedPath(canonical, target, { missing: true }); return target; };
@@ -252,7 +261,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       const expected = checkedPath(canonical, file);
       const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
       const current = fstatSync(fd);
-      if (!current.isFile() || current.ino !== expected.ino || current.dev !== expected.dev) { closeSync(fd); invalid('文件正在被外部程序替换，请重新读取后重试。'); }
+      if (!current.isFile() || current.ino !== expected.ino || current.dev !== expected.dev) { closeSync(fd); fileConflict('文件正在被外部程序替换，请重新读取后重试。'); }
       return fd;
     }
     function markdown(file, missing = false) {
@@ -263,7 +272,8 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         if (fstatSync(fd).size > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注。');
         const bytes = readFileSync(fd);
         const after = signature(fstatSync(fd));
-        if (before !== after || bytes.length > MAX_MARKDOWN_BYTES) invalid('Obsidian 正在修改此 Markdown 文件，请稍后重新读取。');
+        if (bytes.length > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注。');
+        if (before !== after) fileConflict('Obsidian 正在修改此 Markdown 文件，请稍后重新读取。');
         return { source: utf8.decode(bytes), token: digest(bytes), signature: after };
       } finally { closeSync(fd); }
     }
@@ -307,14 +317,17 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         || inside(canonical, realpathSync(recoveryRoot))) invalid('恢复目录必须是知识库之外的真实文件夹。');
       const saved = path.join(recoveryRoot, `${path.basename(file, '.md')}-${Date.now()}-${randomUUID()}.md`);
       try { linkSync(file, saved); }
-      catch (error) { invalid(`无法创建可恢复的 Markdown 原文件副本，本次保存已停止：${error.message}`); }
+      catch (error) {
+        const failure = new VaultError('无法创建可恢复的 Markdown 原文件副本，本次保存已停止，请检查恢复目录权限与所在磁盘。');
+        failure.cause = error; throw failure;
+      }
       return saved;
     }
     function replaceMarkdown(file, source, expectedToken) {
       if (Buffer.byteLength(source, 'utf8') > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注；原文件未被覆盖。');
       if (expectedToken !== null && (typeof expectedToken !== 'string' || !HASH.test(expectedToken))) invalid('保存前必须提供读取到的 Markdown 版本标识。');
       const previous = markdown(file, true);
-      if ((previous?.token ?? null) !== expectedToken) invalid('Obsidian 文件已被修改，请读取最新内容后合并；本次保存未覆盖原文件。');
+      if ((previous?.token ?? null) !== expectedToken) fileConflict('Obsidian 文件已被修改，请读取最新内容后合并；本次保存未覆盖原文件。');
       const temp = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
       let fd, backup;
       try {
@@ -323,7 +336,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         const nextToken = digest(Buffer.from(source, 'utf8'));
         if (previous) {
           backup = recoveryLink(file);
-          if (digest(readFileSync(backup)) !== expectedToken || markdown(file).token !== expectedToken) invalid('Obsidian 正在编辑此文件，请重新读取后合并保存。');
+          if (digest(readFileSync(backup)) !== expectedToken || markdown(file).token !== expectedToken) fileConflict('Obsidian 正在编辑此文件，请重新读取后合并保存。');
           checkedPath(canonical, file);
           renameSync(temp, file);
           if (digest(readFileSync(backup)) !== expectedToken) {
@@ -331,12 +344,16 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
               recoveryLink(file);
               const restore = `${temp}.restore`; linkSync(backup, restore); renameSync(restore, file);
             }
-            const error = new VaultError('Obsidian 在保存期间修改了原文件，已保留恢复副本，请重新读取并合并。');
+            const error = new VaultError('Obsidian 在保存期间修改了原文件，已保留恢复副本，请重新读取并合并。', 'VAULT_FILE_CONFLICT');
             error.recoveryPath = backup; throw error;
           }
         } else {
           // Exclusive creation avoids replacing a note created by another editor.
-          linkSync(temp, file); unlinkSync(temp);
+          try { linkSync(temp, file); } catch (error) {
+            if (error.code === 'EEXIST') fileConflict('Obsidian 已创建同名文件，请先读取并核对内容；本次保存未覆盖它。');
+            throw error;
+          }
+          unlinkSync(temp);
         }
         return nextToken;
       } finally {
@@ -346,6 +363,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
     }
     function writeDocument({ document, annotations, annotationRequests = [], positionWriters = [] }, expectedToken) {
       return guard(() => {
+        if (libraryEstablished) readLibrary();
         const id = uuid(document?.id), file = notePath(id);
         const normalized = { ...document, folder_id: document.folder_id ?? null };
         const state = validateState({ version: 1, document: normalized, annotations, annotationRequests, positionWriters }, id);
@@ -381,14 +399,19 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         uuid(documentId); text(notes, MAX_NOTE_LENGTH, '冲突笔记'); ensureDirectory(conflictDir);
         const file = path.join(conflictDir, `${documentId}-${Date.now()}-${randomUUID()}.md`);
         const source = `---\npaperdesk_source_id: ${scalar(documentId)}\npaperdesk_conflict: true\ncreated_at: ${scalar(new Date().toISOString())}\n---\n${notes}`;
-        replaceMarkdown(file, source, null);
+        const token = replaceMarkdown(file, source, null);
+        const saved = markdown(file);
+        if (saved.token !== token || saved.source !== source) invalid('冲突笔记副本写入后未通过读回检查，请保留本机草稿并重试。');
         return file;
       });
     }
     function readLibrary() {
       return guard(() => {
         const saved = markdown(libraryPath, true);
-        if (!saved) return { state: { folders: [], theme: 'forest' }, token: null };
+        if (!saved) {
+          if (libraryEstablished) invalid('已建立的 Obsidian 仓库缺少 Library.md，请恢复原文件后再刷新或保存；没有使用空分类和默认皮肤覆盖原记录。');
+          return { state: { folders: [], theme: 'forest' }, token: null };
+        }
         if ((saved.source.match(/<!-- paperdesk-library:/g) || []).length !== 1) invalid('Paperdesk 文献库标记缺失或重复。');
         const start = oneMarker(saved.source, LIBRARY_START, 'Paperdesk 文献库标记');
         const end = saved.source.indexOf(STATE_END, start + LIBRARY_START.length);
@@ -397,7 +420,8 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         catch { invalid('文献库 Markdown 元数据已损坏，原文件未被覆盖。'); }
         object(metadata, ['version', 'state'], '文献库元数据');
         if (metadata.version !== 1) invalid('不支持此 Paperdesk 文献库格式版本。');
-        return { state: validateLibrary(metadata.state), token: saved.token };
+        const state = validateLibrary(metadata.state); libraryEstablished = true;
+        return { state, token: saved.token };
       });
     }
     function writeLibrary(state, expectedToken) {

@@ -5,6 +5,8 @@ export async function api(path, options = {}) {
   if (!response.ok) {
     const error = new Error(data.error || `请求未完成 (${response.status})`);
     error.status = response.status;
+    if (typeof data.code === 'string') error.code = data.code;
+    if (typeof data.conflictPreserved === 'boolean') error.conflictPreserved = data.conflictPreserved;
     throw error;
   }
   return data;

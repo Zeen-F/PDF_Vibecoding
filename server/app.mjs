@@ -531,10 +531,15 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
       if (vaultIndex && changesNotes && !Object.hasOwn(body,'expectedNotesRevision')) throw new HttpError(400,'保存到 Obsidian 仓库需要笔记版本，请先读取当前笔记后重试。');
       if (vaultIndex && Object.hasOwn(body,'notesEn') && body.notesEn !== '') throw new HttpError(400,'Obsidian 仓库使用统一 Markdown 正文，请把内容保存到 notesZh，并将 notesEn 留空。');
       if (changesNotes && Object.hasOwn(body, 'expectedNotesRevision') && body.expectedNotesRevision !== notesRevision(doc)) {
-        if (vaultIndex) vaultIndex.preserveConflict(doc.id, mergeNotes(
-          Object.hasOwn(body,'notesZh') ? stringValue(body.notesZh,'笔记',MAX_NOTE_LENGTH) : doc.notes_zh,
-          Object.hasOwn(body,'notesEn') ? stringValue(body.notesEn,'英文笔记',250_000) : doc.notes_en));
-        throw new HttpError(409, '笔记已在其他窗口或插件中更新，请先读取最新笔记再合并保存。');
+        const conflict = new HttpError(409, '笔记已在其他窗口或插件中更新，请先读取最新笔记再合并保存。');
+        conflict.code = 'NOTES_VERSION_CONFLICT';
+        if (vaultIndex) {
+          vaultIndex.preserveConflict(doc.id, mergeNotes(
+            Object.hasOwn(body,'notesZh') ? stringValue(body.notesZh,'笔记',MAX_NOTE_LENGTH) : doc.notes_zh,
+            Object.hasOwn(body,'notesEn') ? stringValue(body.notesEn,'英文笔记',250_000) : doc.notes_en));
+          conflict.conflictPreserved = true;
+        }
+        throw conflict;
       }
       const title = Object.hasOwn(body, 'title') ? stringValue(body.title, '文献标题', 500, { nonempty: true, trim: true }) : doc.title;
       const zh = Object.hasOwn(body, 'notesZh') ? stringValue(body.notesZh, '笔记', MAX_NOTE_LENGTH) : doc.notes_zh;
@@ -703,8 +708,14 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     }
     if (error.type === 'entity.too.large') return res.status(413).json({ error: '请求内容过大，请缩短笔记或批注。' });
     if (error instanceof SyntaxError && error.status === 400) return res.status(400).json({ error: 'JSON 格式不正确。' });
-    if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
-    if (error.name === 'VaultError' && error.status === 409) return res.status(409).json({ error: error.message });
+    if (error instanceof HttpError || (error.name === 'VaultError' && error.status === 409)) {
+      const payload = { error: error.message };
+      if (['NOTES_VERSION_CONFLICT', 'VAULT_FILE_CONFLICT'].includes(error.code)) {
+        payload.code = error.code;
+        if (error.conflictPreserved === true) payload.conflictPreserved = true;
+      }
+      return res.status(error.status).json(payload);
+    }
     console.error('Paperdesk request failed:', error);
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });

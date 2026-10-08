@@ -261,3 +261,44 @@ test('cross-document annotation IDs and duplicate PDF hashes cannot rebuild an i
   assert.throws(() => store.readAll(), status409);
   assert.deepEqual(store.readDocument(payload.document.id), first);
 });
+
+test('visible generated annotation edits are refused without changing alpha.1 rendering or the original bytes', t => {
+  const { store, payload } = setup(t);
+  const saved = store.writeDocument(payload, null), original = readFileSync(saved.notePath, 'utf8');
+  for (const changed of [
+    original.replace('需要核对边界条件。', '在 Obsidian 手改的批注评论'),
+    original.replace('> First line', '> 手改引文'),
+    original.replace('## Paperdesk 批注\n', '## Paperdesk 批注\n\n额外的个人推导\n'),
+  ]) {
+    writeFileSync(saved.notePath, changed);
+    for (const action of [() => store.readDocument(payload.document.id), () => store.writeDocument(payload, sha256(Buffer.from(changed)))]) {
+      assert.throws(action, error => error.status === 409 && !error.code && !error.conflictPreserved && /移到笔记正文/.test(error.message));
+    }
+    assert.equal(readFileSync(saved.notePath, 'utf8'), changed);
+  }
+  writeFileSync(saved.notePath, original);
+  assert.deepEqual(store.readDocument(payload.document.id), saved, 'The pre-rule generated format remains valid byte for byte');
+  const bodyEdited = original.replace('# 阅读笔记', '# Obsidian 正文可以编辑');
+  writeFileSync(saved.notePath, bodyEdited);
+  const current = store.readDocument(payload.document.id);
+  assert.ok(current.document.notes_zh.startsWith('# Obsidian 正文可以编辑'));
+  const updated = store.writeDocument({ ...current, document: { ...current.document, notes_zh: current.document.notes_zh + 'Paperdesk 继续编辑\n' } }, current.token);
+  assert.ok(updated.document.notes_zh.endsWith('Paperdesk 继续编辑\n'));
+});
+
+test('Library.md deletion after establishment blocks reads and writes without recreating default metadata', t => {
+  const { store, payload, vault, recoveryDir } = setup(t);
+  const state = { folders: [], theme: 'night' };
+  store.writeLibrary(state, null);
+  const saved = store.writeDocument(payload, null), before = readFileSync(saved.notePath, 'utf8');
+  const library = path.join(store.rootDir, 'Library.md'); unlinkSync(library);
+  for (const action of [() => store.readLibrary(), () => store.writeLibrary({ folders: [], theme: 'forest' }, null),
+    () => store.writeDocument(payload, saved.token)]) {
+    assert.throws(action, error => error.status === 409 && !error.code && !error.conflictPreserved && /Library\.md/.test(error.message));
+  }
+  assert.equal(readFileSync(saved.notePath, 'utf8'), before);
+  assert.throws(() => readFileSync(library), { code: 'ENOENT' });
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  assert.throws(() => reopened.readLibrary(), status409);
+  assert.throws(() => readFileSync(library), { code: 'ENOENT' });
+});

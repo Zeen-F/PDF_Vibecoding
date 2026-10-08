@@ -80,13 +80,16 @@ test('external Markdown edits read back, stale saves preserve both, and corrupt/
   await writeFile(h.notePath(doc.id),external);
   const current=(await(await h.request(endpoint)).json()).document;assert.equal(current.notesZh,'Obsidian 外部修改');assert.notEqual(current.notesRevision,old.notesRevision);
   response=await h.request(endpoint,'PATCH',{notesZh:'Paperdesk 未保存的草稿',expectedNotesRevision:old.notesRevision});assert.equal(response.status,409);
+  const conflict=await response.json();assert.equal(conflict.code,'NOTES_VERSION_CONFLICT');assert.equal(conflict.conflictPreserved,true);
   assert.equal(await readFile(h.notePath(doc.id),'utf8'),external);
   const conflictDir=path.join(h.vaultDir,'Paperdesk','Notes','Conflicts');
   const files=await readdir(conflictDir);assert.equal(files.length,1);assert.ok((await readFile(path.join(conflictDir,files[0]),'utf8')).includes('Paperdesk 未保存的草稿'));
   response=await h.request(endpoint,'PATCH',{notesZh:'合并后的理解',expectedNotesRevision:current.notesRevision});assert.equal(response.status,200);
   const valid=await readFile(h.notePath(doc.id),'utf8');assert.ok(valid.includes('aliases: [我的精读笔记]'));assert.ok(valid.includes('合并后的理解'));
   const corrupt=valid.replace('paperdesk-state:v1','paperdesk-state:broken');await writeFile(h.notePath(doc.id),corrupt);
-  response=await h.request(endpoint);assert.equal(response.status,409);assert.equal(await readFile(h.notePath(doc.id),'utf8'),corrupt);
+  response=await h.request(endpoint);assert.equal(response.status,409);
+  const corruptedResponse=await response.json();assert.equal(corruptedResponse.code,undefined);assert.equal(corruptedResponse.conflictPreserved,undefined);
+  assert.equal(await readFile(h.notePath(doc.id),'utf8'),corrupt);
   await writeFile(h.notePath(doc.id),valid);assert.equal((await h.request(endpoint)).status,200);
   await rm(h.notePath(doc.id));assert.equal((await h.request(endpoint)).status,409);
   await writeFile(h.notePath(doc.id),valid);assert.equal((await h.request(endpoint)).status,200);
@@ -98,6 +101,9 @@ test('plugin append commits the same Markdown and folder removal is reflected in
   const body={text:'从当前对话明确记录的内容',expectedNotesRevision:doc.notesRevision,requestId:randomUUID(),page:1};
   let response=await h.request(`${endpoint}/notes/append`,'POST',body);assert.equal(response.status,200,await response.clone().text());
   assert.ok((await readFile(h.notePath(doc.id),'utf8')).includes(body.text));
+  response=await h.request(`${endpoint}/notes/append`,'POST',{...body,requestId:randomUUID()});assert.equal(response.status,409);
+  const stale=await response.json();assert.equal(stale.code,'NOTES_VERSION_CONFLICT');assert.equal(stale.conflictPreserved,undefined);
+  await assert.rejects(readdir(path.join(h.vaultDir,'Paperdesk','Notes','Conflicts')),{code:'ENOENT'},'Plugin stale append has not archived a draft');
   response=await h.request('/folders','POST',{name:'临时分类'});const {folder}=await response.json();
   assert.equal((await h.request(`${endpoint}/folder`,'PATCH',{folderId:folder.id})).status,200);
   assert.equal((await h.request(`/folders/${folder.id}`,'DELETE')).status,200);
@@ -110,4 +116,59 @@ test('cache configuration cannot place database or credentials inside a vault',a
   assert.throws(()=>getVaultConfig({vaultDir:h.vaultDir,dataDir:path.join(h.vaultDir,'cache')}),/之外/);
   assert.throws(()=>getVaultConfig({vaultDir:path.join(h.root,'missing')}),/ENOENT/);
   assert.throws(()=>getVaultConfig({vaultDir:h.vaultDir,vaultSubdir:'..'}));
+});
+
+test('external edits to generated annotation text fail safely; editable body remains bidirectional',async t=>{
+  const h=await harness(t),doc=await h.upload(),endpoint=`/documents/${doc.id}`;
+  let response=await h.request(`${endpoint}/annotations`,'POST',{page:1,quote:'可见引文',comment:'正式批注评论',color:'yellow',rects:[{x:.1,y:.1,width:.2,height:.04}]});
+  assert.equal(response.status,201);
+  const original=await readFile(h.notePath(doc.id),'utf8'),changed=original.replace('正式批注评论','外部手改批注');
+  await writeFile(h.notePath(doc.id),changed);
+  for(const [route,method,body]of [[endpoint,'GET'],[endpoint,'PATCH',{notesZh:'本机未保存草稿',expectedNotesRevision:doc.notesRevision}],['/storage/refresh','POST']]){
+    response=await h.request(route,method,body);assert.equal(response.status,409);
+    const failure=await response.json();assert.equal(failure.code,undefined);assert.equal(failure.conflictPreserved,undefined);assert.match(failure.error,/笔记正文/);
+    assert.equal(await readFile(h.notePath(doc.id),'utf8'),changed);
+  }
+  await assert.rejects(readdir(path.join(h.vaultDir,'Paperdesk','Notes','Conflicts')),{code:'ENOENT'});
+  const bodyEdited=original.replace('\n\n<!-- paperdesk-generated:start:v1 -->','Obsidian 可编辑正文\n\n<!-- paperdesk-generated:start:v1 -->');
+  await writeFile(h.notePath(doc.id),bodyEdited);
+  response=await h.request(endpoint);assert.equal(response.status,200);const current=(await response.json()).document;
+  assert.equal(current.notesZh,'Obsidian 可编辑正文');
+  response=await h.request(endpoint,'PATCH',{notesZh:'Paperdesk 继续编辑正文',expectedNotesRevision:current.notesRevision});assert.equal(response.status,200);
+  assert.ok((await readFile(h.notePath(doc.id),'utf8')).includes('Paperdesk 继续编辑正文'));
+});
+
+test('a failed conflict archive returns saving failure without code or false preservation acknowledgement',async t=>{
+  const h=await harness(t),doc=await h.upload(),endpoint=`/documents/${doc.id}`;
+  const original=await readFile(h.notePath(doc.id),'utf8'),changed=original.replace('\n\n<!-- paperdesk-generated:start:v1 -->','外部最新正文\n\n<!-- paperdesk-generated:start:v1 -->');
+  await writeFile(h.notePath(doc.id),changed);
+  const conflicts=path.join(h.vaultDir,'Paperdesk','Notes','Conflicts');await writeFile(conflicts,'ordinary file blocks archival');
+  const response=await h.request(endpoint,'PATCH',{notesZh:'需要保留的本机草稿',expectedNotesRevision:doc.notesRevision});assert.equal(response.status,409);
+  const failure=await response.json();assert.equal(failure.code,undefined);assert.equal(failure.conflictPreserved,undefined);
+  assert.ok(!JSON.stringify(failure).includes(h.root));
+  assert.equal(await readFile(conflicts,'utf8'),'ordinary file blocks archival');assert.equal(await readFile(h.notePath(doc.id),'utf8'),changed);
+});
+
+test('Library.md deletion blocks refresh and writes and never resets existing metadata',async t=>{
+  const h=await harness(t),doc=await h.upload();
+  let response=await h.request('/folders','POST',{name:'保存的分类'});const {folder}=await response.json();
+  assert.equal((await h.request(`/documents/${doc.id}/folder`,'PATCH',{folderId:folder.id})).status,200);
+  assert.equal((await h.request('/library/theme','PATCH',{theme:'night'})).status,200);
+  const libraryPath=path.join(h.vaultDir,'Paperdesk','Library.md'),original=await readFile(libraryPath,'utf8');await rm(libraryPath);
+  for(const [route,method,body]of [['/storage/refresh','POST'],['/library','GET'],['/library/theme','PATCH',{theme:'forest'}]]){
+    response=await h.request(route,method,body);assert.equal(response.status,409);
+    const failure=await response.json();assert.equal(failure.code,undefined);assert.equal(failure.conflictPreserved,undefined);assert.match(failure.error,/Library\.md/);
+    await assert.rejects(readFile(libraryPath),{code:'ENOENT'});
+  }
+  await writeFile(libraryPath,original);
+  const restored=await(await h.request('/library')).json();assert.equal(restored.theme,'night');assert.equal(restored.folders[0].id,folder.id);
+  assert.equal((await(await h.request(`/documents/${doc.id}`)).json()).document.folderId,folder.id);
+});
+
+test('an established empty vault with removed Library.md cannot be default-initialized by a restarted app',async t=>{
+  const h=await harness(t),libraryPath=path.join(h.vaultDir,'Paperdesk','Library.md');
+  await h.stop();await rm(libraryPath);
+  await assert.rejects(h.start(),error=>error.status===409&&!error.code&&!error.conflictPreserved&&/Library\.md/.test(error.message));
+  await assert.rejects(readFile(libraryPath),{code:'ENOENT'});
+  assert.equal(await readFile(path.join(h.dataDir,'vault-library-established'),'utf8'),'1\n');
 });

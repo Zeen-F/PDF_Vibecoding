@@ -208,7 +208,10 @@ export function registerPluginApi({ app, db, dataDir, documentOr404, serializeDo
       if ([...sessions.values()].some(session => session.documentId === doc.id && session.notesDirty)) {
         throw new HttpError(409, '纸间中还有未保存的笔记，请先在阅读窗口保存后重试。');
       }
-      if (expectedNotesRevision !== notesRevision(doc)) throw new HttpError(409, '笔记已更新，请读取最新笔记并核对后重试。');
+      if (expectedNotesRevision !== notesRevision(doc)) {
+        const conflict = new HttpError(409, '笔记已更新，请读取最新笔记并核对后重试。');
+        conflict.code = 'NOTES_VERSION_CONFLICT'; throw conflict;
+      }
       const old = mergeNotes(doc.notes_zh, doc.notes_en);
       const addition = page === null ? text : `### 第 ${page} 页\n\n${text}`;
       const combined = old ? `${old}\n\n${addition}` : addition;

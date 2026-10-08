@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -9,6 +9,28 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
   let insideTransaction = false, pendingRefresh;
   const tokens = new Map();
   let libraryToken = null;
+  // This local marker carries no library contents. It distinguishes an empty
+  // established vault with a removed Library.md from a genuinely new vault.
+  const establishedMarker = path.join(dataDir, 'vault-library-established');
+  let libraryEstablished = existsSync(establishedMarker)
+    || db.prepare('SELECT COUNT(*) AS count FROM documents').get().count > 0
+    || db.prepare('SELECT COUNT(*) AS count FROM folders').get().count > 0
+    || db.prepare('SELECT theme FROM library_preferences WHERE id=1').get().theme !== 'forest';
+  function markEstablished() {
+    libraryEstablished = true;
+    if (!existsSync(establishedMarker)) {
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+      try { writeFileSync(establishedMarker, '1\n', { flag: 'wx', mode: 0o600 }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+  }
+  function readLibrary() {
+    const library = store.readLibrary();
+    if (library.token === null && libraryEstablished) throw new HttpError(409,
+      '已建立的 Obsidian 仓库缺少 Library.md，请恢复原文件后再刷新或保存；原分类和皮肤未被替换。');
+    if (library.token !== null) markEstablished();
+    return library;
+  }
   const allDocuments = () => db.prepare('SELECT * FROM documents ORDER BY id').all();
   const snapshot = id => ({
     document: db.prepare('SELECT * FROM documents WHERE id = ?').get(id),
@@ -52,7 +74,7 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
   }
   function syncKnown() {
     if (insideTransaction) return;
-    const library = store.readLibrary();
+    const library = readLibrary();
     const all = records();
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -67,7 +89,7 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
   async function refresh() {
     if (pendingRefresh) return pendingRefresh;
     pendingRefresh = (async () => {
-      const library = store.readLibrary();
+      const library = readLibrary();
       const all = records();
       const parsed = new Map();
       for (const record of all) {
@@ -93,7 +115,8 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
       }
       db.exec('BEGIN IMMEDIATE');
       try {
-        applyLibrary(store.readLibrary().state);
+        const projectedLibrary = readLibrary();
+        applyLibrary(projectedLibrary.state);
         for (const record of latest) {
           applyRecord(record);
           const pdf = parsed.get(record.document.id)?.pdf;
@@ -103,7 +126,7 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
             pdf.pages.forEach((text,index) => insert.run(record.document.id,index+1,text));
           }
         }
-        db.exec('COMMIT'); libraryToken = store.readLibrary().token;
+        db.exec('COMMIT'); libraryToken = projectedLibrary.token;
       } catch (error) { db.exec('ROLLBACK'); tokens.clear(); throw error; }
     })().finally(() => { pendingRefresh = undefined; });
     return pendingRefresh;
@@ -138,10 +161,11 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
     } catch (error) {
       db.exec('ROLLBACK');
       const recoveryErrors = [];
-      if (error.status === 409) for (const proposed of proposedChanges) {
+      let archived = 0;
+      if (error.code === 'VAULT_FILE_CONFLICT') for (const proposed of proposedChanges) {
         const previous = before.get(proposed.document.id);
         if (previous && proposed.document.notes_zh !== previous.document.notes_zh) {
-          try { store.writeConflict(proposed.document.id,proposed.document.notes_zh); } catch (failure) { recoveryErrors.push(failure); }
+          try { store.writeConflict(proposed.document.id,proposed.document.notes_zh); archived++; } catch (failure) { recoveryErrors.push(failure); }
         }
       }
       // Roll back only our versions; an independent edit always wins and is retained.
@@ -150,14 +174,15 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
       }
       if (writtenLibrary) try { store.writeLibrary(previousLibrary.state,writtenLibrary.token); } catch (failure) { recoveryErrors.push(failure); }
       tokens.clear();
-      if (recoveryErrors.length) throw new HttpError(409, '仓库在保存过程中发生外部修改。原文和恢复快照均已保留，请刷新并核对后重试。');
+      if (recoveryErrors.length) throw new HttpError(409, '仓库保存未完成，冲突归档或恢复没有全部通过检查。请保留本机草稿，刷新并核对原文件后重试。');
+      if (archived) error.conflictPreserved = true;
       throw error;
     } finally { insideTransaction = false; }
   }
   return { refresh, syncKnown, transaction, snapshot, settle: () => pendingRefresh || Promise.resolve(), get insideTransaction() { return insideTransaction; },
     async initialize() {
-      const library = store.readLibrary();
-      if (library.token === null) store.writeLibrary(library.state,null);
+      const library = readLibrary();
+      if (library.token === null) { store.writeLibrary(library.state,null); markEstablished(); }
       await refresh();
     },
     persistImported(id) {
