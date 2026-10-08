@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Worker } from 'node:worker_threads';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../server/app.mjs';
+import { CURRENT_SCHEMA } from '../shared/library.mjs';
 
 // All credentials, text and provider responses here are synthetic. Every
 // provider request is intercepted; these tests never contact external providers.
@@ -279,8 +280,8 @@ test('cache is bounded to 200 entries and translation cannot change notes, schem
   assert.deepEqual(await readFile(path.join(lib.dataDir, 'pdfs', doc.id + '.pdf')), sample);
   const primary = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
   try {
-    assert.equal(primary.prepare('PRAGMA user_version').get().user_version, 3);
-    assert.deepEqual(primary.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name), ['annotations', 'documents', 'folders', 'library_preferences', 'pages']);
+    assert.equal(primary.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA);
+    assert.deepEqual(primary.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
   } finally { primary.close(); }
 });
 

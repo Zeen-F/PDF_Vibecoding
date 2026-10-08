@@ -23,6 +23,7 @@
     "desktop:pack": "npm run build && node scripts/prepare-desktop-assets.mjs && electron-builder --config electron-builder.config.cjs --dir --mac --arm64 --publish never",
     "desktop:dist": "npm run build && node scripts/prepare-desktop-assets.mjs && electron-builder --config electron-builder.config.cjs --mac dmg zip --arm64 --publish never",
     "test:desktop": "node scripts/test-desktop.mjs",
+    "test:desktop:reliability": "node tests/desktop-reliability.mjs",
     "release:checksums": "node scripts/release-checksums.mjs"
   },
   "dependencies": {

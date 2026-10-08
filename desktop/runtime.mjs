@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { lstat, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -6,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { createApp } from '../server/app.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
+import { LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION, libraryIdentity } from '../shared/service-identity.mjs';
 
 const HOST = '127.0.0.1';
 const PROBE_TIMEOUT_MS = 1500;
@@ -24,10 +24,6 @@ function resolvedDataDir(dataDir) {
   return path.resolve(dataDir);
 }
 
-function libraryIdentity(dataDir) {
-  return createHash('sha256').update(dataDir).digest('hex');
-}
-
 async function matchingService(baseUrl, libraryId) {
   try {
     const replies = await Promise.all(['/api/plugin/status', '/api/health'].map(async endpoint => {
@@ -37,7 +33,8 @@ async function matchingService(baseUrl, libraryId) {
       return response.ok ? response.json() : null;
     }));
     const [status, health] = replies;
-    return status?.service === 'paperdesk' && status.apiVersion === 1
+    return status?.service === 'paperdesk' && status.apiVersion === SERVICE_API_VERSION
+      && status.productVersion === PRODUCT_VERSION && status.launcherProtocol === LAUNCHER_PROTOCOL
       && status.libraryId === libraryId && health?.ok === true;
   } catch {
     return false;
