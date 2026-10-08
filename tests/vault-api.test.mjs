@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createApp } from '../server/app.mjs';
 import { libraryIdentity } from '../shared/service-identity.mjs';
 import { getVaultConfig } from '../server/vault-config.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { createVaultStore } from '../server/vault-store.mjs';
 
 const sample = await readFile(new URL('../public/examples/reading-demo.pdf',import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -28,11 +30,16 @@ async function harness(t) {
   };
   await start();
   t.after(async()=>{await stop();await rm(root,{recursive:true,force:true});});
-  const request = (url,method='GET',body) => fetch(`http://127.0.0.1:${server.address().port}/api${url}`,{
-    method,headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),
+  const request = (url,method='GET',body,headers={}) => fetch(`http://127.0.0.1:${server.address().port}/api${url}`,{
+    method,headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:JSON.stringify(body),
   });
+  const defaultPdfPath = '文献/课程资料/阅读 示例 # 1.pdf';
   return {root,vaultDir,dataDir,request,start,stop,
-    async upload() {const form=new FormData();form.append('file',new Blob([sample]),'阅读示例.pdf');const response=await fetch(`http://127.0.0.1:${server.address().port}/api/documents`,{method:'POST',body:form});assert.equal(response.status,201,await response.clone().text());return(await response.json()).document;},
+    defaultPdfPath,
+    async upload(relativePath=defaultPdfPath,bytes=sample) {
+      const file=path.join(vaultDir,...relativePath.split('/'));await mkdir(path.dirname(file),{recursive:true});await writeFile(file,bytes);
+      const response=await request('/vault/pdfs/open','POST',{path:relativePath});assert.equal(response.status,201,await response.clone().text());return(await response.json()).document;
+    },
     notePath(id){return path.join(vaultDir,'Paperdesk','Notes',`${id}.md`);},
   };
 }
@@ -47,7 +54,8 @@ test('vault files are authoritative; notes, geometry, classifications, retry and
   assert.equal(response.status,200,await response.clone().text());
   let current=(await response.json()).document;
   const file=await readFile(h.notePath(doc.id),'utf8');assert.ok(file.includes(notes));
-  const pdf=await readFile(path.join(h.vaultDir,'Paperdesk','PDFs',`${doc.id}.pdf`));assert.equal(hash(pdf),hash(sample));
+  const pdf=await readFile(path.join(h.vaultDir,...h.defaultPdfPath.split('/')));assert.equal(hash(pdf),hash(sample));
+  await assert.rejects(readdir(path.join(h.vaultDir,'Paperdesk','PDFs')),{code:'ENOENT'},'No PDF copy folder was created');
   const requestId=randomUUID(),annotationBody={page:1,kind:'region',rects:[{x:.12,y:.14,width:.3,height:.2}],color:'green',comment:'图表证据，不做OCR',requestId};
   response=await h.request(`${endpoint}/annotations`,'POST',annotationBody);assert.equal(response.status,201,await response.clone().text());
   const annotation=(await response.json()).annotation;
@@ -171,4 +179,84 @@ test('an established empty vault with removed Library.md cannot be default-initi
   await assert.rejects(h.start(),error=>error.status===409&&!error.code&&!error.conflictPreserved&&/Library\.md/.test(error.message));
   await assert.rejects(readFile(libraryPath),{code:'ENOENT'});
   assert.equal(await readFile(path.join(h.dataDir,'vault-library-established'),'utf8'),'1\n');
+});
+
+test('original nested PDF selection renders file/TOC/plugin PNG without making copies and duplicate selections retain one set of annotations',async t=>{
+  const h=await harness(t),relative=h.defaultPdfPath,file=path.join(h.vaultDir,...relative.split('/'));
+  await mkdir(path.dirname(file),{recursive:true});await writeFile(file,sample);
+  let response=await h.request('/vault/pdfs');assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{files:[{path:relative,name:path.posix.basename(relative),byteSize:sample.length,documentId:null}],truncated:false});
+  assert.deepEqual((await(await h.request('/documents')).json()).documents,[],'Listing a PDF cannot add it to the index');
+  response=await h.request('/vault/pdfs/open','POST',{path:relative});assert.equal(response.status,201);
+  const{document:doc,duplicate}=await response.json();assert.equal(duplicate,false);
+  let current=(await(await h.request(`/documents/${doc.id}`)).json()).document;
+  response=await h.request(`/documents/${doc.id}`,'PATCH',{notesZh:'保存在独立Markdown的阅读笔记',expectedNotesRevision:current.notesRevision});assert.equal(response.status,200);
+  response=await h.request(`/documents/${doc.id}/annotations`,'POST',{page:1,quote:'原位阅读引文',comment:'保持来源位置',color:'yellow',rects:[{x:.1,y:.2,width:.3,height:.04}],requestId:randomUUID()});assert.equal(response.status,201);
+  const annotation=(await response.json()).annotation;
+  response=await h.request(`/documents/${doc.id}/file`);assert.equal(response.status,200);assert.equal(hash(Buffer.from(await response.arrayBuffer())),hash(sample));
+  const partial=await h.request(`/documents/${doc.id}/file`,'GET',undefined,{Range:'bytes=0-15'});
+  assert.equal(partial.status,206);assert.deepEqual(Buffer.from(await partial.arrayBuffer()),sample.subarray(0,16));
+  response=await h.request(`/documents/${doc.id}/toc`);assert.equal(response.status,200);assert.ok(Array.isArray((await response.json()).entries));
+  response=await h.request(`/documents/${doc.id}/reader-page?page=1&width=600`);assert.equal(response.status,200,await response.clone().text());
+  const rendered=await response.json();assert.equal(rendered.documentId,doc.id);assert.equal(rendered.mimeType,'image/png');assert.equal(rendered.width,600);assert.ok(rendered.image.startsWith('iVBOR'));
+  response=await h.request('/vault/pdfs/open','POST',{path:relative});assert.equal(response.status,200);assert.equal((await response.json()).document.id,doc.id);
+  const alias='另一个已有目录/相同原文.pdf';await mkdir(path.dirname(path.join(h.vaultDir,alias)),{recursive:true});await writeFile(path.join(h.vaultDir,alias),sample);
+  response=await h.request('/vault/pdfs/open','POST',{path:alias});assert.equal(response.status,200);assert.equal((await response.json()).duplicate,true);
+  const stored=(await(await h.request(`/documents/${doc.id}`)).json());assert.deepEqual(stored.annotations,[annotation]);assert.equal(stored.document.notesZh,'保存在独立Markdown的阅读笔记');
+  const store=createVaultStore({vaultDir:h.vaultDir,recoveryDir:path.join(h.dataDir,'recoveries','originals')});assert.deepEqual(store.readDocument(doc.id).pdfSource,{kind:'vault',path:relative});
+  assert.equal(hash(await readFile(file)),hash(sample));assert.equal(hash(await readFile(path.join(h.vaultDir,alias))),hash(sample));
+  await assert.rejects(readdir(path.join(h.vaultDir,'Paperdesk','PDFs')),{code:'ENOENT'});
+  const listed=(await(await h.request('/vault/pdfs')).json()).files;assert.equal(listed.find(item=>item.path===relative).documentId,doc.id);assert.equal(listed.find(item=>item.path===alias).documentId,null);
+  const note=await readFile(h.notePath(doc.id),'utf8');assert.ok(note.includes('paperdesk_format: 2'));assert.ok(note.includes('%20%23%201.pdf#page=1'));
+  await h.stop();for(const name of ['paperdesk.sqlite','paperdesk.sqlite-wal','paperdesk.sqlite-shm'])await rm(path.join(h.dataDir,name),{force:true});await h.start();
+  current=(await(await h.request(`/documents/${doc.id}`)).json()).document;assert.equal(current.notesZh,stored.document.notesZh);
+  assert.deepEqual((await(await h.request(`/documents/${doc.id}`)).json()).annotations,[annotation]);
+  response=await h.request(`/documents/${doc.id}/file`);assert.equal(response.status,200);assert.equal(hash(Buffer.from(await response.arrayBuffer())),hash(sample));
+});
+
+test('selection rejects traversal, symlinks, hidden and malformed source files; old uploads are disabled in vault mode',async t=>{
+  const h=await harness(t),outside=path.join(h.root,'outside.pdf');await writeFile(outside,sample);await symlink(outside,path.join(h.vaultDir,'linked.pdf'));
+  const outsideDir=path.join(h.root,'outside-dir');await mkdir(outsideDir);await writeFile(path.join(outsideDir,'source.pdf'),sample);await symlink(outsideDir,path.join(h.vaultDir,'linked-dir'));
+  await writeFile(path.join(h.vaultDir,'.hidden.pdf'),sample);await writeFile(path.join(h.vaultDir,'invalid.pdf'),'invalid PDF bytes');
+  for(const relative of ['../outside.pdf',outside,'C:/outside.pdf','linked.pdf','linked-dir/source.pdf','.hidden.pdf','.obsidian/secret.pdf','dir//x.pdf','dir\\x.pdf','invalid.pdf','missing.pdf']){
+    const response=await h.request('/vault/pdfs/open','POST',{path:relative});assert.equal(response.status,409,relative);
+    const failure=await response.json();assert.equal(failure.conflictPreserved,undefined);assert.ok(!JSON.stringify(failure).includes(h.root));
+  }
+  assert.equal(hash(await readFile(outside)),hash(sample));assert.deepEqual((await(await h.request('/documents')).json()).documents,[]);
+  const listed=(await(await h.request('/vault/pdfs')).json()).files;assert.deepEqual(listed.map(item=>item.path),['invalid.pdf']);
+  const response=await h.request('/documents','POST');assert.equal(response.status,400);assert.match((await response.json()).error,/先把 PDF 放在 Obsidian/);
+  const cache=await readdir(h.dataDir,{recursive:true});assert.ok(!cache.some(item=>item.endsWith('.pdf')),'Failed opening cannot leave parsed PDF snapshots');
+});
+
+test('a missing or replaced original PDF stops reads and writes without touching formal notes and annotations',async t=>{
+  const h=await harness(t),doc=await h.upload(),file=path.join(h.vaultDir,...h.defaultPdfPath.split('/')),note=await readFile(h.notePath(doc.id),'utf8');
+  const changed=Buffer.from(sample);changed[changed.length-1]^=1;await writeFile(file,changed);
+  for(const [route,method,body]of [[`/documents/${doc.id}/file`,'GET'],[`/documents/${doc.id}/reader-page?page=1&width=600`,'GET'],[`/documents/${doc.id}`,'PATCH',{notesZh:'本机草稿',expectedNotesRevision:doc.notesRevision}]]){
+    const response=await h.request(route,method,body);assert.equal(response.status,409);assert.equal((await response.json()).conflictPreserved,undefined);
+    assert.equal(await readFile(h.notePath(doc.id),'utf8'),note);
+  }
+  assert.equal(hash(await readFile(file)),hash(changed),'Refused reads cannot restore or overwrite the original PDF');
+  await rm(file);assert.equal((await h.request(`/documents/${doc.id}/toc`)).status,409);assert.equal(await readFile(h.notePath(doc.id),'utf8'),note);
+});
+
+test('legacy version 1 documents continue to open from their historical PDF folder and retain format 1 on edits',async t=>{
+  const h=await harness(t),store=createVaultStore({vaultDir:h.vaultDir,recoveryDir:path.join(h.dataDir,'recoveries','originals')}),id=randomUUID(),now=new Date().toISOString();
+  await mkdir(store.pdfDir,{recursive:true});await writeFile(store.pdfPath(id),sample);
+  store.writeDocument({document:{id,sha256:hash(sample),title:'Legacy',filename:'legacy.pdf',page_count:2,byte_size:sample.length,created_at:now,updated_at:now,text_available:1,notes_zh:'旧版正文',notes_en:'',last_page:1,folder_id:null},annotations:[]},null);
+  let response=await h.request(`/documents/${id}`);assert.equal(response.status,200);const doc=(await response.json()).document;
+  response=await h.request(`/documents/${id}`,'PATCH',{notesZh:'兼容旧版编辑',expectedNotesRevision:doc.notesRevision});assert.equal(response.status,200);
+  assert.equal(store.readDocument(id).pdfSource,undefined);assert.ok((await readFile(store.notePath(id),'utf8')).includes('paperdesk_format: 1'));
+  response=await h.request(`/documents/${id}/file`);assert.equal(response.status,200);assert.equal(hash(Buffer.from(await response.arrayBuffer())),hash(sample));
+});
+
+test('ordinary library mode rejects the two vault selection endpoints and keeps upload and file reading unchanged',async t=>{
+  const root=await mkdtemp(path.join(tmpdir(),'paperdesk-library-selection-')),runtime=createApp({dataDir:root});await runtime.ready;
+  const server=runtime.app.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await runtime.close();await rm(root,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(`${base}/api/vault/pdfs`)).status,400);
+  assert.equal((await fetch(`${base}/api/vault/pdfs/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'file.pdf'})})).status,400);
+  const form=new FormData();form.append('file',new Blob([sample]),'ordinary.pdf');let response=await fetch(`${base}/api/documents`,{method:'POST',body:form});assert.equal(response.status,201);const{document}=await response.json();
+  response=await fetch(`${base}/api/documents/${document.id}/file`);assert.equal(response.status,200);assert.equal(hash(Buffer.from(await response.arrayBuffer())),hash(sample));
+  const db=new DatabaseSync(path.join(root,'paperdesk.sqlite'),{readOnly:true});assert.equal(db.prepare('PRAGMA user_version').get().user_version,4);db.close();
 });

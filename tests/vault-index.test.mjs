@@ -20,10 +20,13 @@ async function fixture(t) {
   const app=createApp({vaultDir,dataDir});await app.ready;await app.close();
   const db=new DatabaseSync(path.join(dataDir,'paperdesk.sqlite'));db.exec('PRAGMA foreign_keys=ON;');
   const store=createVaultStore({vaultDir,recoveryDir:path.join(dataDir,'recoveries','originals')});
-  const createRecord=async(notes='正文 A',bytes=sample)=>{
-    const id=randomUUID(),now=new Date().toISOString();await writeFile(store.pdfPath(id),bytes);
+  const createRecord=async(notes='正文 A',bytes=sample,relativeSource)=>{
+    const id=randomUUID(),now=new Date().toISOString();
+    const file=relativeSource?path.join(store.vaultDir,...relativeSource.split('/')):store.pdfPath(id);
+    await mkdir(path.dirname(file),{recursive:true});await writeFile(file,bytes);
     return store.writeDocument({document:{id,sha256:hash(bytes),title:'Test',filename:'test.pdf',page_count:2,byte_size:bytes.length,
-      created_at:now,updated_at:now,text_available:1,notes_zh:notes,notes_en:'',last_page:1,folder_id:null},annotations:[]},null);
+      created_at:now,updated_at:now,text_available:1,notes_zh:notes,notes_en:'',last_page:1,folder_id:null},annotations:[],
+      ...(relativeSource?{pdfSource:{kind:'vault',path:relativeSource}}:{})},null);
   };
   const indexFor=(override={},parsePdf=async()=>({pages:['text A1','text A2']}))=>createVaultIndex({db,store:{...store,...override},dataDir,parsePdf,HttpError});
   t.after(async()=>{db.close();await rm(root,{recursive:true,force:true});});
@@ -100,4 +103,18 @@ test('the drain promise waits for a later asynchronous index refresh',async t=>{
   const slow=h.indexFor({},async()=>{entered.resolve();await release.promise;return{pages:['a','b']};});
   const refresh=slow.refresh();await entered.promise;let drained=false;const drain=slow.settle().then(()=>{drained=true;});
   await new Promise(resolve=>setImmediate(resolve));assert.equal(drained,false);release.resolve();await refresh;await drain;assert.equal(drained,true);
+});
+
+test('source references survive projection, snapshots, normal saves and transaction rollback',async t=>{
+  const h=await fixture(t),relative='原始文献/中文 # 阅读.pdf',record=await h.createRecord('正文 A',sample,relative);
+  const index=h.indexFor();await index.initialize();
+  assert.deepEqual(index.snapshot(record.document.id).pdfSource,{kind:'vault',path:relative});
+  index.transaction(()=>h.db.prepare('UPDATE documents SET notes_zh=? WHERE id=?').run('Paperdesk 正文 B',record.document.id));
+  let saved=h.store.readDocument(record.document.id);assert.equal(saved.document.notes_zh,'Paperdesk 正文 B');assert.deepEqual(saved.pdfSource,record.pdfSource);
+  assert.deepEqual(index.pdfReferences(),[{id:record.document.id,path:relative}]);
+  h.db.exec("CREATE TRIGGER reject_notes BEFORE UPDATE OF notes_zh ON documents BEGIN SELECT RAISE(ABORT,'synthetic SQL failure'); END;");
+  assert.throws(()=>index.transaction(()=>h.db.prepare('UPDATE documents SET notes_zh=? WHERE id=?').run('must not replace',record.document.id)));
+  saved=h.store.readDocument(record.document.id);assert.equal(saved.document.notes_zh,'Paperdesk 正文 B');assert.deepEqual(saved.pdfSource,record.pdfSource);
+  assert.equal(hash(await readFile(saved.pdfPath)),record.document.sha256);
+  await assert.rejects(readdir(h.store.pdfDir),{code:'ENOENT'},'V2 saves cannot create a legacy copy directory');
 });

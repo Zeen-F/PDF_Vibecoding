@@ -3,10 +3,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const pdfPackageDir = fileURLToPath(new URL('../node_modules/pdfjs-dist/', import.meta.url));
 
-process.once('message', async ({ filePath, page: pageNumber, width }) => {
+process.once('message', async ({ filePath, data, page: pageNumber, width }) => {
   let task, page, canvas, result;
   try {
-    if (!path.isAbsolute(filePath) || !Number.isSafeInteger(pageNumber) || pageNumber < 1
+    const source = data === undefined
+      ? (typeof filePath === 'string' && path.isAbsolute(filePath) ? { url: pathToFileURL(filePath).href } : null)
+      : (data instanceof Uint8Array ? { data: new Uint8Array(data) } : null);
+    if (!source || !Number.isSafeInteger(pageNumber) || pageNumber < 1
       || !Number.isSafeInteger(width) || width < 600 || width > 1600) throw new Error('Invalid page request');
     let getDocument, createCanvas;
     try {
@@ -17,7 +20,7 @@ process.once('message', async ({ filePath, page: pageNumber, width }) => {
       return;
     }
     task = getDocument({
-      url: pathToFileURL(filePath).href, disableStream: true, disableAutoFetch: true,
+      ...source, disableStream: true, disableAutoFetch: true,
       isEvalSupported: false, disableFontFace: true, useSystemFonts: false, useWorkerFetch: false,
       cMapUrl: `${path.join(pdfPackageDir, 'cmaps')}${path.sep}`, cMapPacked: true,
       standardFontDataUrl: `${path.join(pdfPackageDir, 'standard_fonts')}${path.sep}`,

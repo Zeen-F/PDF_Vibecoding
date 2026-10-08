@@ -17,6 +17,7 @@ import { registerTranslationApi } from './translation.mjs';
 import { getVaultConfig } from './vault-config.mjs';
 import { createVaultStore } from './vault-store.mjs';
 import { createVaultIndex } from './vault-index.mjs';
+import { listVaultPdfs } from './vault-pdfs.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -243,7 +244,7 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   const vaultStore = vaultConfig ? createVaultStore({ vaultDir: vaultConfig.vaultDir, subdir: vaultConfig.vaultSubdir, recoveryDir: path.join(dataDir,'recoveries','originals') }) : null;
   const pdfDir = vaultStore?.pdfDir || path.join(dataDir, 'pdfs');
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
+  if (!vaultStore) mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
   const incomingDir = vaultStore ? path.join(dataDir, '.incoming') : path.join(pdfDir, '.incoming');
   mkdirSync(incomingDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path.join(dataDir, 'paperdesk.sqlite'));
@@ -315,8 +316,14 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   app.disable('x-powered-by');
   app.use(localRequestOnly);
   app.use(acceptingRequests);
-  app.use('/api', async (_req, _res, next) => {
-    try { await ready; if (closed) throw new HttpError(503,'阅读服务正在关闭，请重新启动后重试。'); if (vaultIndex) await vaultIndex.refresh(); next(); } catch (error) { next(error); }
+  app.use('/api', async (req, _res, next) => {
+    try {
+      await ready;
+      if (closed) throw new HttpError(503,'阅读服务正在关闭，请重新启动后重试。');
+      // A file picker inventory must not parse or automatically index PDF bodies.
+      if (vaultIndex && !(req.method === 'GET' && req.path === '/vault/pdfs')) await vaultIndex.refresh();
+      next();
+    } catch (error) { next(error); }
   });
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -356,17 +363,25 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   const readerRenderer = createReaderRenderer();
   const tocCache = new Map();
   const pendingToc = new Set();
+  function documentPdfPath(doc) {
+    if (!vaultStore) return path.join(pdfDir, `${doc.id}.pdf`);
+    const record = vaultStore.readDocument(doc.id);
+    if (!record) throw new HttpError(409, '文献笔记文件缺失，请恢复原文件后重试；原 PDF 未被移动。');
+    return record.pdfPath;
+  }
   function documentToc(doc) {
     if (closed) return Promise.reject(new HttpError(503, '阅读服务正在关闭，请重新启动纸间后重试。'));
-    if (tocCache.has(doc.id)) {
-      const cached = tocCache.get(doc.id);
-      tocCache.delete(doc.id);
-      tocCache.set(doc.id, cached);
+    const key = `${doc.id}:${doc.sha256}`;
+    if (tocCache.has(key)) {
+      const cached = tocCache.get(key);
+      tocCache.delete(key);
+      tocCache.set(key, cached);
       return cached;
     }
     const pending = (async () => {
+      const source = vaultStore ? vaultStore.readPdfSnapshot(doc.id, doc.sha256) : pathToFileURL(documentPdfPath(doc));
       try {
-        return await extractToc(pathToFileURL(path.join(pdfDir, `${doc.id}.pdf`)), { getPageTexts: () => db.prepare('SELECT page, text FROM pages WHERE document_id = ? ORDER BY page').all(doc.id) });
+        return await extractToc(source, { getPageTexts: () => db.prepare('SELECT page, text FROM pages WHERE document_id = ? ORDER BY page').all(doc.id) });
       } catch {
         throw new HttpError(422, '暂时无法读取这份 PDF 的目录，请检查原始文件后重试。');
       }
@@ -374,9 +389,9 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     // Cache eviction must not make a still-running task invisible to close().
     pendingToc.add(pending);
     void pending.then(() => pendingToc.delete(pending), () => pendingToc.delete(pending));
-    tocCache.set(doc.id, pending);
+    tocCache.set(key, pending);
     if (tocCache.size > 8) tocCache.delete(tocCache.keys().next().value);
-    void pending.catch(() => { if (tocCache.get(doc.id) === pending) tocCache.delete(doc.id); });
+    void pending.catch(() => { if (tocCache.get(key) === pending) tocCache.delete(key); });
     return pending;
   }
   function documentOr404(id) {
@@ -414,6 +429,41 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     vaultName: vaultConfig ? path.basename(vaultConfig.vaultDir) : null, subdir: vaultConfig?.vaultSubdir || null,
     documentCount: db.prepare('SELECT COUNT(*) AS count FROM documents').get().count }));
   app.post('/api/storage/refresh', async (_req,res) => { if (vaultIndex) await vaultIndex.refresh(); res.json({ ok: true }); });
+  app.get('/api/vault/pdfs', (_req, res) => {
+    if (!vaultStore) throw new HttpError(400, '当前使用独立文献库，请先连接 Obsidian 仓库。');
+    res.json(listVaultPdfs({ vaultDir: vaultStore.vaultDir, documents: vaultIndex.pdfReferences() }));
+  });
+  app.post('/api/vault/pdfs/open', async (req, res) => {
+    if (!vaultStore) throw new HttpError(400, '当前使用独立文献库，请先连接 Obsidian 仓库。');
+    const body = objectBody(req.body, ['path']);
+    const requestedSource = { kind: 'vault', path: body.path };
+    const result = await queueImport(async () => {
+      const source = vaultStore.inspectPdfSource(requestedSource);
+      const existing = findHash.get(source.sha256);
+      if (existing) return { document: serializeDocument(existing), duplicate: true };
+      const parsed = await parsePdf(source.pdfPath, { expectedSha256: source.sha256, snapshotDir: path.join(dataDir, '.parse-snapshots') });
+      const current = vaultStore.inspectPdfSource(requestedSource);
+      if (current.sha256 !== source.sha256 || current.byteSize !== source.byteSize) throw new HttpError(409,
+        '原 PDF 在打开期间发生修改，请先核对原文件再重新选择；原文件未被移动或改写。');
+      await vaultIndex.refresh();
+      const duplicate = findHash.get(source.sha256);
+      if (duplicate) return { document: serializeDocument(duplicate), duplicate: true };
+      const id = randomUUID(), filename = originalFilename(path.posix.basename(requestedSource.path));
+      const title = parsed.title || filename.replace(/\.pdf$/i, '').slice(0, 500) || '未命名文献';
+      const now = new Date().toISOString();
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare(`INSERT INTO documents(id,sha256,title,filename,page_count,byte_size,created_at,updated_at,text_available)
+          VALUES (?,?,?,?,?,?,?,?,?)`).run(id,source.sha256,title,filename,parsed.pages.length,source.byteSize,now,now,Number(parsed.textAvailable));
+        const insertPage = db.prepare('INSERT INTO pages(document_id,page,text) VALUES (?,?,?)');
+        parsed.pages.forEach((text,index) => insertPage.run(id,index+1,text));
+        vaultIndex.persistImported(id,requestedSource);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+      return { document: serializeDocument(findDocument.get(id)), duplicate: false };
+    });
+    res.status(result.duplicate ? 200 : 201).json(result);
+  });
   app.get('/api/documents/:id/vault-note', (req,res) => {
     documentOr404(req.params.id);
     if (!vaultStore) throw new HttpError(400,'当前使用独立文献库，请先连接 Obsidian 仓库。');
@@ -429,7 +479,10 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   app.get('/api/documents', (_req, res) => {
     res.json({ documents: db.prepare('SELECT * FROM documents ORDER BY updated_at DESC, id').all().map(serializeDocument) });
   });
-  app.post('/api/documents', receiveUpload, async (req, res) => {
+  app.post('/api/documents', (_req, _res, next) => {
+    if (vaultStore) return next(new HttpError(400, '请先把 PDF 放在 Obsidian 知识库中，再选择原文件打开；Paperdesk 不复制 PDF。'));
+    next();
+  }, receiveUpload, async (req, res) => {
     if (!req.file) throw new HttpError(400, '请选择一个 PDF 文件。');
     const temporaryPath = req.file.path;
     let result;
@@ -486,12 +539,23 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     const doc = documentOr404(req.params.id);
     res.type('application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="paper.pdf"');
+    if (vaultStore) {
+      const buffer = vaultStore.readPdfSnapshot(doc.id, doc.sha256);
+      res.setHeader('Accept-Ranges', 'bytes');
+      const ranges = req.headers.range ? req.range(buffer.length, { combine: true }) : undefined;
+      if (ranges === -1) { res.setHeader('Content-Range', `bytes */${buffer.length}`); return next(new HttpError(416,'请求的 PDF 字节范围无效。')); }
+      if (Array.isArray(ranges) && ranges.type === 'bytes' && ranges.length === 1) {
+        const { start, end } = ranges[0]; res.setHeader('Content-Range', `bytes ${start}-${end}/${buffer.length}`);
+        return res.status(206).send(buffer.subarray(start,end+1));
+      }
+      return res.send(buffer);
+    }
     // The library may live under .local; only this DB-selected PDF route may
     // traverse a hidden parent directory. Global static routes remain restricted.
-    res.sendFile(`${doc.id}.pdf`, { root: pdfDir, dotfiles: 'allow' }, (error) => {
+    res.sendFile(documentPdfPath(doc), { dotfiles: 'allow' }, (error) => {
       if (!error || res.headersSent) return;
       if (['ENOENT', 'ENOTDIR'].includes(error.code)) {
-        return next(new HttpError(404, '原始 PDF 文件已丢失，请检查本地数据目录。'));
+        return next(new HttpError(vaultStore ? 409 : 404, '原始 PDF 文件已丢失，请检查本地数据目录。'));
       }
       if (error.status === 416) return next(new HttpError(416, '请求的 PDF 字节范围无效。'));
       next(new HttpError(500, '暂时无法读取原始 PDF，请检查数据目录权限和文件状态后重试。'));
@@ -505,7 +569,8 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     try {
       const { page, width } = readerPageQuery(req.query, doc.page_count);
       const text = db.prepare('SELECT text FROM pages WHERE document_id = ? AND page = ?').get(doc.id, page)?.text ?? '';
-      const rendered = await readerRenderer.render(path.join(pdfDir, `${doc.id}.pdf`), page, width);
+      const source = vaultStore ? vaultStore.readPdfSnapshot(doc.id, doc.sha256) : documentPdfPath(doc);
+      const rendered = await readerRenderer.render(source, page, width);
       res.json({ documentId: doc.id, page, ...rendered, ...readerPageText(text) });
     } catch (error) {
       if (error instanceof ReaderRenderError) throw new HttpError(error.status, error.message);

@@ -1,6 +1,6 @@
 {
   "name": "paperdesk",
-  "version": "1.2.0-alpha.2",
+  "version": "1.2.0-alpha.3",
   "description": "A local PDF reading, annotation and notes workspace",
   "private": true,
   "license": "MIT",

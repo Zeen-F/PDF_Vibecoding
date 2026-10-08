@@ -91,7 +91,8 @@ export function createReaderRenderer({ timeoutMs = 30_000, maxQueue = 4 } = {}) 
       if (closed) return Promise.reject(unavailable());
       if (active && waiting.length >= maxQueue) return Promise.reject(new ReaderRenderError(429, '页面预览请求较多，请稍后重试。'));
       return new Promise((resolve, reject) => {
-        const job = { input: { filePath, page, width }, resolve, reject, settled: false };
+        const source = typeof filePath === 'string' ? { filePath } : { data: filePath };
+        const job = { input: { ...source, page, width }, resolve, reject, settled: false };
         // Queue time counts toward the deadline, so a backlog cannot wait forever.
         job.timer = setTimeout(() => {
           const error = new ReaderRenderError(504, '这一页渲染超过 30 秒，请稍后重试或在浏览器打开。');

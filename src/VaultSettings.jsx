@@ -24,11 +24,11 @@ export default function VaultSettings({ open, onClose, storage, documentTitle, o
     <div className="vault-heading"><h2><FolderOpen size={19}/> 资料位置</h2><button autoFocus className="icon-button" aria-label="关闭资料位置" disabled={busy} onClick={onClose}><X size={19}/></button></div>
     {storage ? <>
       <div className="vault-location"><span>{vault ? 'Obsidian 仓库' : '本机文献库'}</span><strong>{vault ? storage.vaultName : 'Paperdesk 文献库'}</strong>{vault && <span>资料文件夹：{storage.subdir}</span>}<span>{storage.documentCount} 份文献</span></div>
-      <p className="vault-description">{vault ? 'PDF、笔记与批注保存在这个仓库中。你在 Obsidian 中编辑笔记后，Paperdesk 会自动读回；有冲突时保留草稿。' : 'PDF、笔记与批注保存在本机文献库。'}</p>
+      <p className="vault-description">{vault ? 'PDF 在 Obsidian 原位置只读，Paperdesk 保存关联的笔记与批注。扫描只列出文件，实际选定 PDF 后才关联。' : 'PDF、笔记与批注保存在本机文献库。'}</p>
       {vault && <section className="vault-rules" aria-label="使用规则"><h3>使用规则</h3><ul>
         <li>笔记正文可在 Paperdesk 和 Obsidian 两边编辑。</li>
         <li>批注、标题和分类在 Paperdesk 修改；保留自动生成的批注区与管理状态。</li>
-        <li>保留原始 PDF 及固定文件名，不改名、移动或替换。</li>
+        <li>PDF 留在原目录；移动或改名后，暂需恢复原路径。保留关联笔记的固定文件名。</li>
         <li>同一篇文献错开编辑；换设备时等同步完成，再重新读取仓库。</li>
         <li>冲突不会自动合并。正式正文与草稿保留后，请核对并整理。</li>
       </ul></section>}

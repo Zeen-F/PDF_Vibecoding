@@ -8,6 +8,7 @@ const DOCUMENT_FIELDS = ['id', 'sha256', 'title', 'filename', 'page_count', 'byt
 export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
   let insideTransaction = false, pendingRefresh;
   const tokens = new Map();
+  const pdfSources = new Map();
   let libraryToken = null;
   // This local marker carries no library contents. It distinguishes an empty
   // established vault with a removed Library.md from a genuinely new vault.
@@ -37,12 +38,13 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
     annotations: db.prepare('SELECT * FROM annotations WHERE document_id = ? ORDER BY id').all(id),
     annotationRequests: db.prepare('SELECT * FROM annotation_requests WHERE document_id = ? ORDER BY request_id').all(id),
     positionWriters: db.prepare('SELECT * FROM reading_position_writers WHERE document_id = ? ORDER BY writer_id').all(id),
+    ...(pdfSources.has(id) ? { pdfSource: { ...pdfSources.get(id) } } : {}),
   });
   const libraryState = () => ({ folders: db.prepare('SELECT * FROM folders ORDER BY id').all(), theme: db.prepare('SELECT theme FROM library_preferences WHERE id = 1').get().theme });
   const comparable = record => JSON.stringify({ document: Object.fromEntries(DOCUMENT_FIELDS.map(key => [key, record.document[key] ?? null])),
     annotations: [...record.annotations].sort((a,b) => a.id.localeCompare(b.id)),
     annotationRequests: [...record.annotationRequests].sort((a,b) => a.request_id.localeCompare(b.request_id)),
-    positionWriters: [...record.positionWriters].sort((a,b) => a.writer_id.localeCompare(b.writer_id)) });
+    positionWriters: [...record.positionWriters].sort((a,b) => a.writer_id.localeCompare(b.writer_id)), pdfSource: record.pdfSource ?? null });
   function applyLibrary(state) {
     const ids = new Set(state.folders.map(folder => folder.id));
     for (const old of db.prepare('SELECT id FROM folders').all()) if (!ids.has(old.id)) db.prepare('DELETE FROM folders WHERE id = ?').run(old.id);
@@ -65,6 +67,8 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
     for (const w of record.positionWriters) db.prepare('INSERT INTO reading_position_writers(document_id,writer_id,sequence,page,updated_at) VALUES (?,?,?,?,?)')
       .run(w.document_id,w.writer_id,w.sequence,w.page,w.updated_at);
     tokens.set(doc.id, record.token);
+    if (record.pdfSource) pdfSources.set(doc.id, { ...record.pdfSource });
+    else pdfSources.delete(doc.id);
   }
   function records() {
     const all = store.readAll();
@@ -185,9 +189,14 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
       if (library.token === null) { store.writeLibrary(library.state,null); markEstablished(); }
       await refresh();
     },
-    persistImported(id) {
-      const saved = store.writeDocument(snapshot(id),null); tokens.set(id,saved.token); return saved;
+    persistImported(id, pdfSource) {
+      const saved = store.writeDocument({ ...snapshot(id), ...(pdfSource ? { pdfSource } : {}) },null);
+      tokens.set(id,saved.token);
+      if (saved.pdfSource) pdfSources.set(id,{...saved.pdfSource});
+      return saved;
     },
+    pdfReferences() { return allDocuments().map(doc => ({ id: doc.id,
+      path: pdfSources.get(doc.id)?.path || path.relative(store.vaultDir,store.pdfPath(doc.id)).split(path.sep).join('/') })); },
     preserveConflict(id,notes) { return store.writeConflict(id,notes); },
   };
 }

@@ -332,7 +332,14 @@ test('desktop vault restarts from official PDF and Markdown after cache removal'
   await mkdir(join(vaultDir, '.obsidian'), { recursive: true });
   let runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
   t.after(() => runtime.close());
-  const document = await importSample(runtime.baseUrl);
+  const relativePdf = '参考资料/原始 阅读 # 1.pdf', originalPdf = join(vaultDir, ...relativePdf.split('/'));
+  await mkdir(join(vaultDir, '参考资料'), { recursive: true });
+  await writeFile(originalPdf, sample);
+  const opened = await fetch(runtime.baseUrl + '/api/vault/pdfs/open', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: relativePdf }),
+  });
+  assert.equal(opened.status, 201);
+  const { document } = await opened.json();
   const { document: saved } = await json(runtime.baseUrl, `/api/documents/${document.id}`, {
     method: 'PATCH', body: { notesZh: '正式 Markdown 笔记 Ω', notesEn: '', expectedNotesRevision: document.notesRevision },
   });
@@ -341,11 +348,14 @@ test('desktop vault restarts from official PDF and Markdown after cache removal'
   assert.match(await readFile(markdown, 'utf8'), /正式 Markdown 笔记 Ω/);
   await runtime.close();
   const before = await snapshot(vaultDir);
+  assert.equal(hash(await readFile(originalPdf)), hash(sample));
+  assert.ok(!Object.hasOwn(before, 'Paperdesk/PDFs'), 'Opening the original PDF must not create a copy directory');
   await rm(dataDir, { recursive: true, force: true });
   runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
   const restored = await json(runtime.baseUrl, `/api/documents/${document.id}`);
   assert.equal(restored.document.notesZh, saved.notesZh);
   assert.equal((await json(runtime.baseUrl, '/api/documents')).documents.length, 1);
+  assert.equal(hash(Buffer.from(await (await fetch(runtime.baseUrl + `/api/documents/${document.id}/file`)).arrayBuffer())), hash(sample));
   assert.deepEqual(await snapshot(vaultDir), before);
 });
 

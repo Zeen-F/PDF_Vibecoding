@@ -67,8 +67,10 @@ function unique(rows, key, label) {
   if (new Set(values).size !== values.length) invalid(`${label}包含重复标识。`);
 }
 function validateState(input, expectedId) {
-  object(input, ['version', 'document', 'annotations', 'annotationRequests', 'positionWriters'], '文献状态');
-  if (input.version !== 1) invalid('此 Markdown 使用不支持的 Paperdesk 格式版本，请使用相应版本打开。');
+  object(input, ['version', 'document', 'annotations', 'annotationRequests', 'positionWriters', 'pdfSource'], '文献状态');
+  if (![1, 2].includes(input.version)) invalid('此 Markdown 使用不支持的 Paperdesk 格式版本，请使用相应版本打开。');
+  if (input.version === 2) validatePdfSource(input.pdfSource);
+  else if (Object.hasOwn(input, 'pdfSource')) invalid('旧版文献状态不能包含原位 PDF 来源。');
   const doc = input.document;
   object(doc, ['id', 'sha256', 'title', 'filename', 'page_count', 'byte_size', 'created_at', 'updated_at', 'text_available', 'notes_zh', 'notes_en', 'last_page', 'folder_id'], '文献属性');
   uuid(doc.id); if (doc.id !== expectedId) invalid('文献文件名与元数据 UUID 不一致，请先核对原文件。');
@@ -135,6 +137,16 @@ function inside(root, target) {
   const relative = path.relative(root, target);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
+function validatePdfSource(source) {
+  object(source, ['kind', 'path'], 'PDF 来源');
+  if (source.kind !== 'vault') invalid('PDF 来源必须是当前 Obsidian 知识库。');
+  text(source.path, 32_768, 'PDF 相对路径', true);
+  const parts = source.path.split('/');
+  if (path.posix.isAbsolute(source.path) || /^[A-Za-z]:/.test(source.path) || source.path.includes('\\')
+    || /[\p{Cc}\p{Cf}]/u.test(source.path) || parts.some(part => !part || part.startsWith('.'))
+    || !/\.pdf$/i.test(source.path)) invalid('请选择知识库内非隐藏目录中的 PDF，相对路径不能包含上级目录、空段、反斜杠或绝对路径。');
+  return source;
+}
 function checkedPath(root, target, { missing = false, directory = false } = {}) {
   if (!inside(root, target)) invalid('文件路径必须位于指定的 Obsidian Paperdesk 文件夹内。');
   const parts = path.relative(root, target).split(path.sep).filter(Boolean);
@@ -171,8 +183,14 @@ export function validateVaultDirectory(vaultDir) {
   });
 }
 function scalar(value) { return JSON.stringify(value).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e'); }
-function frontmatter(doc) {
-  return `---\npaperdesk_id: ${scalar(doc.id)}\ntitle: ${scalar(doc.title)}\npdf: ${scalar(`../PDFs/${doc.id}.pdf`)}\npages: ${doc.page_count}\npaperdesk_format: 1\n---\n`;
+function pdfLink(state, noteRelativeDir) {
+  if (state.version === 1) return `../PDFs/${state.document.id}.pdf`;
+  return path.posix.relative(noteRelativeDir, state.pdfSource.path).split('/').map(segment => encodeURIComponent(segment)
+    .replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
+}
+function frontmatter(state, noteRelativeDir) {
+  const doc = state.document;
+  return `---\npaperdesk_id: ${scalar(doc.id)}\ntitle: ${scalar(doc.title)}\npdf: ${scalar(pdfLink(state, noteRelativeDir))}\npages: ${doc.page_count}\npaperdesk_format: ${state.version}\n---\n`;
 }
 function splitFrontmatter(source) {
   if (!source.startsWith('---\n') && !source.startsWith('---\r\n')) invalid('Paperdesk 笔记缺少完整的 YAML 属性区，请先恢复文件。');
@@ -185,7 +203,7 @@ function oneMarker(source, marker, label) {
   if (index < 0 || source.indexOf(marker, index + marker.length) !== -1) invalid(`${label}缺失或重复，请保留文件并修复生成区域。`);
   return index;
 }
-function parseDocument(source, id) {
+function parseDocument(source, id, noteRelativeDir) {
   const { properties, content } = splitFrontmatter(source);
   const start = oneMarker(content, START, 'Paperdesk 批注开始标记');
   const end = oneMarker(content, END, 'Paperdesk 批注结束标记');
@@ -200,7 +218,7 @@ function parseDocument(source, id) {
   let state; try { state = JSON.parse(generated.slice(stateStart + STATE_START.length, stateEnd)); }
   catch { invalid('Paperdesk 隐藏元数据 JSON 已损坏，原文件未被覆盖。'); }
   validateState(state, id);
-  const rebuilt = generatedMarkdown(state);
+  const rebuilt = generatedMarkdown(state, noteRelativeDir);
   const expectedVisible = rebuilt.slice(START.length, rebuilt.indexOf(STATE_START));
   if (generated.slice(0, stateStart) !== expectedVisible) {
     invalid('Paperdesk 自动生成的批注区已被修改，原文件未被覆盖。请把额外文字移到笔记正文；批注内容请在 Paperdesk 中修改。');
@@ -209,14 +227,14 @@ function parseDocument(source, id) {
   text(notes, MAX_NOTE_LENGTH, 'Obsidian 笔记正文');
   return { state, properties, notes };
 }
-function annotationMarkdown(row, id) {
-  const link = `../PDFs/${id}.pdf#page=${row.page}`;
+function annotationMarkdown(row, linkBase) {
+  const link = `${linkBase}#page=${row.page}`;
   const visible = value => value.replaceAll('<!--', '&lt;!--');
   const quote = row.kind === 'region' ? '> 区域批注（页面坐标保存在元数据中）' : visible(row.quote).split('\n').map(line => `> ${line}`).join('\n');
   return `### [PDF 第 ${row.page} 页](${link}) · ${row.color}\n\n${quote}\n\n${visible(row.comment) || '（暂无评论）'}\n`;
 }
-function generatedMarkdown(state) {
-  return `${START}## Paperdesk 批注\n\n此区域由 Paperdesk 维护；请在上方正文编辑阅读笔记。\n\n${state.annotations.map(row => annotationMarkdown(row, state.document.id)).join('\n')}${STATE_START}${scalar(state)}${STATE_END}${END}`;
+function generatedMarkdown(state, noteRelativeDir) {
+  return `${START}## Paperdesk 批注\n\n此区域由 Paperdesk 维护；请在上方正文编辑阅读笔记。\n\n${state.annotations.map(row => annotationMarkdown(row, pdfLink(state, noteRelativeDir))).join('\n')}${STATE_START}${scalar(state)}${STATE_END}${END}`;
 }
 function signature(stat) { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`; }
 function futureDirectory(requested) {
@@ -243,6 +261,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       || /[\x00-\x1f\x7f]/.test(segment))) invalid('Paperdesk 文件夹必须是知识库内的相对路径，不能包含上级目录。');
     const rootDir = path.join(canonical, ...segments);
     const pdfDir = path.join(rootDir, 'PDFs'), notesDir = path.join(rootDir, 'Notes');
+    const noteRelativeDir = path.relative(canonical, notesDir).split(path.sep).join('/');
     const conflictDir = path.join(notesDir, 'Conflicts'), libraryPath = path.join(rootDir, 'Library.md');
     const recoveryRoot = futureDirectory(recoveryDir || path.join(tmpdir(), 'paperdesk-vault-recovery', digest(canonical).slice(0, 24)));
     if (inside(canonical, recoveryRoot)) invalid('文件恢复副本必须保存在 Obsidian 知识库之外。');
@@ -251,9 +270,10 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       checkedPath(canonical, dir, { directory: true });
     }
-    for (const dir of [rootDir, pdfDir, notesDir]) ensureDirectory(dir);
+    for (const dir of [rootDir, notesDir]) ensureDirectory(dir);
+    checkedPath(canonical, pdfDir, { missing: true, directory: true });
     let libraryEstablished = existsSync(libraryPath) || readdirSync(notesDir).some(name => name.endsWith('.md'))
-      || readdirSync(pdfDir).some(name => name.endsWith('.pdf'));
+      || (existsSync(pdfDir) && readdirSync(pdfDir).some(name => UUID.test(name.slice(0,-4)) && name.endsWith('.pdf')));
     const pdfCache = new Map();
     const pdfPath = id => { uuid(id); const target = path.join(pdfDir, `${id}.pdf`); checkedPath(canonical, target, { missing: true }); return target; };
     const notePath = id => { uuid(id); const target = path.join(notesDir, `${id}.md`); checkedPath(canonical, target, { missing: true }); return target; };
@@ -277,11 +297,17 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         return { source: utf8.decode(bytes), token: digest(bytes), signature: after };
       } finally { closeSync(fd); }
     }
-    function verifyPdf(doc) {
-      const file = pdfPath(doc.id), fd = openFile(file);
+    function sourcePath(pdfSource) {
+      validatePdfSource(pdfSource);
+      const file = path.join(canonical, ...pdfSource.path.split('/'));
+      checkedPath(canonical, file);
+      return file;
+    }
+    function inspectPdf(file) {
+      const fd = openFile(file);
       try {
         const stat = fstatSync(fd), key = signature(stat);
-        if (stat.size !== doc.byte_size) invalid('PDF 大小与文献记录不一致，请核对或恢复原始 PDF。');
+        integer(stat.size, 1, Number.MAX_SAFE_INTEGER, 'PDF 大小');
         const cached = pdfCache.get(file);
         let sha = cached?.signature === key ? cached.sha256 : null;
         if (!sha) {
@@ -295,18 +321,42 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
           if (signature(fstatSync(fd)) !== key) invalid('PDF 正在被其他程序修改，请稍后重新读取。');
           sha = hasher.digest('hex'); pdfCache.set(file, { signature: key, sha256: sha });
         }
-        if (sha !== doc.sha256) invalid('PDF 校验和与文献记录不一致，请核对或恢复原始 PDF。');
-        return file;
+        return { pdfPath: file, sha256: sha, byteSize: stat.size };
       } finally { closeSync(fd); }
+    }
+    function verifyPdf(doc, pdfSource) {
+      const file = pdfSource ? sourcePath(pdfSource) : pdfPath(doc.id);
+      const inspected = inspectPdf(file);
+      if (inspected.byteSize !== doc.byte_size) invalid('PDF 大小与文献记录不一致，请核对或恢复原始 PDF。');
+      if (inspected.sha256 !== doc.sha256) invalid('PDF 校验和与文献记录不一致，请核对或恢复原始 PDF。');
+      return file;
     }
     function readDocument(id) {
       return guard(() => {
         const file = notePath(id), saved = markdown(file, true);
         if (!saved) return null;
-        const { state, notes } = parseDocument(saved.source, id);
+        const { state, notes } = parseDocument(saved.source, id, noteRelativeDir);
         return { document: { ...state.document, notes_zh: notes, notes_en: '' },
           annotations: state.annotations, annotationRequests: state.annotationRequests, positionWriters: state.positionWriters,
-          token: saved.token, pdfPath: verifyPdf(state.document), notePath: file };
+          ...(state.version === 2 ? { pdfSource: state.pdfSource } : {}),
+          token: saved.token, pdfPath: verifyPdf(state.document, state.pdfSource), notePath: file };
+      });
+    }
+    function readPdfSnapshot(id, expectedSha256) {
+      return guard(() => {
+        const record = readDocument(id);
+        if (!record) invalid('文献笔记文件缺失，请恢复原文件后重试。');
+        if (expectedSha256 !== undefined && record.document.sha256 !== expectedSha256) fileConflict('文献 PDF 版本已更新，请重新读取文献后重试。');
+        const fd = openFile(record.pdfPath);
+        try {
+          const before = fstatSync(fd), key = signature(before);
+          const buffer = readFileSync(fd);
+          const after = fstatSync(fd), current = checkedPath(canonical, record.pdfPath);
+          if (key !== signature(after) || current.dev !== after.dev || current.ino !== after.ino
+            || signature(current) !== key) fileConflict('PDF 在快照读取期间被修改或替换，请重新读取原文件后重试。');
+          if (buffer.length !== record.document.byte_size || digest(buffer) !== record.document.sha256) invalid('PDF 快照与正式文件校验和不一致，请先核对原文件。');
+          return buffer;
+        } finally { closeSync(fd); }
       });
     }
     function recoveryLink(file) {
@@ -361,22 +411,24 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         try { unlinkSync(temp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
     }
-    function writeDocument({ document, annotations, annotationRequests = [], positionWriters = [] }, expectedToken) {
+    function writeDocument({ document, annotations, annotationRequests = [], positionWriters = [], pdfSource }, expectedToken) {
       return guard(() => {
         if (libraryEstablished) readLibrary();
         const id = uuid(document?.id), file = notePath(id);
         const normalized = { ...document, folder_id: document.folder_id ?? null };
-        const state = validateState({ version: 1, document: normalized, annotations, annotationRequests, positionWriters }, id);
-        verifyPdf(state.document);
         const previous = markdown(file, true);
-        let properties = frontmatter(state.document);
-        if (previous) properties = parseDocument(previous.source, id).properties;
+        const prior = previous ? parseDocument(previous.source, id, noteRelativeDir) : null;
+        const source = pdfSource === undefined ? prior?.state.pdfSource : pdfSource;
+        const state = validateState({ version: source === undefined ? 1 : 2, document: normalized, annotations, annotationRequests, positionWriters,
+          ...(source === undefined ? {} : { pdfSource: source }) }, id);
+        verifyPdf(state.document, state.pdfSource);
+        let properties = prior?.properties || frontmatter(state, noteRelativeDir);
         const notes = mergeNotes(normalized.notes_zh, normalized.notes_en);
         if (/<!-- paperdesk-(?:generated|state):/.test(notes)) invalid('笔记正文不能包含 Paperdesk 专用生成标记，请保留原文并移除重复标记后重试。');
         // There is only one editable note. State carries metadata, not a stale
         // second copy of its body that could override an Obsidian edit.
         const persisted = { ...state, document: { ...normalized, notes_zh: '', notes_en: '' } };
-        replaceMarkdown(file, properties + notes + generatedMarkdown(persisted), expectedToken);
+        replaceMarkdown(file, properties + notes + generatedMarkdown(persisted, noteRelativeDir), expectedToken);
         return readDocument(id);
       });
     }
@@ -432,8 +484,9 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         replaceMarkdown(libraryPath, source, expectedToken); return readLibrary();
       });
     }
-    return { vaultDir: canonical, rootDir, pdfDir, notePath, pdfPath, readAll, readDocument,
+    return { vaultDir: canonical, rootDir, pdfDir, notePath, pdfPath, readAll, readDocument, readPdfSnapshot,
       writeDocument, writeConflict, readLibrary, writeLibrary,
+      inspectPdfSource: source => guard(() => ({ ...inspectPdf(sourcePath(source)), pdfSource: { ...source } })),
       rollbackDocument: (previousRecord, expectedToken) => writeDocument(previousRecord, expectedToken) };
   });
 }
