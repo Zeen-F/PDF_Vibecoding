@@ -30,7 +30,7 @@ New clients use an independent UUID `requestId` for each creation and keep the *
 The main database stores only the request hash, annotation ID and timestamp, preserving retry protection through restart. Records remain valid for 30 days after successful creation and are capped at 10000 across the library; expired records are removed transactionally during protected creation. Capacity returns 429 without creating an annotation or evicting any valid record. After expiry, re-read saved annotations and reconcile an uncertain result instead of blindly replaying or generating a new ID.
 
 
-### Personal page bookmarks (alpha.5)
+### Personal page bookmarks (1.2.0-beta.1)
 
 Bookmarks are distinct from the PDF's built-in outline. A bookmark is `{id,documentId,page,title,createdAt,updatedAt}` and always points to a physical PDF page, without a printed-page offset. Each document has at most one bookmark per page.
 
@@ -146,7 +146,7 @@ Request guards: Baidu 1000/6000 characters plus 6000 UTF-8 bytes; others 10000 c
 
 Azure uses its v3 text translation JSON protocol and subscription-key/region headers; DeepL uses its v2 text translation JSON protocol and `DeepL-Auth-Key` authorization; custom uses a full `/chat/completions` endpoint, Bearer authentication, user-selected model and non-streamed text messages, with no tools or automatic model substitution. External endpoints require HTTPS; custom HTTP is limited to loopback. Userinfo/query/fragment endpoints and redirects are rejected. Azure/DeepL configuration is distinct from their subscription tiers.
 
-Requests are serialized and deadline-limited including queue wait. Expired queued requests cannot send late; failures have no automatic retry/provider fallback. Queued profile/config changes reject before send. Known errors are sanitized; raw provider errors, input, keys and signatures are not logged or echoed. Private `translation.sqlite` stores profiles, active choice, usage and bounded cache, with lazy creation and compatibility migration; translation does not change the main library schema (currently 4). Backups must include both databases and PDFs and stay out of Git/static resources.
+Requests are serialized and deadline-limited including queue wait. Expired queued requests cannot send late; failures have no automatic retry/provider fallback. Queued profile/config changes reject before send. Known errors are sanitized; raw provider errors, input, keys and signatures are not logged or echoed. Private `translation.sqlite` stores profiles, active choice, usage and bounded cache, with lazy creation and compatibility migration; translation does not change the main library schema (currently 5). Backups must include both databases and PDFs and stay out of Git/static resources.
 
 Native `paperdesk_reader_translation` is app-only: operations status/configure/clear/translate, with optional provider for profile selection and configuration fields above. Results remain private `_meta.translationSettings`/`_meta.translation`, never model-visible content. Translation does not send conversation messages/context or save notes. Existing Work discussion is separate.
 
@@ -158,7 +158,7 @@ Response: `{ test: { provider, sourceText, translatedText, characters, elapsedMs
 
 Test errors add a finite `category`: authentication, quota, timeout, connection, configuration, response, changed, stopped or unknown. Messages remain sanitized; raw upstream payloads, draft secrets and request bodies are not returned or logged. Existing API error shapes remain unchanged. Native operation `test` uses config arguments (no text/from/to) and returns only `_meta.translationTest`; both success and categorized failure remain outside model context. UI results belong to that form snapshot and are invalidated by edits, profile changes or closure.
 
-## Obsidian vault storage (1.2.0-alpha.5 local preview, unreleased)
+## Obsidian vault storage (1.2.0-beta.1)
 
 `createApp({ vaultDir, vaultSubdir = 'Paperdesk', dataDir })` enables vault mode. `vaultDir` must resolve to an existing Obsidian root containing `.obsidian/`; `vaultSubdir` is one nonhidden directory name, not an arbitrary relative path. The browser service accepts `PAPERDESK_VAULT_DIR` and optional `PAPERDESK_VAULT_SUBDIR`. `dataDir` / `PAPERDESK_DATA_DIR` names the local cache and translation configuration directory in this mode and must remain outside the whole vault, including through symlinks. An omitted cache uses a per-library directory beneath the platform's Paperdesk user-data directory.
 

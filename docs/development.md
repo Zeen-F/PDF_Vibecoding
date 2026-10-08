@@ -28,19 +28,21 @@ VS Code 或兼容编辑器可打开根目录的 `PDF_Vibecoding.code-workspace`�
 | `DEV_API_PORT` | `npm run dev` | 修改开发 API 端口，默认 4318 |
 | `DEV_DATA_DIR` | `npm run dev` | 修改开发文献库，默认 `.local/dev-data/` |
 | `PORT` | `npm start` / Mac 启动器 | 修改日常使用端口，默认 4317 |
-| `PAPERDESK_DATA_DIR` | `npm start` / Mac 启动器 | 修改正式文献库，默认 `data/` |
+| `PAPERDESK_DATA_DIR` | `npm start` / Mac 启动器 | 独立文献库目录，默认 `data/`；仓库模式用于库外索引和翻译设置 |
+| `PAPERDESK_VAULT_DIR` | `npm start` | 连接已存在的 Obsidian 知识库根目录；省略时使用独立文献库 |
+| `PAPERDESK_VAULT_SUBDIR` | `npm start` | 仓库内单层管理文件夹名，默认 `Paperdesk` |
 
-开发入口不继承生产 `PAPERDESK_DATA_DIR`，避免误写正式库。自定义库应位于项目的忽略目录或仓库外，不能放在 `src/`、`public/`、`dist/` 等源码或静态资源位置。按启动输出访问对应地址。
+`npm run dev` 使用独立的 `DEV_DATA_DIR`，不沿用生产 `PAPERDESK_DATA_DIR`，并清除继承的 `PAPERDESK_VAULT_DIR`／`PAPERDESK_VAULT_SUBDIR`，避免关联正式知识库。检查仓库模式时使用隔离的合成知识库，按 [仓库模式说明](obsidian-vault.md#源码浏览器版) 显式启动。自定义数据目录应位于项目的忽略目录或仓库外，不能放在 `src/`、`public/`、`dist/` 等源码或静态资源位置；仓库模式的缓存也必须位于整个知识库之外。按启动输出访问对应地址。
 
 Mac 启动器会在缺少依赖或构建产物时准备运行；已有 `dist/` 时不会自动判断源码是否更新，因此修改代码后应重新 `npm run build`。已有服务只有在库身份、产品版本、启动协议与健康状态均匹配时才复用；旧服务缺少身份协议、不同库或非纸间服务会明确拒绝。服务启动先占用本机端口，再打开数据库，避免绑定竞争先迁移目标库。跨平台入口为 npm 命令；Mac 的一键启动脚本不代表 Windows/Linux 已完成验收。
 
 ## 检查
 
-当前 alpha.5 开发分支增加个人页面书签。API 回归覆盖旧库一致性备份与 schema 5 迁移、CRUD/CAS 和正式 Markdown 重建；浏览器回归覆盖两种存储模式的添加、命名、跳转、草稿保护及迟到响应。`node scripts/test-vault-desktop.mjs` 另外检查真实 Electron 的书签保存、正常退出和重开跳转；打包后追加 `--packaged <Paperdesk.app路径>`。所有资料均使用隔离临时库，证据位于忽略的 `.local/`。
+1.2.0-beta.1 包含 Obsidian 仓库与个人页面书签。API 回归覆盖旧库在 DDL 前的一致性备份、schema 5 迁移、书签 CRUD／版本冲突、原位 PDF／外部导入、正式 v1／v2／v3 Markdown 兼容及索引重建；浏览器回归覆盖两种存储模式的添加、命名、跳转、草稿保护及迟到响应。`node scripts/test-vault-desktop.mjs` 另外检查真实 Electron 的仓库、外部导入、书签保存、正常退出和重开跳转；打包后追加 `--packaged <Paperdesk.app路径>`。所有资料均使用隔离临时库，证据位于忽略的 `.local/`。这些是检查范围，实际执行结果单独记录在 [本版变更记录](history/1.2.0-beta.1.md)。
 
 macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run desktop:dist` 生成，`npm run test:desktop` 检查独立窗口；打包后运行 `npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app` 再验收。所有桌面测试使用临时用户设置和文献库。构建与发布顺序见 [桌面预览版](desktop-release.md)。
 
-四项可靠性修复另用 `npm run test:desktop:reliability` 验证真实 Electron 的评论草稿、响应丢失重试、阅读位置保存及关闭／退出保护。每轮指定新的 `PAPERDESK_ACCEPTANCE_DIR`（例如 `.local/beta5-verification/source-run-1`）；已有测试库和证据会被保留并拒绝复用。安装包使用同一命令追加 `-- --packaged <Paperdesk.app路径>`，同时指定另一证据目录。这项测试会在隔离库注入保存故障和受控异常退出，保留结果与截图；异常退出前已刷新浏览器存储，不能据此声称断电恢复。主动测试刷新只批准当次页面卸载，原生关闭和退出仍使用产品实际保存确认流程。
+四项可靠性修复另用 `npm run test:desktop:reliability` 验证真实 Electron 的评论草稿、响应丢失重试、阅读位置保存及关闭／退出保护。每轮指定新的 `PAPERDESK_ACCEPTANCE_DIR`（例如 `.local/beta1-verification/source-run-1`）；已有测试库和证据会被保留并拒绝复用。安装包使用同一命令追加 `-- --packaged <Paperdesk.app路径>`，同时指定另一证据目录。这项测试会在隔离库注入保存故障和受控异常退出，保留结果与截图；异常退出前已刷新浏览器存储，不能据此声称断电恢复。主动测试刷新只批准当次页面卸载，原生关闭和退出仍使用产品实际保存确认流程。
 
 | 命令 | 范围 |
 | --- | --- |
@@ -50,6 +52,7 @@ macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run
 | `npm run check` | 依次执行 API 测试、生产构建和浏览器回归 |
 | `npm run test:desktop` | 真实 Electron 基础流程；使用 `-- --packaged <Paperdesk.app路径>` 检查打包应用 |
 | `npm run test:desktop:reliability` | 四项可靠性回归；每轮设置新的 `PAPERDESK_ACCEPTANCE_DIR`，打包应用追加 `-- --packaged <Paperdesk.app路径>` |
+| `node scripts/test-vault-desktop.mjs` | 真实 Electron 的 Obsidian 原位 PDF、外部导入和个人书签；打包应用追加 `--packaged <Paperdesk.app路径>` |
 | `npm run browser:dist` | 构建带生产界面的本机浏览器 ZIP，并生成独立校验文件；见 [浏览器发布包](browser-release.md) |
 | `npm run plugin:setup` | 核对当前阅读服务，绑定仓库外的本机插件配置 |
 | `npm run plugin:install` | 完成绑定并向本机 Codex 安装/启用 Paperdesk 插件 |
@@ -93,7 +96,9 @@ schema 3 增加文件夹、可空文献归属和皮肤偏好，包含旧版批�
 
 1.1.0-beta.5 的主库 schema 4 在同一迁移事务中增加批注幂等请求和阅读位置 writer/sequence 记录，不改写旧文献内容或 PDF。升级前停止服务并备份完整库；验证从 schema 3 升级、失败回滚、幂等重启、原记录/PDF 读回和更高版本拒绝。回退到 schema 3 程序使用升级前完整备份，不能仅删除新增表或降低 `user_version`。
 
-桌面默认库或已记住库在应用启动时自动由 schema 3 升级；菜单“打开已有文献库…”只读校验仍拒绝旧结构。新选择 schema 3 库前，用 beta.5 源码／浏览器服务指定 `PAPERDESK_DATA_DIR` 完成升级，读回并正常停止后再选择。操作说明见 [从 beta.4 升级](desktop-release.md#从-beta4-升级)。
+1.2.0-beta.1 的 schema 5 增加个人页面书签。对已有低版本数据库，先检查已建立库结构，再在任何 DDL 前用 `VACUUM INTO` 创建包含已提交 WAL 内容的一致性备份，读回 `quick_check` 与原 `user_version` 并刷新备份到磁盘；失败停止迁移。备份位于数据目录的 `recoveries/migrations/`，之后才进入迁移事务。新建空库不需要旧库备份，更高版本库不降级。自动数据库快照不包含 PDF 或管理 Markdown，不能替代完整资料备份。
+
+桌面默认／已记住库在启动时升级；菜单“打开已有文献库…”只读校验完整 schema 4／5 库，schema 4 库随后启动时备份并升级。新选择 schema 3 或更早库前，使用 beta.1 源码／浏览器服务指定 `PAPERDESK_DATA_DIR` 升级，读回并正常停止后再选择。旧仓库 v1／v2 Markdown 可读，成功写入升级为 v3，保留原位或副本来源与自定义属性；v3 持久化实际 PDF 页书签。回退旧程序同时恢复升级前完整管理目录、关联 PDF 与库外数据库。步骤见 [升级到 1.2.0-beta.1](desktop-release.md#升级到-120-beta1)。
 
 可靠性回归包括评论编辑切标签和切文献、刷新后的确切选区恢复、独立窗口草稿、保存成功清除/失败保留及冲突核对；批注三类变更在第二条写入故障时整体回滚、新建 requestId 重试/并发/重启不重复；启动器同库兼容服务复用与异库/旧版/占用竞争拒绝；阅读位置请求延迟、合并、跨文献和跨刷新序号检查。所有故障注入和浏览器流程只运行隔离合成库。阅读位置序号只拒绝同一 writer 的旧请求，没有实现多个窗口的全局排序；同一文献建议只在一个窗口编辑。模拟桌面 flush 或 Codex 宿主只能报告协议验证，不能代替实际 Electron 窗口、安装包或真实 Codex 验收。
 

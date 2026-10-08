@@ -20,7 +20,7 @@ jobs:
       contents: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      PAPERDESK_VERIFICATION_ROOT: .local/beta5-verification/${{ github.run_id }}-${{ github.run_attempt }}
+      PAPERDESK_VERIFICATION_ROOT: .local/release-verification/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -50,14 +50,20 @@ jobs:
       - run: npx playwright install chromium
       - run: npm run check
       - run: npm run test:desktop
+      - name: Test source Obsidian vault and page bookmarks
+        run: node scripts/test-vault-desktop.mjs
       - name: Test source desktop reliability with an isolated library
         run: PAPERDESK_ACCEPTANCE_DIR="$PAPERDESK_VERIFICATION_ROOT/source" npm run test:desktop:reliability
       - run: npm run desktop:dist
       - name: Test the packaged application with an isolated library
         run: npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app
+      - name: Test packaged Obsidian vault and page bookmarks
+        run: node scripts/test-vault-desktop.mjs --packaged release/mac-arm64/Paperdesk.app
       - name: Test packaged desktop reliability with an isolated library
         run: PAPERDESK_ACCEPTANCE_DIR="$PAPERDESK_VERIFICATION_ROOT/packaged" npm run test:desktop:reliability -- --packaged release/mac-arm64/Paperdesk.app
       - run: npm run browser:dist
+      - name: Test the browser archive with a clean production install
+        run: node scripts/test-browser-release.mjs --archive "release/Paperdesk-${{ steps.version.outputs.version }}-browser.zip"
       - run: npm run release:checksums
       - name: Prepare compact verification evidence
         if: always()
@@ -87,11 +93,21 @@ jobs:
               dialogAcknowledgementRaceCount: result.dialogAcknowledgementRaces?.length || 0,
               powerLossTest: result.abnormalExitInjection?.powerLossTest === true });
           }
+          const vaultSummaries = [];
+          for (const kind of ['source', 'packaged']) {
+            try {
+              const result = JSON.parse(await readFile(path.join('.local/verification/bookmarks', `${kind}-summary.json`), 'utf8'));
+              vaultSummaries.push({ kind, status: result.status, checkCount: result.checks?.length || 0,
+                rendererErrorCount: result.rendererErrors?.length || 0, versions: result.versions });
+            } catch (error) {
+              vaultSummaries.push({ kind, status: error.code === 'ENOENT' ? 'not-run' : 'unreadable-evidence' });
+            }
+          }
           await writeFile(path.join(evidence, 'verification-summary.json'), JSON.stringify({
-            workflowStatus: process.env.JOB_STATUS, runId: process.env.GITHUB_RUN_ID,
+            workflowStatus: process.env.JOB_STATUS, vaultSummaries, runId: process.env.GITHUB_RUN_ID,
             runAttempt: process.env.GITHUB_RUN_ATTEMPT, summaries,
           }, null, 2) + '\n');
-          if (process.env.JOB_STATUS === 'success' && summaries.some(result => result.status !== 'passed')) {
+          if (process.env.JOB_STATUS === 'success' && [...summaries, ...vaultSummaries].some(result => result.status !== 'passed')) {
             throw new Error('A successful release run must have passed source and packaged reliability evidence.');
           }
           NODE
@@ -131,7 +147,7 @@ jobs:
 
           纸间 Paperdesk 的 macOS Apple Silicon 预览版。下载 DMG 后将 Paperdesk 拖入“应用程序”，无需另行安装 Node.js。
 
-          PDF、笔记和批注保存在本机文献库；安装包不包含个人文献。首次打开使用独立文献库，也可以从应用菜单选择已有纸间文献库。
+          PDF、笔记、批注与个人书签保存在本机。首次打开使用独立文献库；也可从应用菜单选择已有纸间文献库或 Obsidian 知识库。原位打开知识库的 PDF 不会复制、移动或改写源文件，外部 PDF 仍可自行导入。安装包不包含个人文献。
 
           本版本未经过 Apple 开发者签名或公证。首次打开若被 macOS 阻止，请按安装说明在“系统设置 → 隐私与安全性”中处理。
 
@@ -147,6 +163,7 @@ jobs:
             "release/Paperdesk-${RELEASE_VERSION}-browser.zip" \
             release/SHA256SUMS \
             release/SHA256SUMS-browser \
+            LICENSE \
             --verify-tag --draft --prerelease \
             --title "Paperdesk ${RELEASE_VERSION}" \
             --notes-file .local/release-notes.md

@@ -405,6 +405,30 @@ test('runtime startup failures release their reserved port and do not downgrade 
   });
 });
 
+test('ordinary desktop settings ignore inherited production vault variables without touching its files', async t => {
+  const root = await temporaryDirectory(t);
+  const vaultDir = join(root, 'production-vault');
+  await mkdir(join(vaultDir, '.obsidian'), { recursive: true });
+  await writeFile(join(vaultDir, 'original.md'), 'Production fixture remains untouched.');
+  const before = await snapshot(vaultDir);
+  const previous = Object.fromEntries(['PAPERDESK_VAULT_DIR', 'PAPERDESK_VAULT_SUBDIR'].map(key => [key, process.env[key]]));
+  process.env.PAPERDESK_VAULT_DIR = vaultDir;
+  process.env.PAPERDESK_VAULT_SUBDIR = 'Formal';
+  let runtime;
+  try {
+    const dataDir = join(root, 'ordinary-library');
+    runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
+    assert.equal((await json(runtime.baseUrl, '/api/storage')).mode, 'library');
+    assert.equal((await json(runtime.baseUrl, '/api/plugin/status')).libraryId, hash(dataDir));
+    assert.deepEqual(await snapshot(vaultDir), before);
+  } finally {
+    await runtime?.close();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 test('desktop vault identity uses the managed directory, independent of its local cache', async t => {
   const root = await temporaryDirectory(t);
   const vaultDir = join(root, '知识库'), dataDir = join(root, 'cache');

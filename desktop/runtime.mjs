@@ -114,7 +114,9 @@ export async function startDesktopRuntime({ dataDir, vaultDir, vaultSubdir = 'Pa
       if (await matchingService(preferredUrl, libraryId)) return reused();
       await listen(server, 0);
     }
-    application = createApp(storage);
+    // Desktop settings are authoritative; shell variables must not silently
+    // replace the ordinary library with a production Obsidian vault.
+    application = createApp({ vaultDir: null, ...storage });
     await application.ready;
     handler = application.app;
     const baseUrl = `http://${HOST}:${server.address().port}`;

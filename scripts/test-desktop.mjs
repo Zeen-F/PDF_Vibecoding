@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { _electron as electron, expect } from '@playwright/test';
 import { startDesktopRuntime } from '../desktop/runtime.mjs';
+import { clearInheritedTestStorage } from './test-isolated.mjs';
+
+clearInheritedTestStorage();
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const { values } = parseArgs({ options: { packaged: { type: 'string' } } });

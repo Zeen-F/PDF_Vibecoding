@@ -8,6 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { _electron as electron, expect as playwrightExpect } from '@playwright/test';
+import { clearInheritedTestStorage } from './test-isolated.mjs';
+
+clearInheritedTestStorage();
 
 const expect = playwrightExpect.configure({ timeout: 15_000 });
 const root = fileURLToPath(new URL('../', import.meta.url));

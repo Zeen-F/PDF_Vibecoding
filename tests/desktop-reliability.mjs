@@ -12,6 +12,9 @@ import { _electron as electron, expect as playwrightExpect } from '@playwright/t
 import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
 import { LAUNCHER_PROTOCOL, PRODUCT_VERSION } from '../shared/service-identity.mjs';
+import { clearInheritedTestStorage } from '../scripts/test-isolated.mjs';
+
+clearInheritedTestStorage();
 
 const expect = playwrightExpect.configure({ timeout: 10_000 });
 const root = fileURLToPath(new URL('../', import.meta.url));

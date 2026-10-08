@@ -3,6 +3,7 @@ import { connect } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { libraryIdentity, LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION } from '../shared/service-identity.mjs';
+import { getVaultConfig } from '../server/vault-config.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const HOST = '127.0.0.1';
@@ -13,8 +14,16 @@ export function browserLaunchConfig({ rootDir = root, env = process.env } = {}) 
   const port = Number(env.PORT || 4317);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 必须是 1 至 65535 的整数。');
   if (env.PAPERDESK_DATA_DIR?.includes('\0')) throw new Error('PAPERDESK_DATA_DIR 必须是有效的文献库目录。');
-  const dataDir = path.resolve(rootDir, env.PAPERDESK_DATA_DIR || 'data');
-  return { rootDir, port, baseUrl: `http://${HOST}:${port}`, dataDir, libraryId: libraryIdentity(dataDir), productVersion: PRODUCT_VERSION };
+  const requestedDataDir = env.PAPERDESK_DATA_DIR ? path.resolve(rootDir, env.PAPERDESK_DATA_DIR) : undefined;
+  const vault = env.PAPERDESK_VAULT_DIR ? getVaultConfig({
+    vaultDir: env.PAPERDESK_VAULT_DIR,
+    vaultSubdir: env.PAPERDESK_VAULT_SUBDIR || 'Paperdesk',
+    dataDir: requestedDataDir,
+  }) : null;
+  const dataDir = vault?.dataDir || requestedDataDir || path.join(rootDir, 'data');
+  return { rootDir, port, baseUrl: `http://${HOST}:${port}`, dataDir,
+    ...(vault ? { vaultDir: vault.vaultDir, vaultSubdir: vault.vaultSubdir, libraryDir: vault.libraryDir } : {}),
+    libraryId: libraryIdentity(vault?.libraryDir || dataDir), productVersion: PRODUCT_VERSION };
 }
 
 /** Refusal means free; a timeout or other network failure is never permission to start. */
@@ -116,7 +125,15 @@ export async function runBrowserLauncher({
 
   let child;
   try {
-    child = spawnImpl(process.execPath, ['server/index.mjs'], { cwd: config.rootDir, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: { ...env, PORT: String(config.port), PAPERDESK_DATA_DIR: config.dataDir } });
+    const childEnv = { ...env, PORT: String(config.port), PAPERDESK_DATA_DIR: config.dataDir };
+    if (config.vaultDir) {
+      childEnv.PAPERDESK_VAULT_DIR = config.vaultDir;
+      childEnv.PAPERDESK_VAULT_SUBDIR = config.vaultSubdir;
+    } else {
+      delete childEnv.PAPERDESK_VAULT_DIR;
+      delete childEnv.PAPERDESK_VAULT_SUBDIR;
+    }
+    child = spawnImpl(process.execPath, ['server/index.mjs'], { cwd: config.rootDir, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: childEnv });
   } catch (cause) { error(`无法启动纸间：${cause.message}`); return { state: 'failed', code: 1 }; }
   let exited = false, exitCode, spawnError, ready = false;
   child.on('message', message => { if (message?.type === 'paperdesk-ready') ready = true; });
