@@ -428,8 +428,11 @@ test('switching the active provider cancels queued work while preserving the pro
 
 test('all non-Baidu adapters bound requests and sanitize HTTP, malformed responses and timeout failures', async t => {
   for (const provider of ['azure', 'deepl', 'openai-compatible']) {
-    const lib = await fixture(t, { timeoutMs: 40 }); lib.setHandler(providerMock);
-    await lib.json(configUrl, 'PUT', { provider, apiKey: 'synthetic-key', ...(provider === 'openai-compatible' ? { endpoint: customEndpoint, model: 'fixture-model' } : {}) });
+    // Valid 40 KB responses use the normal budget, not the deliberately short
+    // deadline reserved below for a provider that never settles.
+    const lib = await fixture(t); lib.setHandler(providerMock);
+    const config = { provider, apiKey: 'synthetic-key', ...(provider === 'openai-compatible' ? { endpoint: customEndpoint, model: 'fixture-model' } : {}) };
+    await lib.json(configUrl, 'PUT', config);
     await rejected(await lib.request(translateUrl, 'POST', { text: 'a'.repeat(10_001) }), 413); assert.equal(lib.calls.length, 0);
     assert.equal((await lib.translate('🧪'.repeat(10_000))).translation.characters, 10_000); // Exactly 40,000 UTF-8 bytes.
     for (const status of [401, 403, 429, 456]) {
@@ -438,9 +441,15 @@ test('all non-Baidu adapters bound requests and sanitize HTTP, malformed respons
     }
     lib.setHandler(() => Response.json({ error: 'PRIVATE_UPSTREAM_DETAIL' }));
     await rejected(await lib.request(translateUrl, 'POST', { text: 'malformed' }), 502, ['PRIVATE_UPSTREAM_DETAIL']);
-    lib.setHandler(() => new Promise(() => {}));
-    await rejected(await lib.request(translateUrl, 'POST', { text: 'timeout' }), 504);
-    assert.equal(lib.calls.length, 7); assert.equal((await lib.json(configUrl)).settings.usedCharacters, 10_060);
+    const timeoutLib = await fixture(t, { timeoutMs: 40 });
+    await timeoutLib.json(configUrl, 'PUT', config);
+    timeoutLib.setHandler(() => new Promise(() => {}));
+    await rejected(await timeoutLib.request(translateUrl, 'POST', { text: 'timeout' }), 504, ['synthetic-key', 'timeout']);
+    assert.equal(timeoutLib.calls.length, 1, 'The timeout must cancel a started upstream request');
+    assert.equal(timeoutLib.calls[0].options.signal.aborted, true);
+    assert.equal(lib.calls.length, 6);
+    assert.equal((await lib.json(configUrl)).settings.usedCharacters, 10_053);
+    assert.equal((await timeoutLib.json(configUrl)).settings.usedCharacters, 7);
   }
 });
 
