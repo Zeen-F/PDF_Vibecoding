@@ -15,9 +15,10 @@ const server = createServer((request, response) => {
   response.writeHead(503, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify({ error: '纸间正在启动，请稍后重试。' }));
 });
-server.listen(port, '127.0.0.1', () => {
+server.listen(port, '127.0.0.1', async () => {
   try {
     application = createApp();
+    await application.ready;
     console.log(`Paperdesk 已启动：http://127.0.0.1:${port}`);
     if (process.connected) process.send({ type: 'paperdesk-ready' }, () => {});
   } catch (error) {

@@ -5,7 +5,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { once } from 'node:events';
 import fsPromises from 'node:fs/promises';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,7 +13,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION } from '../shared/service-identity.mjs';
-import { startDesktopRuntime, validateExistingLibrary } from '../desktop/runtime.mjs';
+import { startDesktopRuntime, validateExistingLibrary, validateVaultNoteUri } from '../desktop/runtime.mjs';
+import { getVaultConfig } from '../server/vault-config.mjs';
 
 const sample = await readFile(new URL('../public/examples/reading-demo.pdf', import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -303,4 +304,65 @@ test('runtime startup failures release their reserved port and do not downgrade 
     second.once('error', reject);
     second.listen(port, '127.0.0.1', () => second.close(done));
   });
+});
+
+test('desktop vault identity uses the managed directory, independent of its local cache', async t => {
+  const root = await temporaryDirectory(t);
+  const vaultDir = join(root, '知识库'), dataDir = join(root, 'cache');
+  await mkdir(join(vaultDir, '.obsidian'), { recursive: true });
+  const config = getVaultConfig({ vaultDir, dataDir });
+  const runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
+  t.after(() => runtime.close());
+  assert.equal(runtime.vaultDir, config.vaultDir);
+  assert.equal(runtime.vaultSubdir, 'Paperdesk');
+  assert.equal(runtime.libraryDir, config.libraryDir);
+  assert.equal((await json(runtime.baseUrl, '/api/plugin/status')).libraryId, hash(config.libraryDir));
+  assert.equal((await json(runtime.baseUrl, '/api/storage')).mode, 'vault');
+  const reused = await startDesktopRuntime({ vaultDir, dataDir: join(root, 'other-cache'), preferredPort: Number(new URL(runtime.baseUrl).port) });
+  assert.equal(reused.owned, false);
+  assert.equal(reused.baseUrl, runtime.baseUrl);
+  await reused.close();
+  assert.ok(!(await readdir(root)).includes('other-cache'));
+  assert.deepEqual(await json(runtime.baseUrl, '/api/health'), { ok: true });
+});
+
+test('desktop vault restarts from official PDF and Markdown after cache removal', async t => {
+  const root = await temporaryDirectory(t);
+  const vaultDir = join(root, 'vault'), dataDir = join(root, 'cache');
+  await mkdir(join(vaultDir, '.obsidian'), { recursive: true });
+  let runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
+  t.after(() => runtime.close());
+  const document = await importSample(runtime.baseUrl);
+  const { document: saved } = await json(runtime.baseUrl, `/api/documents/${document.id}`, {
+    method: 'PATCH', body: { notesZh: '正式 Markdown 笔记 Ω', notesEn: '', expectedNotesRevision: document.notesRevision },
+  });
+  const { uri } = await json(runtime.baseUrl, `/api/documents/${document.id}/vault-note`);
+  const markdown = new URL(uri).searchParams.get('path');
+  assert.match(await readFile(markdown, 'utf8'), /正式 Markdown 笔记 Ω/);
+  await runtime.close();
+  const before = await snapshot(vaultDir);
+  await rm(dataDir, { recursive: true, force: true });
+  runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
+  const restored = await json(runtime.baseUrl, `/api/documents/${document.id}`);
+  assert.equal(restored.document.notesZh, saved.notesZh);
+  assert.equal((await json(runtime.baseUrl, '/api/documents')).documents.length, 1);
+  assert.deepEqual(await snapshot(vaultDir), before);
+});
+
+test('Obsidian URI validation permits only an existing Markdown file inside the active managed directory', async t => {
+  const root = await temporaryDirectory(t);
+  const libraryDir = join(root, 'vault', 'Paperdesk'), note = join(libraryDir, '论文笔记.md');
+  await mkdir(libraryDir, { recursive: true });
+  await writeFile(note, '笔记');
+  const valid = `obsidian://open?path=${encodeURIComponent(note)}`;
+  assert.equal(await validateVaultNoteUri(valid, libraryDir), `obsidian://open?path=${encodeURIComponent(await realpath(note))}`);
+  const outside = join(root, 'outside.md');
+  await writeFile(outside, '外部文件');
+  await symlink(outside, join(libraryDir, 'outside.md'));
+  const cases = [
+    'https://example.com', 'obsidian://advanced-uri?vault=anything', `${valid}&file=anything`, `${valid}#anything`,
+    `obsidian://open?path=${encodeURIComponent(outside)}`, `obsidian://open?path=${encodeURIComponent(join(libraryDir, 'outside.md'))}`,
+    'obsidian://open?path=relative.md', `obsidian://open?path=${encodeURIComponent(join(libraryDir, 'missing.md'))}`,
+  ];
+  for (const value of cases) await assert.rejects(validateVaultNoteUri(value, libraryDir));
 });

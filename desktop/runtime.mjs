@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
-import { lstat, stat } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { createApp } from '../server/app.mjs';
+import { getVaultConfig } from '../server/vault-config.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION, libraryIdentity } from '../shared/service-identity.mjs';
 
@@ -72,14 +73,17 @@ async function drainServer(server, sockets) {
 }
 
 /** Start a loopback service, or connect to the exact healthy library already running. */
-export async function startDesktopRuntime({ dataDir, preferredPort = 4317 } = {}) {
-  dataDir = resolvedDataDir(dataDir);
+export async function startDesktopRuntime({ dataDir, vaultDir, vaultSubdir = 'Paperdesk', preferredPort = 4317 } = {}) {
+  const vault = vaultDir === undefined ? null : await getVaultConfig({ dataDir, vaultDir, vaultSubdir });
+  dataDir = vault ? vault.dataDir : resolvedDataDir(dataDir);
   if (!Number.isInteger(preferredPort) || preferredPort < 0 || preferredPort > 65535) {
     throw new Error('本机端口必须是 0 至 65535 的整数。');
   }
   const preferredUrl = `http://${HOST}:${preferredPort}`;
-  const libraryId = libraryIdentity(dataDir);
-  const reused = () => ({ baseUrl: preferredUrl, dataDir, owned: false, close: async () => {} });
+  const libraryId = libraryIdentity(vault ? vault.libraryDir : dataDir);
+  const storage = { dataDir, ...(vault ? { vaultDir: vault.vaultDir, vaultSubdir: vault.vaultSubdir } : {}) };
+  const location = vault ? { libraryDir: vault.libraryDir } : {};
+  const reused = () => ({ baseUrl: preferredUrl, ...storage, ...location, owned: false, close: async () => {} });
   if (preferredPort && await matchingService(preferredUrl, libraryId)) return reused();
 
   let application;
@@ -110,12 +114,13 @@ export async function startDesktopRuntime({ dataDir, preferredPort = 4317 } = {}
       if (await matchingService(preferredUrl, libraryId)) return reused();
       await listen(server, 0);
     }
-    application = createApp({ dataDir });
+    application = createApp(storage);
+    await application.ready;
     handler = application.app;
     const baseUrl = `http://${HOST}:${server.address().port}`;
     let closing;
     return {
-      baseUrl, dataDir, owned: true,
+      baseUrl, ...storage, ...location, owned: true,
       close() {
         if (!closing) closing = (async () => {
           stopping = true;
@@ -133,6 +138,25 @@ export async function startDesktopRuntime({ dataDir, preferredPort = 4317 } = {}
     finally { await application?.close(); }
     throw error;
   }
+}
+
+/** Accept only the active vault's existing Markdown note, never a general URL. */
+export async function validateVaultNoteUri(value, libraryDir) {
+  if (typeof value !== 'string' || typeof libraryDir !== 'string') throw new Error('当前没有打开 Obsidian 仓库。');
+  let uri;
+  try { uri = new URL(value); } catch { throw new Error('Obsidian 笔记链接无效。'); }
+  const parameters = [...uri.searchParams];
+  const filename = uri.searchParams.get('path');
+  if (uri.protocol !== 'obsidian:' || uri.hostname !== 'open' || uri.username || uri.password || uri.port
+    || uri.hash || uri.pathname || parameters.length !== 1 || parameters[0][0] !== 'path'
+    || !filename || filename.includes('\0') || !path.isAbsolute(filename) || path.extname(filename).toLowerCase() !== '.md') {
+    throw new Error('Obsidian 笔记链接无效。');
+  }
+  const [root, target] = await Promise.all([realpath(libraryDir), realpath(filename)]);
+  const relative = path.relative(root, target);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)
+    || path.extname(target).toLowerCase() !== '.md' || !(await stat(target)).isFile()) throw new Error('只能打开当前 Paperdesk 文件夹中的笔记。');
+  return `obsidian://open?path=${encodeURIComponent(target)}`;
 }
 
 function requireColumns(database, table, expected) {

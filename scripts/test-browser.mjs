@@ -16,6 +16,7 @@ import { readerLayoutWorkflow } from '../tests/reader-layout.browser.mjs';
 import { translationWorkflow, translationTestOptions } from '../tests/translation.browser.mjs';
 import { annotationDraftWorkflow } from '../tests/annotation-drafts.browser.mjs';
 import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
+import { vaultWorkflow } from '../tests/vault.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -607,6 +608,9 @@ try {
   await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview, onLayoutPreview });
   await annotationDraftWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await readingPositionWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, dataDir: join(tempDir, 'data') });
+  const vaultVisualDir=join(root,'.local','verification','obsidian-vault');
+  await mkdir(vaultVisualDir,{recursive:true,mode:0o700});
+  await vaultWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(vaultVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

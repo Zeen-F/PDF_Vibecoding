@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('paperdeskDesktop', {
+  openVaultNote(documentId) {
+    return ipcRenderer.invoke('paperdesk:open-vault-note', documentId);
+  },
   onLibrarySwitch(handler) {
     const listener = (_event, active) => handler(active === true);
     ipcRenderer.on('paperdesk:library-switch', listener);

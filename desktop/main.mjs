@@ -2,8 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDesktopRuntime, validateExistingLibrary } from './runtime.mjs';
+import { startDesktopRuntime, validateExistingLibrary, validateVaultNoteUri } from './runtime.mjs';
 import { readDesktopSettings, writeDesktopSettings } from './settings.mjs';
+import { getVaultConfig } from '../server/vault-config.mjs';
 
 const desktopDir = path.dirname(fileURLToPath(import.meta.url));
 const userData = path.resolve(process.env.PAPERDESK_DESKTOP_USER_DATA || path.join(app.getPath('appData'), 'Paperdesk'));
@@ -11,6 +12,23 @@ app.setName('Paperdesk');
 app.setPath('userData', userData);
 let runtime, window, ready = false, quitting = false, quitPending = false, switching = false, flushing;
 const pendingFlush = new Map();
+
+ipcMain.handle('paperdesk:open-vault-note', async (event, documentId) => {
+  if (event.sender !== window?.webContents || !isReaderUrl(event.sender.getURL()) || !runtime?.vaultDir
+    || switching || quitting || typeof documentId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(documentId)) {
+    throw new Error('无法打开当前文献的 Obsidian 笔记。');
+  }
+  const active = runtime;
+  const response = await fetch(`${active.baseUrl}/api/documents/${documentId}/vault-note`, {
+    redirect: 'error', signal: AbortSignal.timeout(5000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '无法读取 Obsidian 笔记。');
+  const uri = await validateVaultNoteUri(result.uri, active.libraryDir);
+  if (runtime !== active || switching || quitting) throw new Error('文献库正在切换，请稍后重试。');
+  await shell.openExternal(uri);
+});
 
 ipcMain.on('paperdesk:flush-result', (event, result) => {
   if (event.sender !== window?.webContents || !isReaderUrl(event.sender.getURL())) return;
@@ -54,32 +72,40 @@ function guard(action) {
   return () => { void action().catch(error => showError('操作未完成', error)); };
 }
 
-async function chooseLibrary() {
+async function chooseLibrary(vaultMode = false) {
   if (switching || quitting) return;
   switching = true;
   window.webContents.send('paperdesk:library-switch', true);
   try {
     await flushNotes();
     const choice = await dialog.showOpenDialog(window, {
-      title: '打开已有文献库', buttonLabel: '打开文献库',
-      message: '选择包含 paperdesk.sqlite 和 pdfs 的完整文献库。请先正常停止原阅读服务。',
+      title: vaultMode ? '打开 Obsidian 仓库' : '打开已有文献库', buttonLabel: vaultMode ? '打开仓库' : '打开文献库',
+      message: vaultMode ? '选择已有 Obsidian 仓库的根目录。Paperdesk 使用其中的 Paperdesk 文件夹保存 PDF 和 Markdown。' : '选择包含 paperdesk.sqlite 和 pdfs 的完整文献库。请先正常停止原阅读服务。',
       properties: ['openDirectory'],
     });
     if (choice.canceled || !choice.filePaths[0]) return;
-    const dataDir = path.resolve(choice.filePaths[0]);
-    if (dataDir === runtime.dataDir) return;
-    await validateExistingLibrary(dataDir);
+    const selected = path.resolve(choice.filePaths[0]);
+    let storage;
+    if (vaultMode) {
+      const config = getVaultConfig({ vaultDir: selected });
+      if (config.vaultDir === runtime.vaultDir && config.vaultSubdir === runtime.vaultSubdir) return;
+      storage = { dataDir: config.dataDir, vaultDir: config.vaultDir, vaultSubdir: config.vaultSubdir };
+    } else {
+      if (!runtime.vaultDir && selected === runtime.dataDir) return;
+      await validateExistingLibrary(selected);
+      storage = { dataDir: selected };
+    }
     const previous = runtime;
     ready = false;
     let next;
     try {
       await previous.close();
-      next = await startDesktopRuntime({ dataDir });
-      await writeDesktopSettings(userData, { dataDir, port: Number(new URL(next.baseUrl).port) });
+      next = await startDesktopRuntime(storage);
+      await writeDesktopSettings(userData, { ...storage, port: Number(new URL(next.baseUrl).port) });
       runtime = next;
     } catch (error) {
       await next?.close().catch(() => {});
-      runtime = await startDesktopRuntime({ dataDir: previous.dataDir, preferredPort: Number(new URL(previous.baseUrl).port) });
+      runtime = await startDesktopRuntime({ dataDir: previous.dataDir, vaultDir: previous.vaultDir, vaultSubdir: previous.vaultSubdir, preferredPort: Number(new URL(previous.baseUrl).port) });
       await window.loadURL(runtime.baseUrl);
       throw error;
     }
@@ -103,8 +129,9 @@ function updateMenu() {
     application,
     { label: '文件', submenu: [
       { id: 'open-existing-library', label: '打开已有文献库…', click: guard(chooseLibrary) },
+      { id: 'open-obsidian-vault', label: '打开 Obsidian 仓库…', click: guard(() => chooseLibrary(true)) },
       { label: '在 Finder 中显示文献库', click: guard(async () => {
-        const error = await shell.openPath(runtime.dataDir); if (error) throw new Error(error);
+        const error = await shell.openPath(runtime.libraryDir || runtime.dataDir); if (error) throw new Error(error);
       }) },
       { label: '在浏览器中打开', click: guard(() => shell.openExternal(runtime.baseUrl)) },
       { type: 'separator' }, { role: 'close', label: '关闭窗口' },
@@ -190,8 +217,8 @@ if (!app.requestSingleInstanceLock()) {
     const settings = await readDesktopSettings(userData);
     const dataDir = settings?.dataDir || path.join(userData, 'library');
     const preferredPort = process.env.PAPERDESK_DESKTOP_PORT === undefined ? (settings?.port || 4317) : Number(process.env.PAPERDESK_DESKTOP_PORT);
-    runtime = await startDesktopRuntime({ dataDir, preferredPort });
-    await writeDesktopSettings(userData, { dataDir, port: Number(new URL(runtime.baseUrl).port) });
+    runtime = await startDesktopRuntime({ dataDir, preferredPort, vaultDir: settings?.vaultDir, vaultSubdir: settings?.vaultSubdir });
+    await writeDesktopSettings(userData, { dataDir: runtime.dataDir, vaultDir: runtime.vaultDir, vaultSubdir: runtime.vaultSubdir, port: Number(new URL(runtime.baseUrl).port) });
     app.setAboutPanelOptions({ applicationName: '纸间 Paperdesk', applicationVersion: app.getVersion(), version: 'macOS 桌面预览版', copyright: 'PDF、笔记与批注保存在本机。' });
     updateMenu();
     await createWindow();

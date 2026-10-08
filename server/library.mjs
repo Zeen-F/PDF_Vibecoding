@@ -104,7 +104,7 @@ export function registerLibraryApi({ app, db, documentOr404, serializeDocument, 
   app.patch('/api/library/theme', (req, res) => {
     const { theme } = objectBody(req.body, ['theme']);
     if (!THEME_IDS.includes(theme)) throw new HttpError(400, '请选择森林、暖砂、雾蓝或夜读皮肤。');
-    db.prepare('UPDATE library_preferences SET theme = ? WHERE id = 1').run(theme);
+    transaction(() => db.prepare('UPDATE library_preferences SET theme = ? WHERE id = 1').run(theme));
     res.json({ theme });
   });
 }

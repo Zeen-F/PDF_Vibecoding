@@ -3,7 +3,7 @@ import multer from 'multer';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, mkdirSync, existsSync } from 'node:fs';
-import { chmod, rename, unlink } from 'node:fs/promises';
+import { chmod, copyFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -14,6 +14,9 @@ import { createReaderRenderer, readerPageQuery, readerPageText, ReaderRenderErro
 import { migrateLibrary, registerLibraryApi } from './library.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { registerTranslationApi } from './translation.mjs';
+import { getVaultConfig } from './vault-config.mjs';
+import { createVaultStore } from './vault-store.mjs';
+import { createVaultIndex } from './vault-index.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
@@ -133,9 +136,16 @@ function extractText(items) {
   return text;
 }
 
-async function parsePdf(filePath) {
-  let task;
+async function parsePdf(filePath, { expectedSha256, snapshotDir } = {}) {
+  let task, snapshot;
   try {
+    if (expectedSha256) {
+      mkdirSync(snapshotDir,{recursive:true,mode:0o700});
+      snapshot = path.join(snapshotDir,`${randomUUID()}.pdf`);
+      await copyFile(filePath,snapshot); await chmod(snapshot,0o600);
+      if (await hashUpload(snapshot) !== expectedSha256) throw new HttpError(409,'PDF 在读取期间发生修改，请重新刷新仓库。');
+      filePath = snapshot;
+    }
     task = getDocument({
       url: pathToFileURL(filePath).href, disableStream: true, disableAutoFetch: true, isEvalSupported: false,
       disableFontFace: true, useSystemFonts: false, useWorkerFetch: false,
@@ -173,6 +183,7 @@ async function parsePdf(filePath) {
     throw new HttpError(400, '无法读取这个 PDF，文件可能已损坏或不是有效的 PDF。');
   } finally {
     if (task) await task.destroy().catch(() => {});
+    if (snapshot) await unlink(snapshot).catch(() => {});
   }
 }
 
@@ -225,11 +236,15 @@ function snippet(text, needle) {
 }
 
 /** Create a local app with its own persistent database. The caller owns its HTTP server. */
-export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.join(rootDir, 'data'), translationOptions } = {}) {
+export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR, vaultSubdir = process.env.PAPERDESK_VAULT_SUBDIR || 'Paperdesk', translationOptions } = {}) {
+  const vaultConfig = vaultDir ? getVaultConfig({ vaultDir, vaultSubdir, dataDir: dataDir || process.env.PAPERDESK_DATA_DIR }) : null;
+  dataDir = vaultConfig?.dataDir || dataDir || process.env.PAPERDESK_DATA_DIR || path.join(rootDir, 'data');
   dataDir = path.resolve(dataDir);
-  const pdfDir = path.join(dataDir, 'pdfs');
+  const vaultStore = vaultConfig ? createVaultStore({ vaultDir: vaultConfig.vaultDir, subdir: vaultConfig.vaultSubdir, recoveryDir: path.join(dataDir,'recoveries','originals') }) : null;
+  const pdfDir = vaultStore?.pdfDir || path.join(dataDir, 'pdfs');
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
-  const incomingDir = path.join(pdfDir, '.incoming');
+  const incomingDir = vaultStore ? path.join(dataDir, '.incoming') : path.join(pdfDir, '.incoming');
   mkdirSync(incomingDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path.join(dataDir, 'paperdesk.sqlite'));
   let migrating = false;
@@ -287,6 +302,10 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     throw error;
   }
   const app = express();
+  const vaultIndex = vaultStore ? createVaultIndex({ db, store: vaultStore, parsePdf, dataDir, HttpError }) : null;
+  const ready = vaultIndex ? vaultIndex.initialize() : Promise.resolve();
+  // A rejected startup remains observable to both the launcher and HTTP callers.
+  void ready.catch(() => {});
   let closed = false;
   let closing;
   function acceptingRequests(_req, _res, next) {
@@ -296,6 +315,9 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
   app.disable('x-powered-by');
   app.use(localRequestOnly);
   app.use(acceptingRequests);
+  app.use('/api', async (_req, _res, next) => {
+    try { await ready; if (closed) throw new HttpError(503,'阅读服务正在关闭，请重新启动后重试。'); if (vaultIndex) await vaultIndex.refresh(); next(); } catch (error) { next(error); }
+  });
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -358,6 +380,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     return pending;
   }
   function documentOr404(id) {
+    if (vaultIndex && !vaultIndex.insideTransaction) vaultIndex.syncKnown();
     const row = findDocument.get(id);
     if (!row) throw new HttpError(404, '没有找到这篇文献。');
     return row;
@@ -368,6 +391,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     return row;
   }
   function transaction(work) {
+    if (vaultIndex) return vaultIndex.transaction(work);
     db.exec('BEGIN IMMEDIATE');
     try {
       const result = work();
@@ -379,13 +403,29 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     }
   }
   const pluginApi = registerPluginApi({
-    app, db, dataDir, documentOr404, serializeDocument, transaction,
+    app, db, dataDir: vaultConfig?.libraryDir || dataDir, documentOr404, serializeDocument, transaction,
     HttpError, objectBody, stringValue, pageValue, rectanglesValue,
   });
   registerLibraryApi({ app, db, documentOr404, serializeDocument, transaction, HttpError, objectBody });
   const translationApi = registerTranslationApi({ app, dataDir, HttpError, options: translationOptions });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  app.get('/api/storage', (_req,res) => res.json({ mode: vaultStore ? 'vault' : 'library',
+    vaultName: vaultConfig ? path.basename(vaultConfig.vaultDir) : null, subdir: vaultConfig?.vaultSubdir || null,
+    documentCount: db.prepare('SELECT COUNT(*) AS count FROM documents').get().count }));
+  app.post('/api/storage/refresh', async (_req,res) => { if (vaultIndex) await vaultIndex.refresh(); res.json({ ok: true }); });
+  app.get('/api/documents/:id/vault-note', (req,res) => {
+    documentOr404(req.params.id);
+    if (!vaultStore) throw new HttpError(400,'当前使用独立文献库，请先连接 Obsidian 仓库。');
+    res.json({ uri: `obsidian://open?path=${encodeURIComponent(vaultStore.notePath(req.params.id))}` });
+  });
+  app.post('/api/documents/:id/vault-conflict', (req,res) => {
+    documentOr404(req.params.id);
+    if (!vaultIndex) throw new HttpError(400,'当前未连接 Obsidian 仓库。');
+    const { text } = objectBody(req.body,['text']);
+    vaultIndex.preserveConflict(req.params.id,stringValue(text,'冲突笔记',MAX_NOTE_LENGTH));
+    res.json({ preserved: true });
+  });
   app.get('/api/documents', (_req, res) => {
     res.json({ documents: db.prepare('SELECT * FROM documents ORDER BY updated_at DESC, id').all().map(serializeDocument) });
   });
@@ -405,9 +445,10 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
         const filename = originalFilename(req.file.originalname);
         const title = parsed.title || filename.replace(/\.pdf$/i, '').slice(0, 500) || '未命名文献';
         const now = new Date().toISOString();
-        const pdfPath = path.join(pdfDir, `${id}.pdf`);
+        const pdfPath = vaultStore ? vaultStore.pdfPath(id) : path.join(pdfDir, `${id}.pdf`);
         let transactionOpen = false;
         let moved = false;
+        let sourceCommitted = false;
         try {
           await rename(temporaryPath, pdfPath);
           moved = true;
@@ -420,11 +461,12 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
           );
           const insertPage = db.prepare('INSERT INTO pages(document_id, page, text) VALUES (?, ?, ?)');
           parsed.pages.forEach((text, index) => insertPage.run(id, index + 1, text));
+          if (vaultIndex) { vaultIndex.persistImported(id); sourceCommitted = true; }
           db.exec('COMMIT');
           transactionOpen = false;
         } catch (error) {
           if (transactionOpen) db.exec('ROLLBACK');
-          if (moved) await unlink(pdfPath).catch(() => {});
+          if (moved && !sourceCommitted && !(vaultStore && existsSync(vaultStore.notePath(id)))) await unlink(pdfPath).catch(() => {});
           const committedDuplicate = findHash.get(sha256);
           if (committedDuplicate) return { document: serializeDocument(committedDuplicate), duplicate: true };
           throw error;
@@ -486,7 +528,12 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
       const doc = documentOr404(req.params.id);
       if (!Object.keys(body).some(key => key !== 'expectedNotesRevision')) return serializeDocument(doc);
       const changesNotes = Object.hasOwn(body, 'notesZh') || Object.hasOwn(body, 'notesEn');
+      if (vaultIndex && changesNotes && !Object.hasOwn(body,'expectedNotesRevision')) throw new HttpError(400,'保存到 Obsidian 仓库需要笔记版本，请先读取当前笔记后重试。');
+      if (vaultIndex && Object.hasOwn(body,'notesEn') && body.notesEn !== '') throw new HttpError(400,'Obsidian 仓库使用统一 Markdown 正文，请把内容保存到 notesZh，并将 notesEn 留空。');
       if (changesNotes && Object.hasOwn(body, 'expectedNotesRevision') && body.expectedNotesRevision !== notesRevision(doc)) {
+        if (vaultIndex) vaultIndex.preserveConflict(doc.id, mergeNotes(
+          Object.hasOwn(body,'notesZh') ? stringValue(body.notesZh,'笔记',MAX_NOTE_LENGTH) : doc.notes_zh,
+          Object.hasOwn(body,'notesEn') ? stringValue(body.notesEn,'英文笔记',250_000) : doc.notes_en));
         throw new HttpError(409, '笔记已在其他窗口或插件中更新，请先读取最新笔记再合并保存。');
       }
       const title = Object.hasOwn(body, 'title') ? stringValue(body.title, '文献标题', 500, { nonempty: true, trim: true }) : doc.title;
@@ -657,11 +704,12 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
     if (error.type === 'entity.too.large') return res.status(413).json({ error: '请求内容过大，请缩短笔记或批注。' });
     if (error instanceof SyntaxError && error.status === 400) return res.status(400).json({ error: 'JSON 格式不正确。' });
     if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
+    if (error.name === 'VaultError' && error.status === 409) return res.status(409).json({ error: error.message });
     console.error('Paperdesk request failed:', error);
     res.status(500).json({ error: '本地读写失败，请检查数据目录权限和剩余磁盘空间后重试。' });
   });
   return {
-    app,
+    app, ready,
     close() {
       if (closing) return closing;
       closed = true;
@@ -675,7 +723,7 @@ export function createApp({ dataDir = process.env.PAPERDESK_DATA_DIR || path.joi
               Promise.resolve().then(() => translationApi.close()),
               Promise.resolve().then(() => readerRenderer.close()),
             ]),
-            Promise.allSettled([importQueue, ...pendingToc]),
+            Promise.allSettled([ready, vaultIndex?.settle(), importQueue, ...pendingToc]),
           ]);
           const failures = resources.filter(result => result.status === 'rejected');
           if (failures.length) throw new AggregateError(failures.map(result => result.reason), '本机阅读资源未能完整关闭。');
