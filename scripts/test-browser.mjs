@@ -14,6 +14,8 @@ import { nativeReaderWorkflow } from '../tests/reader-ui.browser.mjs';
 import { libraryThemesWorkflow } from '../tests/library-themes.browser.mjs';
 import { readerLayoutWorkflow } from '../tests/reader-layout.browser.mjs';
 import { translationWorkflow, translationTestOptions } from '../tests/translation.browser.mjs';
+import { annotationDraftWorkflow } from '../tests/annotation-drafts.browser.mjs';
+import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -603,6 +605,8 @@ try {
   await translationWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview });
   await pluginWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview, onLayoutPreview });
+  await annotationDraftWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
+  await readingPositionWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, dataDir: join(tempDir, 'data') });
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

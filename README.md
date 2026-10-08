@@ -6,18 +6,18 @@
 
 ## 下载与使用
 
-最新版本：[**1.1.0-beta.4 · GitHub Release**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.1.0-beta.4)。
+最新版本：[**1.1.0-beta.5 · GitHub Release**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.1.0-beta.5)。
 
 | 版本 | 适合谁 | 使用方式 |
 | --- | --- | --- |
-| macOS 桌面版 | 使用 M 系列 Mac，希望直接打开软件 | 下载 [macOS DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.1.0-beta.4/Paperdesk-1.1.0-beta.4-mac-arm64.dmg)，将 Paperdesk 拖入「应用程序」；无需安装 Node.js |
-| 本机浏览器版 | 希望通过本机端口在浏览器里使用 | 下载 [浏览器版 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.1.0-beta.4/Paperdesk-1.1.0-beta.4-browser.zip)，安装 Node.js 24+ 后启动，打开 `http://127.0.0.1:4317` |
+| macOS 桌面版 | 使用 M 系列 Mac，希望直接打开软件 | 下载 [macOS DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.1.0-beta.5/Paperdesk-1.1.0-beta.5-mac-arm64.dmg)，将 Paperdesk 拖入「应用程序」；无需安装 Node.js |
+| 本机浏览器版 | 希望通过本机端口在浏览器里使用 | 下载 [浏览器版 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.1.0-beta.5/Paperdesk-1.1.0-beta.5-browser.zip)，安装 Node.js 24+ 后启动，打开 `http://127.0.0.1:4317` |
 
-桌面版尚未经过 Apple 签名或公证；首次打开如果被 macOS 阻止，可在「系统设置 → 隐私与安全性」中允许。安装及已有文献库的使用方式见 [桌面版说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.4/docs/desktop-release.md)。
+桌面版尚未经过 Apple 签名或公证；首次打开如果被 macOS 阻止，可在「系统设置 → 隐私与安全性」中允许。四项保存可靠性修复及升级注意事项见 [本版变更记录](docs/history/1.1.0-beta.5.md)。安装及已有文献库的使用方式见 [桌面版说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.5/docs/desktop-release.md)。
 
 ## 可以做什么
 
-以下功能以 **1.1.0-beta.4** 为准，桌面版和本机浏览器版使用同一套阅读功能。
+以下功能以 **1.1.0-beta.5** 为准，桌面版和本机浏览器版使用同一套阅读功能。
 
 | 功能 | 说明 |
 | --- | --- |
@@ -38,10 +38,25 @@
 
 PDF、索引、笔记与批注保存在本机文献库。普通阅读和编辑不调用外部 AI 服务，安装包也不包含个人文献。
 
-- 桌面版默认使用应用之外的独立文献库，可从「文件 → 打开已有文献库…」选择现有库。
+- 桌面版默认使用应用之外的独立文献库，也会记住所选文献库；「文件 → 打开已有文献库…」当前只接受完整的 schema 4 库，旧库的升级步骤见下文。
 - 源码浏览器版默认使用项目内的 `data/`；开发模式使用隔离的 `.local/dev-data/`。
 - 翻译只在主动点击时，将当次选中的文字发送到你配置的接口。主动交给 Codex 的内容会进入模型请求。
-- 备份前先正常停止应用或服务，再复制整个文献库目录，包括数据库和 PDF。原始 PDF 不会被批注或笔记覆盖。
+- 备份前先正常停止应用或服务，再复制整个文献库目录，包括 `paperdesk.sqlite`、`pdfs/` 及已有的 `translation.sqlite` 等文件。运行中的 SQLite 可能还有 WAL／SHM 文件，不能只复制主数据库。原始 PDF 不会被批注或笔记覆盖。
+
+**从 beta.4 升级前请备份完整文献库。** beta.5 会把主库从 schema 3 升级到 **schema 4**，增加批注请求去重和阅读位置顺序记录。迁移在事务中完成，失败回滚，已有文献、分类、笔记、批注和原始 PDF 保留。
+
+- 桌面默认库或已记住的库，在启动 beta.5 时自动升级；请在第一次启动新版前正常退出旧应用并完成备份。
+- 通过菜单新选择 schema 3 的旧库时，当前版本会拒绝直接打开。先停止相关服务并备份，再使用 beta.5 浏览器包或源码服务，将 `PAPERDESK_DATA_DIR` 指向该库启动一次，确认内容读回后正常停止服务，再在桌面菜单选择此目录。具体命令见 [桌面版说明](docs/desktop-release.md#从-beta4-升级)。
+- schema 3 的旧程序不能直接打开升级后的库。需要回退时先停止新版服务，恢复升级前的完整备份，再运行旧版；不要手工删表或降低数据库版本号。
+
+## 保存与恢复
+
+- **评论草稿：** 切换笔记／批注、文献或刷新后，可恢复原文献的评论、页码和引文／区域；确认保存成功后才清除本次提交的草稿。各窗口独立保留草稿；保存失败或版本冲突时保留输入，恢复的评论不会自动附到后来选择的内容。
+- **批注保存：** 相关数据库写入一起成功或回滚。新增请求在响应丢失后以原请求重试，避免重复批注；有效请求记录保留 30 天，容量满时拒绝新请求，不提前丢弃有效记录。超过期限仍不确定的旧请求，应先核对文献中已保存的批注。
+- **启动检查：** 复用本机服务前核对文献库、产品版本、API 版本、启动协议与健康状态，避免打开错误的库或不兼容服务。
+- **阅读位置：** 快速翻页按文献合并并顺序保存；切文献和桌面正常关闭前等待最后一次写入。同一窗口的旧序号不能覆盖较新的页码，保存失败后可以恢复并重新确认。
+
+草稿只保存在当前浏览器／桌面配置中，不能替代文献库备份。浏览器存储不可用或容量不足时，请保留当前窗口并处理保存问题。删除结果不确定时也保留评论草稿，应重新打开文献核对；通信失败不表示批注尚未删除。浏览器强制退出、断电或清理浏览器存储，无法保证最后一次尚未提交的内容或页码已经保存。
 
 ## 启动浏览器版 ZIP
 
@@ -52,7 +67,7 @@ npm ci --omit=dev
 npm start
 ```
 
-ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.0.1:4317** 即可使用；终端保持运行，按 Control+C 停止服务。详细说明在包内的 `START-HERE.md`。本次验证环境为 macOS，其他系统尚未验证。
+ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.0.1:4317** 即可使用；终端保持运行，按 Control+C 停止服务。详细说明在包内的 `START-HERE.md`。浏览器版的发布验收范围为 macOS，其他系统尚未验证。
 
 文献库默认在解压目录的 `data/` 中，更新前请先停止服务并备份整个文献库；也可通过 `PAPERDESK_DATA_DIR` 指定固定位置。
 
@@ -61,14 +76,14 @@ ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.
 默认分支保留早期开发源码。想使用上面列出的版本功能，请检出发布标签：
 
 ```sh
-git clone --branch v1.1.0-beta.4 https://github.com/Zeen-F/PDF_Vibecoding.git
+git clone --branch v1.1.0-beta.5 https://github.com/Zeen-F/PDF_Vibecoding.git
 cd PDF_Vibecoding
 npm ci
 npm run build
 npm start
 ```
 
-需要 **Node.js 24+**。启动后在浏览器打开 **http://127.0.0.1:4317**；终端保持运行，按 Control+C 停止服务。Mac 也可在构建完成后使用项目里的 `启动纸间.command`。
+需要 **Node.js 24+**。启动后在浏览器打开 **http://127.0.0.1:4317**；终端保持运行，按 Control+C 停止服务。Mac 也可在构建完成后使用项目里的 `启动纸间.command`。启动器只在缺少构建产物时自动构建，更新源码后请重新运行 `npm run build`；端口被不同库或不兼容服务占用时会提示并停止启动，请先核对原服务。
 
 服务仅监听本机 `127.0.0.1`。安装依赖需要联网；准备完成后的普通阅读、搜索、笔记和 PDF 渲染在本机处理。
 
@@ -77,16 +92,17 @@ npm start
 - 扫描件可以阅读、记笔记和框选批注；目前没有 OCR，不能直接搜索或划选图片中的文字。
 - 复杂排版的选文和目录识别可能不准确，保存引文前请核对预览。
 - 暂不支持加密／权限受限 PDF、PDF 内嵌批注编辑、云同步和多人协作。
-- 安装包目前只支持 Apple Silicon Mac，没有自动更新。
+- 桌面安装包目前只支持 Apple Silicon Mac，没有自动更新；浏览器包在 macOS 验证，其他系统尚未验证。
+- 多个窗口之间的阅读位置没有全局排序，建议同一文献只在一个窗口编辑。本轮可靠性回归不替代真实 Codex 宿主中完整插件流程的验收。
 
 ## 开发与反馈
 
 最新发布源码的开发、检查、插件与翻译说明：
 
-- [开发指南](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.4/docs/development.md)
-- [阅读布局说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.4/docs/reader-display.md)
-- [翻译设置](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.4/docs/translation.md)
-- [Codex 插件](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.4/docs/codex-plugin.md)
+- [开发指南](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.5/docs/development.md)
+- [阅读布局说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.5/docs/reader-display.md)
+- [翻译设置](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.5/docs/translation.md)
+- [Codex 插件](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.1.0-beta.5/docs/codex-plugin.md)
 - [反馈问题](https://github.com/Zeen-F/PDF_Vibecoding/issues) · [贡献约定](CONTRIBUTING.md)
 
 ## 文件安排

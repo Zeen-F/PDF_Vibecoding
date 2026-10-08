@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server/app.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
+import { LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION } from '../shared/service-identity.mjs';
 import { startDesktopRuntime, validateExistingLibrary } from '../desktop/runtime.mjs';
 
 const sample = await readFile(new URL('../public/examples/reading-demo.pdf', import.meta.url));
@@ -83,12 +84,28 @@ test('desktop reuses only the exact healthy running library and does not own its
 
 test('different libraries and incompatible or unhealthy services survive desktop fallback', async t => {
   const directory = await temporaryDirectory(t);
+  const missing = Symbol('missing');
   for (const [index, mismatch] of [
-    { service: 'other' }, { apiVersion: 2 }, { libraryId: 'b'.repeat(64) }, { healthy: false },
+    { name: 'different service', status: { service: 'other' } },
+    { name: 'wrong API version', status: { apiVersion: SERVICE_API_VERSION + 1 } },
+    { name: 'missing API version', status: { apiVersion: missing } },
+    { name: 'wrong product version', status: { productVersion: `${PRODUCT_VERSION}-other` } },
+    { name: 'missing product version', status: { productVersion: missing } },
+    { name: 'wrong launcher protocol', status: { launcherProtocol: LAUNCHER_PROTOCOL + 1 } },
+    { name: 'missing launcher protocol', status: { launcherProtocol: missing } },
+    { name: 'different library', status: { libraryId: 'b'.repeat(64) } },
+    { name: 'unhealthy service', healthy: false },
   ].entries()) {
-    await t.test(JSON.stringify(mismatch), async t => {
+    await t.test(mismatch.name, async t => {
       const dataDir = join(directory, String(index));
-      const status = { service: 'paperdesk', apiVersion: 1, libraryId: hash(resolve(dataDir)), ...mismatch };
+      const status = {
+        service: 'paperdesk', apiVersion: SERVICE_API_VERSION, libraryId: hash(resolve(dataDir)),
+        productVersion: PRODUCT_VERSION, launcherProtocol: LAUNCHER_PROTOCOL,
+      };
+      for (const [key, value] of Object.entries(mismatch.status ?? {})) {
+        if (value === missing) delete status[key];
+        else status[key] = value;
+      }
       const existing = await serverAtRandomPort(t, (request, response) => {
         response.setHeader('Content-Type', 'application/json');
         response.end(JSON.stringify(request.url === '/api/plugin/status' ? status : { ok: mismatch.healthy !== false }));
