@@ -18,7 +18,7 @@ const executablePath = appBundle ? path.join(appBundle, 'Contents/MacOS/Paperdes
   : process.env.ELECTRON_EXECUTABLE_PATH || createRequire(import.meta.url)('electron');
 await access(executablePath);
 await access(path.join(root, 'dist/index.html'));
-const artifacts = path.join(root, '.local/verification/obsidian-vault');
+const artifacts = path.join(root, '.local/verification/obsidian-sidebar');
 await mkdir(artifacts, { recursive: true });
 const temporary = await mkdtemp(path.join(tmpdir(), 'paperdesk-vault-desktop-'));
 const userData = path.join(temporary, 'profile'), vaultDir = path.join(temporary, '测试知识库'), cacheHome = path.join(temporary, 'fixture-home');
@@ -31,6 +31,9 @@ const sourceRelative = '原有资料/阅读 #示例.pdf';
 const sourcePdf = path.join(canonicalVault, ...sourceRelative.split('/'));
 await mkdir(path.dirname(sourcePdf), { recursive: true });
 await writeFile(sourcePdf, original);
+const externalPdf = path.join(temporary, '外部导入.pdf');
+const externalBytes = Buffer.concat([original, Buffer.from('\n% isolated external import fixture\n')]);
+await writeFile(externalPdf, externalBytes);
 const label = appBundle ? 'packaged' : 'source';
 const env = { ...process.env, PAPERDESK_DESKTOP_USER_DATA: userData, PAPERDESK_DESKTOP_PORT: '0' };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -67,32 +70,29 @@ async function launch() {
   summary.versions = versions;
   baseUrl = new URL(page.url()).origin;
 }
-async function importPdf() {
+async function importPdf(file = sample, expectedStatus = 201) {
   const incoming = page.waitForResponse(response => response.url() === `${baseUrl}/api/documents` && response.request().method() === 'POST');
-  await page.getByLabel('选择 PDF 文件').setInputFiles(sample);
+  await page.getByLabel('选择 PDF 文件').setInputFiles(file);
   const response = await incoming;
-  assert.equal(response.status(), 201);
+  assert.equal(response.status(), expectedStatus);
   const { document } = await response.json();
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
   await expect(page.locator('.textLayer span').first()).toBeVisible();
   return document;
 }
 async function selectVaultPdf() {
-  await page.getByRole('button', { name: '选择 Obsidian PDF', exact: true }).click();
-  const picker = page.getByRole('dialog', { name: '选择 Obsidian PDF', exact: true });
-  await expect(picker).toBeVisible();
-  const sourceChoice = picker.getByRole('button', { name: `打开 PDF：${sourceRelative}`, exact: true });
+  const sourceChoice = page.getByRole('button', { name: `打开 Obsidian PDF：${sourceRelative}`, exact: true });
   await expect(sourceChoice).toBeVisible();
   await expect(sourceChoice).toContainText(path.basename(sourceRelative));
   await expect(sourceChoice).toContainText(path.dirname(sourceRelative));
-  await picker.getByRole('textbox', { name: '搜索 Obsidian PDF', exact: true }).fill('阅读 #示例');
-  await page.screenshot({ path: path.join(artifacts, `${label}-pdf-picker.png`) });
+  assert.equal((await request('/documents')).documents.length, 0, 'Listing existing PDFs must not associate them');
+  assert.deepEqual(await managedPdfCopies(), []);
+  await page.screenshot({ path: path.join(artifacts, `${label}-sidebar.png`) });
   const pending = page.waitForResponse(response => response.url() === `${baseUrl}/api/vault/pdfs/open` && response.request().method() === 'POST');
-  await picker.getByRole('button', { name: `打开 PDF：${sourceRelative}`, exact: true }).click();
+  await sourceChoice.click();
   const response = await pending;
   assert.equal(response.status(), 201);
   const { document } = await response.json();
-  await expect(picker).not.toBeVisible();
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
   await expect(page.locator('.textLayer span').first()).toBeVisible();
   return document;
@@ -184,7 +184,20 @@ try {
   assert.deepEqual(source.pdfSource, { kind: 'vault', path: sourceRelative });
   assert.equal(source.annotations[0].id, annotation.id);
   assert.equal((await request(`/documents/${document.id}`)).document.notesZh, notes);
-  await record('the native PDF picker opens the existing vault file in place, preserves its hash and stores only the associated Markdown');
+  await record('the sidebar automatically lists vault PDFs without association and opens the existing file in place, preserving its hash');
+
+  const imported = await importPdf(externalPdf);
+  assert.equal(hash(await readFile(externalPdf)), hash(externalBytes), 'External original must stay unchanged');
+  assert.equal(hash(await readFile(path.join(canonicalVault, 'Paperdesk', 'PDFs', `${imported.id}.pdf`))), hash(externalBytes));
+  assert.deepEqual(await managedPdfCopies(), [`${imported.id}.pdf`]);
+  const importedState = JSON.parse((await readFile(path.join(canonicalVault, 'Paperdesk', 'Notes', `${imported.id}.md`), 'utf8')).match(/<!-- paperdesk-state:v1\n([^\n]*)\n-->/)[1]);
+  assert.equal(importedState.version, 1);
+  assert.equal((await importPdf(externalPdf, 200)).id, imported.id);
+  assert.deepEqual(await managedPdfCopies(), [`${imported.id}.pdf`]);
+  assert.equal((await request('/documents')).documents.length, 2);
+  await page.locator(`[data-document-id="${document.id}"] .document-item`).click();
+  await expect(editor).toHaveValue(notes);
+  await record('vault upload saves an external PDF copy inside Obsidian, preserves the external original and deduplicates repeat imports');
 
   await page.getByRole('button', { name: '资料位置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '资料位置', exact: true });
@@ -216,12 +229,12 @@ try {
   await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
   await expect(page.locator('.textLayer span').first()).toBeVisible();
   assert.equal((await request('/storage')).mode, 'vault');
-  assert.equal((await request('/documents')).documents.length, 1);
+  assert.equal((await request('/documents')).documents.length, 2);
   assert.deepEqual((await request(`/documents/${document.id}`)).annotations, [annotation]);
   await expect(page.locator(`[data-annotation="${annotation.id}"]`).first()).toBeVisible();
   assert.deepEqual(JSON.parse(await readFile(path.join(userData, 'desktop-settings.json'), 'utf8')), settings);
   assert.equal(hash(await readFile(sourcePdf)), hash(original));
-  assert.deepEqual(await managedPdfCopies(), []);
+  assert.deepEqual(await managedPdfCopies(), [`${imported.id}.pdf`]);
   assert.deepEqual(await application.evaluate(() => globalThis.vaultDesktopMessages), []);
   await page.screenshot({ path: path.join(artifacts, `${label}-reader-restarted.png`) });
   await quit();

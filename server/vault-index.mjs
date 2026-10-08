@@ -183,18 +183,41 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
       throw error;
     } finally { insideTransaction = false; }
   }
+  function persistImported(id, pdfSource) {
+    const saved = store.writeDocument({ ...snapshot(id), ...(pdfSource ? { pdfSource } : {}) },null);
+    tokens.set(id,saved.token);
+    if (saved.pdfSource) pdfSources.set(id,{...saved.pdfSource});
+    return saved;
+  }
+  function commitImported(id, pdfSource, work) {
+    let saved;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      work();
+      // Keep the proposed formal record outside the vault before changing files.
+      const recovery = path.join(dataDir, 'recoveries'); mkdirSync(recovery, { recursive: true, mode: 0o700 });
+      writeFileSync(path.join(recovery, `import-${randomUUID()}.json`), JSON.stringify({
+        proposed: { ...snapshot(id), ...(pdfSource ? { pdfSource } : {}) },
+      }), { flag: 'wx', mode: 0o600 });
+      saved = persistImported(id,pdfSource);
+      db.exec('COMMIT');
+      return saved;
+    } catch (error) {
+      db.exec('ROLLBACK'); tokens.delete(id); pdfSources.delete(id);
+      if (saved) {
+        try { store.discardNewDocument(saved); }
+        catch { throw new HttpError(409,'导入未完成，新笔记已发生外部修改或无法恢复。请核对知识库文件与库外恢复资料；原 PDF 未被改写。'); }
+      }
+      throw error;
+    }
+  }
   return { refresh, syncKnown, transaction, snapshot, settle: () => pendingRefresh || Promise.resolve(), get insideTransaction() { return insideTransaction; },
     async initialize() {
       const library = readLibrary();
       if (library.token === null) { store.writeLibrary(library.state,null); markEstablished(); }
       await refresh();
     },
-    persistImported(id, pdfSource) {
-      const saved = store.writeDocument({ ...snapshot(id), ...(pdfSource ? { pdfSource } : {}) },null);
-      tokens.set(id,saved.token);
-      if (saved.pdfSource) pdfSources.set(id,{...saved.pdfSource});
-      return saved;
-    },
+    persistImported, commitImported,
     pdfReferences() { return allDocuments().map(doc => ({ id: doc.id,
       path: pdfSources.get(doc.id)?.path || path.relative(store.vaultDir,store.pdfPath(doc.id)).split(path.sep).join('/') })); },
     preserveConflict(id,notes) { return store.writeConflict(id,notes); },

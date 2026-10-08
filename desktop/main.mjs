@@ -80,7 +80,7 @@ async function chooseLibrary(vaultMode = false) {
     await flushNotes();
     const choice = await dialog.showOpenDialog(window, {
       title: vaultMode ? '打开 Obsidian 仓库' : '打开已有文献库', buttonLabel: vaultMode ? '打开仓库' : '打开文献库',
-      message: vaultMode ? '选择已有 Obsidian 仓库的根目录。Paperdesk 使用其中的 Paperdesk 文件夹保存 PDF 和 Markdown。' : '选择包含 paperdesk.sqlite 和 pdfs 的完整文献库。请先正常停止原阅读服务。',
+      message: vaultMode ? '选择已有 Obsidian 仓库的根目录。已有 PDF 原位打开；导入的 PDF、笔记和批注保存在其中的 Paperdesk 文件夹。' : '选择包含 paperdesk.sqlite 和 pdfs 的完整文献库。请先正常停止原阅读服务。',
       properties: ['openDirectory'],
     });
     if (choice.canceled || !choice.filePaths[0]) return;

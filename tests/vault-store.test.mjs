@@ -381,3 +381,41 @@ test('legacy UUID PDF remnants still prevent blank initialization after metadata
   assert.throws(()=>reopened.readLibrary(),error=>error.status===409&&/Library\.md/.test(error.message));
   assert.equal(sha256(readFileSync(store.pdfPath(payload.document.id))),payload.document.sha256);
 });
+
+test('managed imports copy across volumes without rename, create the folder only when needed and never overwrite a collision',t=>{
+  const{store,base}=setup(t);rmSync(store.pdfDir,{recursive:true});
+  const incoming=path.join(base,'incoming.upload'),id=randomUUID();writeFileSync(incoming,sample);
+  const original=fs.statSync(incoming);
+  const hook=t.mock.method(fs,'renameSync',()=>{throw Object.assign(new Error('different volume'),{code:'EXDEV'});});syncBuiltinESMExports();
+  let receipt;
+  try{receipt=store.importPdf(id,incoming,sha256(sample),sample.length);}
+  finally{hook.mock.restore();syncBuiltinESMExports();}
+  assert.equal(receipt.documentId,id);assert.equal(sha256(readFileSync(receipt.pdfPath)),sha256(sample));
+  assert.equal(fs.statSync(incoming).ino,original.ino);assert.equal(fs.statSync(incoming).mtimeMs,original.mtimeMs);assert.deepEqual(readFileSync(incoming),sample);
+  assert.throws(()=>store.importPdf(id,incoming,sha256(sample),sample.length),error=>error.status===409&&error.code==='VAULT_FILE_CONFLICT');
+  assert.deepEqual(readdirSync(store.pdfDir),[`${id}.pdf`]);assert.deepEqual(readFileSync(receipt.pdfPath),sample);
+  store.discardImportedPdf(receipt);assert.deepEqual(readdirSync(store.pdfDir),[]);
+  const backup=readdirSync(path.join(base,'recovery'));assert.equal(backup.length,1);assert.equal(sha256(readFileSync(path.join(base,'recovery',backup[0]))),sha256(sample));
+  assert.throws(()=>store.discardImportedPdf(receipt),status409);assert.deepEqual(readFileSync(incoming),sample);
+});
+
+test('import rollback refuses externally replaced PDFs and edited Markdown and retains their full bytes',t=>{
+  const{store,base,payload}=setup(t),incoming=path.join(base,'incoming.upload');writeFileSync(incoming,sample);
+  const receipt=store.importPdf(randomUUID(),incoming,sha256(sample),sample.length);
+  const changed=Buffer.concat([sample,Buffer.from('\n% external replacement\n')]);unlinkSync(receipt.pdfPath);writeFileSync(receipt.pdfPath,changed);
+  assert.throws(()=>store.discardImportedPdf(receipt),error=>error.status===409&&error.code==='VAULT_FILE_CONFLICT');assert.deepEqual(readFileSync(receipt.pdfPath),changed);
+  const record=store.writeDocument(payload,null),external=readFileSync(record.notePath,'utf8').replace('# 阅读笔记','# Obsidian 外部编辑');writeFileSync(record.notePath,external);
+  assert.throws(()=>store.discardNewDocument(record),error=>error.status===409&&error.code==='VAULT_FILE_CONFLICT');assert.equal(readFileSync(record.notePath,'utf8'),external);
+});
+
+test('managed import paths reject linked folders and inputs and partial failed copies are recovered outside the vault',t=>{
+  const{store,base}=setup(t),incoming=path.join(base,'incoming.upload');writeFileSync(incoming,sample);
+  const linked=path.join(base,'linked.upload');symlinkSync(incoming,linked);
+  assert.throws(()=>store.importPdf(randomUUID(),linked,sha256(sample),sample.length),status409);
+  const target=path.join(base,'outside');mkdirSync(target);rmSync(store.pdfDir,{recursive:true});symlinkSync(target,store.pdfDir);
+  assert.throws(()=>store.importPdf(randomUUID(),incoming,sha256(sample),sample.length),status409);assert.deepEqual(readdirSync(target),[]);
+  unlinkSync(store.pdfDir);
+  assert.throws(()=>store.importPdf(randomUUID(),incoming,sha256('wrong checksum'),sample.length),error=>error.status===409&&error.code==='VAULT_FILE_CONFLICT');
+  assert.deepEqual(readdirSync(store.pdfDir),[]);assert.deepEqual(readFileSync(incoming),sample);
+  const backups=readdirSync(path.join(base,'recovery'));assert.equal(backups.length,1);assert.equal(sha256(readFileSync(path.join(base,'recovery',backups[0]))),sha256(sample));
+});

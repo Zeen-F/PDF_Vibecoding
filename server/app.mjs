@@ -451,15 +451,12 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
       const id = randomUUID(), filename = originalFilename(path.posix.basename(requestedSource.path));
       const title = parsed.title || filename.replace(/\.pdf$/i, '').slice(0, 500) || '未命名文献';
       const now = new Date().toISOString();
-      db.exec('BEGIN IMMEDIATE');
-      try {
+      vaultIndex.commitImported(id,requestedSource, () => {
         db.prepare(`INSERT INTO documents(id,sha256,title,filename,page_count,byte_size,created_at,updated_at,text_available)
           VALUES (?,?,?,?,?,?,?,?,?)`).run(id,source.sha256,title,filename,parsed.pages.length,source.byteSize,now,now,Number(parsed.textAvailable));
         const insertPage = db.prepare('INSERT INTO pages(document_id,page,text) VALUES (?,?,?)');
         parsed.pages.forEach((text,index) => insertPage.run(id,index+1,text));
-        vaultIndex.persistImported(id,requestedSource);
-        db.exec('COMMIT');
-      } catch (error) { db.exec('ROLLBACK'); throw error; }
+      });
       return { document: serializeDocument(findDocument.get(id)), duplicate: false };
     });
     res.status(result.duplicate ? 200 : 201).json(result);
@@ -479,10 +476,7 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   app.get('/api/documents', (_req, res) => {
     res.json({ documents: db.prepare('SELECT * FROM documents ORDER BY updated_at DESC, id').all().map(serializeDocument) });
   });
-  app.post('/api/documents', (_req, _res, next) => {
-    if (vaultStore) return next(new HttpError(400, '请先把 PDF 放在 Obsidian 知识库中，再选择原文件打开；Paperdesk 不复制 PDF。'));
-    next();
-  }, receiveUpload, async (req, res) => {
+  app.post('/api/documents', receiveUpload, async (req, res) => {
     if (!req.file) throw new HttpError(400, '请选择一个 PDF 文件。');
     const temporaryPath = req.file.path;
     let result;
@@ -494,32 +488,54 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
         if (duplicate) return { document: serializeDocument(duplicate), duplicate: true };
         // One parser per app runtime; large concurrent uploads wait on disk.
         const parsed = await parsePdf(temporaryPath);
+        if (vaultIndex) {
+          await vaultIndex.refresh();
+          const currentDuplicate = findHash.get(sha256);
+          if (currentDuplicate) return { document: serializeDocument(currentDuplicate), duplicate: true };
+        }
         const id = randomUUID();
         const filename = originalFilename(req.file.originalname);
         const title = parsed.title || filename.replace(/\.pdf$/i, '').slice(0, 500) || '未命名文献';
         const now = new Date().toISOString();
-        const pdfPath = vaultStore ? vaultStore.pdfPath(id) : path.join(pdfDir, `${id}.pdf`);
-        let transactionOpen = false;
-        let moved = false;
-        let sourceCommitted = false;
-        try {
-          await rename(temporaryPath, pdfPath);
-          moved = true;
-          // No await between BEGIN and COMMIT: concurrent requests cannot share a transaction.
-          db.exec('BEGIN IMMEDIATE');
-          transactionOpen = true;
+        const insertImported = () => {
           db.prepare(`INSERT INTO documents(id, sha256, title, filename, page_count, byte_size,
             created_at, updated_at, text_available) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
             id, sha256, title, filename, parsed.pages.length, req.file.size, now, now, Number(parsed.textAvailable),
           );
           const insertPage = db.prepare('INSERT INTO pages(document_id, page, text) VALUES (?, ?, ?)');
           parsed.pages.forEach((text, index) => insertPage.run(id, index + 1, text));
-          if (vaultIndex) { vaultIndex.persistImported(id); sourceCommitted = true; }
+        };
+        if (vaultStore) {
+          // Uploads are copied across volumes into an exclusive managed file;
+          // selected version-2 originals never enter this cleanup path.
+          const imported = vaultStore.importPdf(id,temporaryPath,sha256,req.file.size);
+          try { vaultIndex.commitImported(id,undefined,insertImported); }
+          catch (error) {
+            if (!existsSync(vaultStore.notePath(id))) {
+              try { vaultStore.discardImportedPdf(imported); }
+              catch { throw new HttpError(409,'PDF 导入未完成，本次副本无法自动恢复。请核对知识库文件与库外恢复资料；外部原文件未被改写。'); }
+            }
+            const committedDuplicate = findHash.get(sha256);
+            if (committedDuplicate) return { document: serializeDocument(committedDuplicate), duplicate: true };
+            throw error;
+          }
+          return { document: serializeDocument(findDocument.get(id)), duplicate: false };
+        }
+        const pdfPath = path.join(pdfDir, `${id}.pdf`);
+        let transactionOpen = false;
+        let moved = false;
+        try {
+          await rename(temporaryPath, pdfPath);
+          moved = true;
+          // No await between BEGIN and COMMIT: concurrent requests cannot share a transaction.
+          db.exec('BEGIN IMMEDIATE');
+          transactionOpen = true;
+          insertImported();
           db.exec('COMMIT');
           transactionOpen = false;
         } catch (error) {
           if (transactionOpen) db.exec('ROLLBACK');
-          if (moved && !sourceCommitted && !(vaultStore && existsSync(vaultStore.notePath(id)))) await unlink(pdfPath).catch(() => {});
+          if (moved) await unlink(pdfPath).catch(() => {});
           const committedDuplicate = findHash.get(sha256);
           if (committedDuplicate) return { document: serializeDocument(committedDuplicate), duplicate: true };
           throw error;

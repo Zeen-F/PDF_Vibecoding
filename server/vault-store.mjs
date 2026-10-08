@@ -1,7 +1,7 @@
 import {
-  closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync,
+  closeSync, constants, copyFileSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync,
   mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
-  renameSync, unlinkSync, writeFileSync,
+  renameSync, unlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -275,6 +275,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
     let libraryEstablished = existsSync(libraryPath) || readdirSync(notesDir).some(name => name.endsWith('.md'))
       || (existsSync(pdfDir) && readdirSync(pdfDir).some(name => UUID.test(name.slice(0,-4)) && name.endsWith('.pdf')));
     const pdfCache = new Map();
+    const importedFiles = new WeakMap();
     const pdfPath = id => { uuid(id); const target = path.join(pdfDir, `${id}.pdf`); checkedPath(canonical, target, { missing: true }); return target; };
     const notePath = id => { uuid(id); const target = path.join(notesDir, `${id}.md`); checkedPath(canonical, target, { missing: true }); return target; };
     function openFile(file) {
@@ -359,6 +360,104 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         } finally { closeSync(fd); }
       });
     }
+    function preserveCreatedFile(file) {
+      mkdirSync(recoveryRoot, { recursive: true, mode: 0o700 });
+      if (lstatSync(recoveryRoot).isSymbolicLink() || !lstatSync(recoveryRoot).isDirectory()
+        || inside(canonical, realpathSync(recoveryRoot))) invalid('恢复目录必须是知识库之外的真实文件夹。');
+      const originalName = path.basename(file).replace(/^\./, '').replace(/\.[0-9a-f-]+\.rollback$/, '');
+      const backup = path.join(recoveryRoot, `import-${randomUUID()}-${originalName}`);
+      try { linkSync(file, backup); }
+      catch (error) {
+        // A selected vault can be on a different volume from the local cache.
+        if (error.code !== 'EXDEV') throw error;
+        copyFileSync(file, backup, constants.COPYFILE_EXCL);
+      }
+      return backup;
+    }
+    function removeCreatedFile(file, matches) {
+      checkedPath(canonical, file);
+      if (!matches(file)) fileConflict('导入文件已被外部修改，自动恢复已停止；请核对原文件和库外恢复资料。');
+      // Move into the same directory before checking again: if another editor
+      // replaces the pathname during cleanup, its bytes are restored, not deleted.
+      const quarantine = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.rollback`);
+      checkedPath(canonical, quarantine, { missing: true });
+      renameSync(file, quarantine);
+      try {
+        if (!matches(quarantine)) fileConflict('导入文件在恢复期间被外部修改，请保留原文件并重新核对。');
+        preserveCreatedFile(quarantine);
+        if (!matches(quarantine)) fileConflict('导入文件在恢复期间被外部修改，已保留库外恢复资料。');
+        unlinkSync(quarantine);
+      } catch (error) {
+        // Exclusive restoration never replaces a newly created external file.
+        try { linkSync(quarantine, file); unlinkSync(quarantine); } catch { /* Keep the quarantined original if restoration is blocked. */ }
+        throw error;
+      }
+    }
+    function importPdf(id, temporaryPath, expectedSha256, expectedByteSize) {
+      return guard(() => {
+        uuid(id); hash(expectedSha256, '上传 PDF 校验和'); integer(expectedByteSize, 1, Number.MAX_SAFE_INTEGER, '上传 PDF 大小');
+        const source = lstatSync(temporaryPath);
+        if (!source.isFile() || source.isSymbolicLink() || inside(canonical, realpathSync(temporaryPath))) invalid('上传临时 PDF 必须是知识库之外的真实文件。');
+        if (checkedPath(canonical, notePath(id), { missing: true })) fileConflict('知识库已有同名笔记，导入未覆盖它，请重新导入。');
+        ensureDirectory(pdfDir);
+        const file = pdfPath(id);
+        let input, output, owned;
+        try {
+          input = openSync(temporaryPath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+          const before = fstatSync(input);
+          if (before.dev !== source.dev || before.ino !== source.ino || signature(before) !== signature(source)) fileConflict('上传临时 PDF 已被替换，请重新导入。');
+          try { output = openSync(file, 'wx', 0o600); }
+          catch (error) { if (error.code === 'EEXIST') fileConflict('知识库已有同名 PDF，导入未覆盖它，请重新导入。'); throw error; }
+          owned = fstatSync(output);
+          const buffer = Buffer.alloc(64 * 1024), hasher = createHash('sha256');
+          let count, byteSize = 0;
+          while ((count = readSync(input, buffer, 0, buffer.length, null))) {
+            if (!byteSize && (count < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-')) invalid('上传文献不是有效的 PDF 文件。');
+            hasher.update(buffer.subarray(0, count)); byteSize += count;
+            let offset = 0;
+            while (offset < count) offset += writeSync(output, buffer, offset, count - offset);
+          }
+          fsyncSync(output);
+          const actualSha256 = hasher.digest('hex'), current = checkedPath(canonical, file), sourceAfter = lstatSync(temporaryPath);
+          if (signature(fstatSync(input)) !== signature(before) || actualSha256 !== expectedSha256 || byteSize !== expectedByteSize
+            || signature(sourceAfter) !== signature(before) || sourceAfter.isSymbolicLink()
+            || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== byteSize) fileConflict('PDF 在导入复制期间发生变化，本次导入已停止。');
+          const copied = inspectPdf(file);
+          if (copied.sha256 !== actualSha256 || copied.byteSize !== byteSize) fileConflict('PDF 导入副本未通过读回检查，本次导入已停止。');
+          const receipt = Object.freeze({ documentId: id, pdfPath: file, sha256: actualSha256, byteSize });
+          importedFiles.set(receipt, { dev: owned.dev, ino: owned.ino });
+          return receipt;
+        } catch (error) {
+          if (output !== undefined) { closeSync(output); output = undefined; }
+          if (owned) removeCreatedFile(file, candidate => {
+            const stat = checkedPath(canonical, candidate); return stat.dev === owned.dev && stat.ino === owned.ino;
+          });
+          throw error;
+        } finally {
+          if (input !== undefined) closeSync(input);
+          if (output !== undefined) closeSync(output);
+        }
+      });
+    }
+    function discardImportedPdf(receipt) {
+      return guard(() => {
+        const owned = importedFiles.get(receipt);
+        if (!owned) invalid('没有可恢复的本次导入副本，未删除任何 PDF。');
+        removeCreatedFile(pdfPath(receipt.documentId), file => {
+          const stat = checkedPath(canonical, file);
+          if (stat.dev !== owned.dev || stat.ino !== owned.ino) return false;
+          const inspected = inspectPdf(file);
+          return inspected.sha256 === receipt.sha256 && inspected.byteSize === receipt.byteSize;
+        });
+        importedFiles.delete(receipt); pdfCache.delete(receipt.pdfPath);
+      });
+    }
+    function discardNewDocument(record) {
+      return guard(() => {
+        uuid(record?.document?.id); hash(record.token, '新笔记版本');
+        removeCreatedFile(notePath(record.document.id), file => markdown(file).token === record.token);
+      });
+    }
     function recoveryLink(file) {
       // Hardlinks keep the replaced inode: an editor holding an open descriptor
       // can still finish its write without destroying the recovery copy.
@@ -428,8 +527,12 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         // There is only one editable note. State carries metadata, not a stale
         // second copy of its body that could override an Obsidian edit.
         const persisted = { ...state, document: { ...normalized, notes_zh: '', notes_en: '' } };
-        replaceMarkdown(file, properties + notes + generatedMarkdown(persisted, noteRelativeDir), expectedToken);
-        return readDocument(id);
+        const token = replaceMarkdown(file, properties + notes + generatedMarkdown(persisted, noteRelativeDir), expectedToken);
+        try { return readDocument(id); }
+        catch (error) {
+          if (expectedToken === null) discardNewDocument({ document: { id }, token });
+          throw error;
+        }
       });
     }
     function readAll() {
@@ -485,7 +588,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       });
     }
     return { vaultDir: canonical, rootDir, pdfDir, notePath, pdfPath, readAll, readDocument, readPdfSnapshot,
-      writeDocument, writeConflict, readLibrary, writeLibrary,
+      writeDocument, writeConflict, readLibrary, writeLibrary, importPdf, discardImportedPdf, discardNewDocument,
       inspectPdfSource: source => guard(() => ({ ...inspectPdf(sourcePath(source)), pdfSource: { ...source } })),
       rollbackDocument: (previousRecord, expectedToken) => writeDocument(previousRecord, expectedToken) };
   });

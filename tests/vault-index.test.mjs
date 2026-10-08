@@ -118,3 +118,37 @@ test('source references survive projection, snapshots, normal saves and transact
   assert.equal(hash(await readFile(saved.pdfPath)),record.document.sha256);
   await assert.rejects(readdir(h.store.pdfDir),{code:'ENOENT'},'V2 saves cannot create a legacy copy directory');
 });
+
+test('an SQL commit failure removes only the newly created managed note and rolls back its projection, preserving recovery bytes',async t=>{
+  const h=await fixture(t),index=h.indexFor();await index.initialize();
+  const id=randomUUID(),now=new Date().toISOString(),incoming=path.join(h.root,'incoming.upload');await writeFile(incoming,sample);
+  const receipt=h.store.importPdf(id,incoming,hash(sample),sample.length);
+  const insert=()=>h.db.prepare(`INSERT INTO documents(id,sha256,title,filename,page_count,byte_size,created_at,updated_at,text_available)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(id,hash(sample),'Test','import.pdf',2,sample.length,now,now,1);
+  const originalExec=h.db.exec.bind(h.db);let attemptedCommit=false;
+  const hook=t.mock.method(h.db,'exec',sql=>{if(sql==='COMMIT'){attemptedCommit=true;throw new Error('isolated commit failure');}return originalExec(sql);});
+  try{assert.throws(()=>index.commitImported(id,undefined,insert),/isolated commit failure/);}
+  finally{hook.mock.restore();}
+  assert.equal(attemptedCommit,true,'The test must reach the commit after writing the note');
+  assert.equal(h.db.prepare('SELECT COUNT(*) AS count FROM documents').get().count,0);assert.deepEqual(index.pdfReferences(),[]);
+  await assert.rejects(readFile(h.store.notePath(id)),{code:'ENOENT'});
+  h.store.discardImportedPdf(receipt);assert.deepEqual(await readdir(h.store.pdfDir),[]);
+  const originals=path.join(h.dataDir,'recoveries','originals'),backups=await readdir(originals);
+  assert.equal(backups.filter(name=>name.endsWith('.md')).length,1);assert.equal(backups.filter(name=>name.endsWith('.pdf')).length,1);
+  assert.match(await readFile(path.join(originals,backups.find(name=>name.endsWith('.md'))),'utf8'),/paperdesk_format: 1/);
+  assert.equal(hash(await readFile(path.join(originals,backups.find(name=>name.endsWith('.pdf'))))),hash(sample));
+  await index.refresh();assert.deepEqual(index.pdfReferences(),[]);
+});
+
+test('a failed original-source association rolls back its new Markdown while leaving the version 2 PDF in place',async t=>{
+  const h=await fixture(t),index=h.indexFor();await index.initialize();
+  const id=randomUUID(),now=new Date().toISOString(),relative='nested/原始 PDF.pdf',source=path.join(h.vaultDir,'nested','原始 PDF.pdf');await mkdir(path.dirname(source));await writeFile(source,sample);
+  const originalExec=h.db.exec.bind(h.db);let saved=false;
+  const hook=t.mock.method(h.db,'exec',sql=>{if(sql==='COMMIT'){saved=true;throw new Error('isolated selected commit failure');}return originalExec(sql);});
+  try{assert.throws(()=>index.commitImported(id,{kind:'vault',path:relative},()=>h.db.prepare(`INSERT INTO documents(id,sha256,title,filename,page_count,byte_size,created_at,updated_at,text_available)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(id,hash(sample),'Original','original.pdf',2,sample.length,now,now,1)),/isolated selected commit failure/);}
+  finally{hook.mock.restore();}
+  assert.equal(saved,true);assert.equal(hash(await readFile(source)),hash(sample));await assert.rejects(readFile(h.store.notePath(id)),{code:'ENOENT'});
+  assert.deepEqual(index.pdfReferences(),[]);await assert.rejects(readdir(h.store.pdfDir),{code:'ENOENT'});
+  await index.refresh();assert.equal(h.db.prepare('SELECT COUNT(*) AS count FROM documents').get().count,0);
+});
