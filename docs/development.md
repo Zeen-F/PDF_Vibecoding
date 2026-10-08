@@ -36,6 +36,8 @@ Mac 启动器会在缺少依赖或构建产物时准备运行；已有 `dist/` �
 
 ## 检查
 
+当前 alpha.5 开发分支增加个人页面书签。API 回归覆盖旧库一致性备份与 schema 5 迁移、CRUD/CAS 和正式 Markdown 重建；浏览器回归覆盖两种存储模式的添加、命名、跳转、草稿保护及迟到响应。`node scripts/test-vault-desktop.mjs` 另外检查真实 Electron 的书签保存、正常退出和重开跳转；打包后追加 `--packaged <Paperdesk.app路径>`。所有资料均使用隔离临时库，证据位于忽略的 `.local/`。
+
 macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run desktop:dist` 生成，`npm run test:desktop` 检查独立窗口；打包后运行 `npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app` 再验收。所有桌面测试使用临时用户设置和文献库。构建与发布顺序见 [桌面预览版](desktop-release.md)。
 
 四项可靠性修复另用 `npm run test:desktop:reliability` 验证真实 Electron 的评论草稿、响应丢失重试、阅读位置保存及关闭／退出保护。每轮指定新的 `PAPERDESK_ACCEPTANCE_DIR`（例如 `.local/beta5-verification/source-run-1`）；已有测试库和证据会被保留并拒绝复用。安装包使用同一命令追加 `-- --packaged <Paperdesk.app路径>`，同时指定另一证据目录。这项测试会在隔离库注入保存故障和受控异常退出，保留结果与截图；异常退出前已刷新浏览器存储，不能据此声称断电恢复。主动测试刷新只批准当次页面卸载，原生关闭和退出仍使用产品实际保存确认流程。

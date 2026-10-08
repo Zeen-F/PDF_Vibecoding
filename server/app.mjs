@@ -12,6 +12,7 @@ import { mergeNotes, MAX_NOTE_LENGTH } from '../shared/notes.mjs';
 import { notesRevision, revisionValue, registerPluginApi } from './plugin-api.mjs';
 import { createReaderRenderer, readerPageQuery, readerPageText, ReaderRenderError } from './reader-render.mjs';
 import { migrateLibrary, registerLibraryApi } from './library.mjs';
+import { backupBeforeMigration, migrateBookmarks, registerBookmarksApi, validateEstablishedSchema } from './bookmarks.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { registerTranslationApi } from './translation.mjs';
 import { getVaultConfig } from './vault-config.mjs';
@@ -251,7 +252,10 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   let migrating = false;
   try {
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-    if (db.prepare('PRAGMA user_version').get().user_version > CURRENT_SCHEMA) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
+    const previousSchema = db.prepare('PRAGMA user_version').get().user_version;
+    if (previousSchema > CURRENT_SCHEMA) throw new Error('文献库来自更新版本的 Paperdesk，请使用相应版本打开；未降级数据库。');
+    validateEstablishedSchema(db,previousSchema);
+    backupBeforeMigration(db,dataDir,previousSchema,CURRENT_SCHEMA);
     db.exec('PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;');
     migrating = true;
     // Recheck under the write lock in case another process migrated first.
@@ -295,6 +299,7 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
       );
       CREATE INDEX IF NOT EXISTS reading_position_writers_expiry ON reading_position_writers(updated_at);
     `);
+    migrateBookmarks(db);
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA}; COMMIT;`);
     migrating = false;
   } catch (error) {
@@ -422,6 +427,7 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     HttpError, objectBody, stringValue, pageValue, rectanglesValue,
   });
   registerLibraryApi({ app, db, documentOr404, serializeDocument, transaction, HttpError, objectBody });
+  registerBookmarksApi({ app, db, documentOr404, transaction, HttpError, objectBody, uuidValue, pageValue });
   const translationApi = registerTranslationApi({ app, dataDir, HttpError, options: translationOptions });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -767,6 +773,8 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
       }
       parts.push(annotation.comment ? `评论：\n\n${markdownText(annotation.comment)}` : '（无评论）');
     });
+    const bookmarks = db.prepare('SELECT page,title FROM bookmarks WHERE document_id = ? ORDER BY page,id').all(doc.id);
+    if (bookmarks.length) parts.push('## 页面书签', ...bookmarks.map(bookmark => `- PDF 第 ${bookmark.page} 页 · ${markdownText(bookmark.title)}`));
     const safeTitle = doc.title.replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, '_').slice(0, 100) || 'paper';
     const downloadName = encodeURIComponent(`${safeTitle}.md`).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
     res.setHeader('Content-Disposition', `attachment; filename="paperdesk-${doc.id}.md"; filename*=UTF-8''${downloadName}`);

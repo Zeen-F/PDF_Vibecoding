@@ -194,13 +194,14 @@ export async function validateExistingLibrary(rawDataDir) {
     const schemaVersion = database.prepare('PRAGMA user_version').get().user_version;
     if (schemaVersion > CURRENT_SCHEMA) throw new Error('文献库来自更新版本的纸间，请使用相应版本打开。');
     for (const [table, columns] of Object.entries(CORE_COLUMNS)) requireColumns(database, table, columns);
-    if (schemaVersion < CURRENT_SCHEMA) throw new Error('这个文献库使用旧版结构。请先完整备份，再使用对应的源码或浏览器版本升级文献库后，重新选择此目录。');
+    if (schemaVersion < 4) throw new Error('这个文献库使用旧版结构。请先完整备份，再使用对应的源码或浏览器版本升级文献库后，重新选择此目录。');
     if (schemaVersion >= 2) requireColumns(database, 'annotations', ['kind']);
     if (schemaVersion >= 3) {
       requireColumns(database, 'documents', ['folder_id']);
       requireColumns(database, 'folders', ['id', 'name', 'name_key', 'created_at', 'updated_at']);
       requireColumns(database, 'library_preferences', ['id', 'theme']);
     }
+    if (schemaVersion >= 5) requireColumns(database, 'bookmarks', ['id', 'document_id', 'page', 'title', 'created_at', 'updated_at']);
     if (database.prepare('PRAGMA quick_check').all().some(row => row.quick_check !== 'ok')
       || database.prepare('PRAGMA foreign_key_check').all().length) {
       throw new Error('文献库数据库检查未通过，请从完整备份恢复后再打开。');
@@ -222,9 +223,23 @@ export async function validateExistingLibrary(rawDataDir) {
       byteSize += pdf.size;
       pageCounts.set(document.id, document.page_count);
     }
-    for (const row of database.prepare('SELECT document_id, page FROM pages UNION ALL SELECT document_id, page FROM annotations').iterate()) {
+    const pageRecords = 'SELECT document_id, page FROM pages UNION ALL SELECT document_id, page FROM annotations'
+      + (schemaVersion >= 5 ? ' UNION ALL SELECT document_id, page FROM bookmarks' : '');
+    for (const row of database.prepare(pageRecords).iterate()) {
       if (!Number.isInteger(row.page) || row.page < 1 || row.page > (pageCounts.get(row.document_id) ?? 0)) {
-        throw new Error('文献库包含无效的页面或批注记录，请检查完整备份。');
+        throw new Error('文献库包含无效的页面、批注或书签记录，请检查完整备份。');
+      }
+    }
+    if (schemaVersion >= 5) {
+      const bookmarkedPages = new Set();
+      for (const bookmark of database.prepare('SELECT id, document_id, page, title FROM bookmarks').iterate()) {
+        const key = `${bookmark.document_id}:${bookmark.page}`;
+        if (!UUID.test(bookmark.id) || typeof bookmark.title !== 'string' || !bookmark.title
+          || bookmark.title !== bookmark.title.trim() || bookmark.title.length > 200
+          || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(bookmark.title) || bookmarkedPages.has(key)) {
+          throw new Error('文献库包含无效的书签记录，请检查完整备份。');
+        }
+        bookmarkedPages.add(key);
       }
     }
     return { dataDir, libraryId: libraryIdentity(dataDir), schemaVersion, documentCount: documents.length, byteSize };

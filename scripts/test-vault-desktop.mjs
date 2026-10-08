@@ -18,7 +18,7 @@ const executablePath = appBundle ? path.join(appBundle, 'Contents/MacOS/Paperdes
   : process.env.ELECTRON_EXECUTABLE_PATH || createRequire(import.meta.url)('electron');
 await access(executablePath);
 await access(path.join(root, 'dist/index.html'));
-const artifacts = path.join(root, '.local/verification/obsidian-sidebar');
+const artifacts = path.join(root, '.local/verification/bookmarks');
 await mkdir(artifacts, { recursive: true });
 const temporary = await mkdtemp(path.join(tmpdir(), 'paperdesk-vault-desktop-'));
 const userData = path.join(temporary, 'profile'), vaultDir = path.join(temporary, '测试知识库'), cacheHome = path.join(temporary, 'fixture-home');
@@ -120,6 +120,46 @@ async function annotateVaultPdf(document) {
   await page.locator('.panel-tabs').getByRole('button', { name: '笔记', exact: true }).click();
   return annotations[0];
 }
+async function bookmarkSecondPage(document) {
+  const number = page.getByRole('spinbutton', { name: '页码', exact: true });
+  await number.fill('2'); await number.press('Enter');
+  await expect(number).toHaveValue('2');
+  await expect(page.getByLabel('PDF 第 2 页', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '展开书签', exact: true }).click();
+  const panel = page.getByRole('region', { name: '个人书签', exact: true });
+  const endpoint = `${baseUrl}/api/documents/${document.id}/bookmarks`;
+  const created = page.waitForResponse(response => response.url() === endpoint && response.request().method() === 'POST');
+  await panel.getByRole('button', { name: '添加当前页书签', exact: true }).click();
+  const response = await created; assert.equal(response.status(), 201);
+  const bookmark = (await response.json()).bookmark;
+  await panel.getByRole('button', { name: '重命名书签：第 2 页，PDF 第 2 页', exact: true }).click();
+  const title = '回访第二页';
+  await panel.getByRole('textbox', { name: '书签名称，PDF 第 2 页', exact: true }).fill(title);
+  const messagesBefore = await application.evaluate(() => globalThis.vaultDesktopMessages.length);
+  await application.evaluate(({ app }) => app.quit());
+  await expect.poll(() => application.evaluate(() => globalThis.vaultDesktopMessages.length)).toBe(messagesBefore + 1);
+  const preventedQuit = await application.evaluate(() => globalThis.vaultDesktopMessages.pop());
+  assert.match(preventedQuit.detail, /书签/);
+  await expect(panel.getByRole('textbox', { name: '书签名称，PDF 第 2 页', exact: true })).toHaveValue(title);
+  summary.bookmarkQuitGuard = { message: preventedQuit.message, detail: preventedQuit.detail };
+  await record('native quit refuses an unsaved bookmark name and preserves its input until explicitly saved');
+  const renamed = page.waitForResponse(response => response.url() === `${endpoint}/${bookmark.id}` && response.request().method() === 'PATCH');
+  await panel.getByRole('button', { name: '保存书签名称', exact: true }).click();
+  const renameResponse = await renamed; assert.equal(renameResponse.status(), 200);
+  const saved = (await renameResponse.json()).bookmark;
+  await expect(panel.getByRole('button', { name: `书签：${title}，PDF 第 2 页`, exact: true })).toBeVisible();
+  await number.fill('1'); await number.press('Enter');
+  await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: `书签：${title}，PDF 第 2 页`, exact: true }).click();
+  await expect(number).toHaveValue('2');
+  await expect(page.getByLabel('PDF 第 2 页', { exact: true })).toBeVisible();
+  await page.screenshot({ path: path.join(artifacts, `${label}-bookmarks.png`) });
+  await number.fill('1'); await number.press('Enter');
+  await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+  const close = page.getByRole('button', { name: '收起书签', exact: true });
+  if (await close.isVisible()) await close.click();
+  return saved;
+}
 async function quit() {
   const current = application, stoppedUrl = baseUrl;
   const closed = current.waitForEvent('close', { timeout: 30_000 });
@@ -180,7 +220,7 @@ try {
   assert.equal(hash(await readFile(sourcePdf)), hash(original));
   assert.deepEqual(await managedPdfCopies(), [], 'Selecting a vault PDF must not create a PDF copy');
   const source = JSON.parse((await readFile(notePath, 'utf8')).match(/<!-- paperdesk-state:v1\n([^\n]*)\n-->/)[1]);
-  assert.equal(source.version, 2);
+  assert.equal(source.version, 3);
   assert.deepEqual(source.pdfSource, { kind: 'vault', path: sourceRelative });
   assert.equal(source.annotations[0].id, annotation.id);
   assert.equal((await request(`/documents/${document.id}`)).document.notesZh, notes);
@@ -191,13 +231,22 @@ try {
   assert.equal(hash(await readFile(path.join(canonicalVault, 'Paperdesk', 'PDFs', `${imported.id}.pdf`))), hash(externalBytes));
   assert.deepEqual(await managedPdfCopies(), [`${imported.id}.pdf`]);
   const importedState = JSON.parse((await readFile(path.join(canonicalVault, 'Paperdesk', 'Notes', `${imported.id}.md`), 'utf8')).match(/<!-- paperdesk-state:v1\n([^\n]*)\n-->/)[1]);
-  assert.equal(importedState.version, 1);
+  assert.equal(importedState.version, 3);
   assert.equal((await importPdf(externalPdf, 200)).id, imported.id);
   assert.deepEqual(await managedPdfCopies(), [`${imported.id}.pdf`]);
   assert.equal((await request('/documents')).documents.length, 2);
   await page.locator(`[data-document-id="${document.id}"] .document-item`).click();
   await expect(editor).toHaveValue(notes);
   await record('vault upload saves an external PDF copy inside Obsidian, preserves the external original and deduplicates repeat imports');
+
+  const bookmark = await bookmarkSecondPage(document);
+  assert.deepEqual((await request(`/documents/${document.id}/bookmarks`)).bookmarks, [bookmark]);
+  const bookmarkedState = JSON.parse((await readFile(notePath, 'utf8')).match(/<!-- paperdesk-state:v1\n([^\n]*)\n-->/)[1]);
+  assert.equal(bookmarkedState.bookmarks[0].id, bookmark.id);
+  assert.equal(bookmarkedState.bookmarks[0].page, 2);
+  assert.match(await readFile(notePath, 'utf8'), /回访第二页/);
+  assert.equal(hash(await readFile(sourcePdf)), hash(original));
+  await record('native personal bookmarks add, rename and jump to the actual PDF page, persist in Markdown and preserve the original PDF');
 
   await page.getByRole('button', { name: '资料位置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '资料位置', exact: true });
@@ -238,7 +287,19 @@ try {
   assert.deepEqual(await application.evaluate(() => globalThis.vaultDesktopMessages), []);
   await page.screenshot({ path: path.join(artifacts, `${label}-reader-restarted.png`) });
   await quit();
-  await record('native quit flush and relaunch remember the selected vault and restore its PDF and notes');
+  await launch();
+  await page.getByRole('button', { name: '展开书签', exact: true }).click();
+  const reopenedBookmarks = page.getByRole('region', { name: '个人书签', exact: true });
+  await reopenedBookmarks.getByRole('button', { name: `书签：${bookmark.title}，PDF 第 2 页`, exact: true }).click();
+  await expect(page.getByRole('spinbutton', { name: '页码', exact: true })).toHaveValue('2');
+  await expect(page.getByLabel('PDF 第 2 页', { exact: true })).toBeVisible();
+  assert.deepEqual((await request(`/documents/${document.id}/bookmarks`)).bookmarks, [bookmark]);
+  assert.equal((await request(`/documents/${document.id}`)).document.notesZh, finalNotes);
+  assert.deepEqual((await request(`/documents/${document.id}`)).annotations, [annotation]);
+  assert.equal(hash(await readFile(sourcePdf)), hash(original));
+  await page.screenshot({ path: path.join(artifacts, `${label}-bookmarks-restarted.png`) });
+  await quit();
+  await record('native quit flush and relaunch restore personal bookmarks and their page jumps, together with the PDF, notes and annotations');
   assert.deepEqual(rendererErrors, []);
   summary.status = 'passed';
   console.log(`PASS: ${label} Electron Obsidian vault acceptance complete`);

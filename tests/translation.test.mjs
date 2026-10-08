@@ -272,16 +272,20 @@ test('cache is bounded to 200 entries and translation cannot change notes, schem
   const imported = await fetch(lib.base + '/api/documents', { method: 'POST', body: form }); assert.equal(imported.status, 201);
   const doc = (await imported.json()).document;
   await lib.json('/api/documents/' + doc.id, 'PATCH', { notesZh: '原笔记 **保留**', notesEn: 'Original note', lastPage: 2, expectedNotesRevision: doc.notesRevision });
+  const savedBookmark = await lib.request(`/api/documents/${doc.id}/bookmarks`, 'POST', { page: 2, title: '翻译不修改的个人书签' });
+  assert.equal(savedBookmark.status, 201);
+  const bookmarksBefore = { bookmarks: [(await savedBookmark.json()).bookmark] };
   const before = await lib.json('/api/documents/' + doc.id);
   for (let i = 0; i < 201; i++) await lib.translate('entry-' + i);
   assert.equal(readSidecar(lib, db => db.prepare('SELECT COUNT(*) AS n FROM cache').get().n), 200);
   await lib.json('/api/translation/test', 'POST', { provider: 'baidu' });
   assert.deepEqual(await lib.json('/api/documents/' + doc.id), before);
+  assert.deepEqual(await lib.json(`/api/documents/${doc.id}/bookmarks`), bookmarksBefore);
   assert.deepEqual(await readFile(path.join(lib.dataDir, 'pdfs', doc.id + '.pdf')), sample);
   const primary = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
   try {
     assert.equal(primary.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA);
-    assert.deepEqual(primary.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
+    assert.deepEqual(primary.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'bookmarks', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
   } finally { primary.close(); }
 });
 

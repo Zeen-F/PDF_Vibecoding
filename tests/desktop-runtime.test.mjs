@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { once } from 'node:events';
@@ -10,6 +10,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
 import { createApp } from '../server/app.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { LAUNCHER_PROTOCOL, PRODUCT_VERSION, SERVICE_API_VERSION } from '../shared/service-identity.mjs';
@@ -245,6 +246,60 @@ test('existing-library inspection checks original PDFs and leaves a stopped WAL-
   assert.deepEqual(await readFile(join(dataDir, 'pdfs', document.id + '.pdf')), sample);
 });
 
+test('desktop accepts schema 4 without changing files and backs it up before migrating to schema 5', async t => {
+  const dataDir = await temporaryDirectory(t);
+  let runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
+  t.after(() => runtime.close());
+  const document = await importSample(runtime.baseUrl);
+  const saved = await json(runtime.baseUrl, `/api/documents/${document.id}`, {
+    method: 'PATCH', body: { notesZh: '旧库升级后保留的笔记 Ω', notesEn: '', lastPage: 2, expectedNotesRevision: document.notesRevision },
+  });
+  const { annotation } = await json(runtime.baseUrl, `/api/documents/${document.id}/annotations`, {
+    method: 'POST', body: { page: 2, quote: 'phase margin', comment: '旧库批注', color: 'green', rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }] },
+  });
+  await runtime.close();
+  const previous = new DatabaseSync(join(dataDir, 'paperdesk.sqlite'));
+  previous.exec('DROP TABLE IF EXISTS bookmarks; PRAGMA user_version = 4;');
+  previous.close();
+  const before = await snapshot(dataDir);
+  assert.equal((await validateExistingLibrary(dataDir)).schemaVersion, 4);
+  assert.deepEqual(await snapshot(dataDir), before, 'selecting a schema 4 library must only inspect it');
+
+  runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
+  const restored = await json(runtime.baseUrl, `/api/documents/${document.id}`);
+  assert.equal(restored.document.notesZh, saved.document.notesZh);
+  assert.equal(restored.document.lastPage, 2);
+  assert.equal(restored.annotations[0].id, annotation.id);
+  assert.deepEqual(await readFile(join(dataDir, 'pdfs', document.id + '.pdf')), sample);
+  await runtime.close();
+  const migrated = new DatabaseSync(join(dataDir, 'paperdesk.sqlite'), { readOnly: true });
+  try {
+    assert.equal(migrated.prepare('PRAGMA user_version').get().user_version, 5);
+    assert.deepEqual(migrated.prepare('PRAGMA table_info(bookmarks)').all().map(column => column.name),
+      ['id', 'document_id', 'page', 'title', 'created_at', 'updated_at']);
+    assert.equal(migrated.prepare('SELECT count(*) AS count FROM bookmarks').get().count, 0);
+  } finally { migrated.close(); }
+  const backupDir = join(dataDir, 'recoveries', 'migrations');
+  const backups = [];
+  for (const relative of await readdir(backupDir, { recursive: true })) {
+    const filename = join(backupDir, relative);
+    if ((await lstat(filename)).isFile() && (await readFile(filename)).subarray(0, 16).toString() === 'SQLite format 3\0') backups.push(filename);
+  }
+  assert.equal(backups.length, 1, 'schema 4 migration retains one SQLite backup');
+  const backupUri = pathToFileURL(backups[0]);
+  backupUri.searchParams.set('mode', 'ro');
+  backupUri.searchParams.set('immutable', '1');
+  const backup = new DatabaseSync(backupUri.href, { readOnly: true });
+  try {
+    assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 4);
+    assert.equal(backup.prepare("SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'bookmarks'").get().count, 0);
+    assert.equal(backup.prepare('SELECT notes_zh FROM documents WHERE id = ?').get(document.id).notes_zh, saved.document.notesZh);
+    assert.equal(backup.prepare('SELECT comment FROM annotations WHERE id = ?').get(annotation.id).comment, '旧库批注');
+    assert.equal(backup.prepare('PRAGMA quick_check').get().quick_check, 'ok');
+  } finally { backup.close(); }
+  assert.equal((await validateExistingLibrary(dataDir)).schemaVersion, 5);
+});
+
 test('existing-library inspection rejects empty, unrelated, older, future and incomplete libraries without changing files', async t => {
   const directory = await temporaryDirectory(t);
   const source = join(directory, 'source');
@@ -260,7 +315,7 @@ test('existing-library inspection rejects empty, unrelated, older, future and in
     ['unrelated', async folder => { await mkdir(folder); const db = new DatabaseSync(join(folder, 'paperdesk.sqlite')); db.exec(`CREATE TABLE other(value TEXT); PRAGMA user_version = ${CURRENT_SCHEMA};`); db.close(); }, /结构不兼容/],
     ['corrupt', async folder => { await mkdir(folder); await writeFile(join(folder, 'paperdesk.sqlite'), Buffer.alloc(512, 23)); }, /损坏/],
     ['future', async folder => { await cp(source, folder, { recursive: true }); const db = new DatabaseSync(join(folder, 'paperdesk.sqlite')); db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA + 1}`); db.close(); }, /更新版本/],
-    ['older', async folder => { await cp(source, folder, { recursive: true }); const db = new DatabaseSync(join(folder, 'paperdesk.sqlite')); db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA - 1}`); db.close(); }, /先完整备份.*源码或浏览器版本升级/],
+    ['older', async folder => { await cp(source, folder, { recursive: true }); const db = new DatabaseSync(join(folder, 'paperdesk.sqlite')); db.exec('PRAGMA user_version = 3'); db.close(); }, /先完整备份.*源码或浏览器版本升级/],
     ['missing-table', async folder => { await cp(source, folder, { recursive: true }); const db = new DatabaseSync(join(folder, 'paperdesk.sqlite')); db.exec('DROP TABLE pages'); db.close(); }, /结构不兼容/],
     ['missing-pdf', async folder => { await cp(source, folder, { recursive: true }); await rm(join(folder, 'pdfs', document.id + '.pdf')); }, /原始 PDF/],
     ['changed-pdf-size', async folder => { await cp(source, folder, { recursive: true }); await writeFile(join(folder, 'pdfs', document.id + '.pdf'), sample.subarray(0, 100)); }, /大小与记录不一致/],
@@ -271,6 +326,50 @@ test('existing-library inspection rejects empty, unrelated, older, future and in
       await prepare(folder);
       const before = await snapshot(folder);
       await assert.rejects(validateExistingLibrary(folder), message);
+      assert.deepEqual(await snapshot(folder), before);
+    });
+  }
+});
+
+test('schema 5 inspection validates bookmark structure and records without changing files', async t => {
+  const directory = await temporaryDirectory(t);
+  const source = join(directory, 'source');
+  const runtime = await startDesktopRuntime({ dataDir: source, preferredPort: 0 });
+  const document = await importSample(runtime.baseUrl);
+  await runtime.close();
+  const created = new Date().toISOString();
+  const insert = (db, { id = randomUUID(), page = 1, title = '书签' } = {}) => db.prepare(
+    'INSERT INTO bookmarks(id, document_id, page, title, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)'
+  ).run(id, document.id, page, title, created, created);
+  const cases = [
+    ['valid', db => insert(db, { page: 2, title: '频率响应 Ω' }), null],
+    ['missing-table', db => db.exec('DROP TABLE bookmarks'), /结构不兼容/],
+    ['missing-column', db => db.exec('ALTER TABLE bookmarks RENAME COLUMN title TO missing_title'), /结构不兼容/],
+    ['page-out-of-range', db => insert(db, { page: document.pageCount + 1 }), /无效的页面.*书签/],
+    ['invalid-id', db => insert(db, { id: 'not-a-uuid' }), /无效的书签/],
+    ['empty-title', db => insert(db, { title: '' }), /无效的书签/],
+    ['untrimmed-title', db => insert(db, { title: ' 书签 ' }), /无效的书签/],
+    ['multiline-title', db => insert(db, { title: '第一行\n第二行' }), /无效的书签/],
+    ['control-title', db => insert(db, { title: '隐形\u200b字符' }), /无效的书签/],
+    ['long-title', db => insert(db, { title: '签'.repeat(201) }), /无效的书签/],
+    ['duplicate-page', db => { insert(db); insert(db, { title: '同页第二个书签' }); }, /无效的书签/],
+  ];
+  for (const [name, prepare, message] of cases) {
+    await t.test(name, async () => {
+      const folder = join(directory, name);
+      await cp(source, folder, { recursive: true });
+      const db = new DatabaseSync(join(folder, 'paperdesk.sqlite'));
+      try {
+        if (['empty-title', 'long-title', 'duplicate-page'].includes(name)) {
+          // A structurally compatible table without CHECK/UNIQUE constraints
+          // makes the inspector, rather than SQLite insertion, reject bad rows.
+          db.exec('CREATE TABLE unchecked_bookmarks AS SELECT * FROM bookmarks; DROP TABLE bookmarks; ALTER TABLE unchecked_bookmarks RENAME TO bookmarks;');
+        }
+        prepare(db);
+      } finally { db.close(); }
+      const before = await snapshot(folder);
+      if (message) await assert.rejects(validateExistingLibrary(folder), message);
+      else assert.equal((await validateExistingLibrary(folder)).schemaVersion, 5);
       assert.deepEqual(await snapshot(folder), before);
     });
   }

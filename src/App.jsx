@@ -32,6 +32,9 @@ export default function App() {
   const vaultInventorySequence=useRef(0),vaultInventoryController=useRef(null),vaultMounted=useRef(true);
   const translationRef=useRef(null);
   const [notesState,setNotesState]=useState({documentId:null,dirty:false});
+  const [bookmarkState,setBookmarkState]=useState({documentId:null,busy:false,dirty:false});
+  const bookmarkStateRef=useRef(bookmarkState);
+  const assertBookmarksSaved=()=>{if(bookmarkStateRef.current.busy)throw new Error('书签正在保存，请完成后再切换或关闭。');if(bookmarkStateRef.current.dirty)throw new Error('仍有未保存或未确认的书签更改，请保存、读取确认或明确取消重命名后再切换。');};
   const [showLibrary,setShowLibrary]=useState(()=>{try{return localStorage.getItem('paperdesk-library-collapsed')!=='true';}catch{return true;}});
   const librarySearchPending=useRef(false);
   const [selection,setSelection]=useState(null),[modal,setModal]=useState(false),[comment,setComment]=useState(''),[color,setColor]=useState('yellow'),[annotationBusy,setAnnotationBusy]=useState(false),[focused,setFocused]=useState(null),[focusTick,setFocusTick]=useState(0);
@@ -57,8 +60,9 @@ export default function App() {
   const flushAnnotations=async()=>{await Promise.all([...annotationRequests.current]);if(drafts.hasDrafts())throw new Error('仍有未保存的批注评论，草稿已保留。请保存或明确放弃草稿后重试。');};
   const flushAnnotationsRef=useRef(flushAnnotations);flushAnnotationsRef.current=flushAnnotations;
   useEffect(()=>window.paperdeskDesktop?.onLibrarySwitch(setDesktopSwitching),[]);
-  const desktopBusy=useRef(false);desktopBusy.current=importing||opening||exporting||storageBusy||vaultPreparing||vaultOpening;
+  const desktopBusy=useRef(false);desktopBusy.current=importing||opening||exporting||storageBusy||vaultPreparing||vaultOpening||bookmarkState.busy;
   useEffect(()=>window.paperdeskDesktop?.onFlushRequest(async()=>{
+    assertBookmarksSaved();
     if(desktopBusy.current||vaultActionRef.current)throw new Error('导入、关联、打开或导出尚未完成，请稍候再关闭。');
     await notesRef.current?.flush();
     if(notesRef.current?.isDirty())throw new Error('仍有未保存的笔记，请确认保存后重试。');
@@ -67,14 +71,16 @@ export default function App() {
   }),[]);
   useEffect(()=>libraryId&&readingPositionRef.current?installReadingPositionLifecycle(readingPositionRef.current):undefined,[libraryId]);
   useEffect(()=>{
-    const warn=event=>{if(drafts.hasDrafts()||annotationRequests.current.size){event.preventDefault();event.returnValue='';}};
+    const warn=event=>{if(drafts.hasDrafts()||annotationRequests.current.size||bookmarkStateRef.current.busy||bookmarkStateRef.current.dirty){event.preventDefault();event.returnValue='';}};
     const update=()=>setDraftTick(tick=>tick+1);
     window.addEventListener('beforeunload',warn);window.addEventListener('storage',update);
     return()=>{window.removeEventListener('beforeunload',warn);window.removeEventListener('storage',update);};
   },[]);
   const currentIdRef=useRef(current?.id);currentIdRef.current=current?.id;
+  const bookmarksChanged=useCallback(value=>{if(value.documentId!==currentIdRef.current)return;bookmarkStateRef.current=value;setBookmarkState(value);},[]);
   const input=useRef(null),notesRef=useRef(null),openToken=useRef(0),toastTimer=useRef(null),searchSequence=useRef(0);
   const notify=useCallback((message,type='error')=>{setToast({message,type});clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(null),type==='error'?11000:5000);},[]);
+  const bookmarkNavigationAllowed=()=>{try{assertBookmarksSaved();return true;}catch(error){notify(error.message);return false;}};
   const refreshSequence=useRef(0);
   const refreshVaultPdfs=useCallback(async()=>{
     if(!vaultMode)return [];
@@ -108,6 +114,7 @@ export default function App() {
   const folderChanged=(id,folderId)=>{++refreshSequence.current;const apply=doc=>doc?.id===id?{...doc,folderId}:doc;setDocuments(items=>items.map(apply));setCurrent(apply);};
   const commitPage=(number,id=currentIdRef.current)=>{if(id)readingPositionRef.current?.enqueue(id,number);setPage(number);};
   const openDocument=async(id,targetPage)=>{
+    try{assertBookmarksSaved();}catch(error){notify(error.message);return false;}
     const token=++openToken.current;setOpening(true);setSelection(null);setModal(false);setFind('');setFocused(null);
     try {await ensureLibraryIdentity();await notesRef.current?.flush();if(notesRef.current?.isDirty())throw new Error('仍有未保存的笔记，请先处理保留的草稿。');if(vaultMode)await flushAnnotations();if(currentIdRef.current)await readingPositionRef.current.flush(currentIdRef.current);if(token!==openToken.current)return false;const data=await api(`/documents/${encodeURIComponent(id)}`);if(token!==openToken.current)return false;const restored=readingPositionRef.current.restore(data.document);const requested=targetPage??restored;const valid=Number.isSafeInteger(requested)&&requested>=1&&requested<=data.document.pageCount;setCurrent(data.document);setAnnotations(data.annotations);commitPage(valid?requested:1,data.document.id);if(!valid)notify('链接中的页码无效，已打开第 1 页。');try{localStorage.setItem('paperdesk-current',id);}catch{}return true;}
     catch(err){if(token===openToken.current)notify(err.message);}
@@ -138,7 +145,7 @@ export default function App() {
   const savedDoc=useCallback((doc,expectedRevision)=>{if(!doc)return;const apply=d=>d?.id===doc.id&&(expectedRevision===undefined||d.notesRevision===expectedRevision||d.notesRevision===doc.notesRevision)?{...d,...doc,folderId:d.folderId}:d;setDocuments(ds=>ds.map(apply));setCurrent(apply);},[]);
   const notesDirtyChanged=useCallback((documentId,dirty)=>{if(currentIdRef.current===documentId)setNotesState(value=>value.documentId===documentId&&value.dirty===dirty?value:{documentId,dirty});},[]);
   const codex=useCodexContext({document:current,page,selection,notesDirty:notesState.documentId===current?.id&&notesState.dirty,onDocument:savedDoc,onError:notify});
-  const changePage=(n,{source}={})=>{if(modal||translationSettingsOpen||storageOpen||vaultPickerOpen||vaultPreparing||!Number.isSafeInteger(n)||n<1||n>(current?.pageCount||0))return;commitPage(n);if(source!=='selection')setSelection(null);setFind('');setFocused(null);};
+  const changePage=(n,{source}={})=>{if(bookmarkStateRef.current.busy||bookmarkStateRef.current.dirty||modal||translationSettingsOpen||storageOpen||vaultPickerOpen||vaultPreparing||!Number.isSafeInteger(n)||n<1||n>(current?.pageCount||0))return;commitPage(n);if(source!=='selection')setSelection(null);setFind('');setFocused(null);};
   const toggleToc=open=>{setTocOpen(open);setSelection(null);if(open&&window.matchMedia('(max-width:780px)').matches)setShowNotes(false);};
   const toggleNotes=()=>{if(!showNotes&&window.matchMedia('(max-width:780px)').matches)setTocOpen(false);setShowNotes(!showNotes);};
   const revealNotes=()=>{if(window.matchMedia('(max-width:780px)').matches)setTocOpen(false);setShowNotes(true);};
@@ -150,6 +157,7 @@ export default function App() {
   },[tocOpen]);
   useEffect(()=>{if(current&&libraryId)readingPositionRef.current.enqueue(current.id,page);},[current?.id,page,libraryId]);
   const importFiles=async files=>{
+    try{assertBookmarksSaved();}catch(error){notify(`导入未开始：${error.message}`);if(input.current)input.current.value='';return;}
     if(vaultActionRef.current||desktopSwitching||importing||opening||exporting||storageBusy){notify('文献正在处理，请稍后重试。');return;}
     if(vaultPickerOpen){notify('请先关闭 PDF 选择器，再导入 PDF。');return;}
     if(storageOpen){notify('请先关闭资料位置，再导入 PDF。');return;}
@@ -172,12 +180,14 @@ export default function App() {
   const demo=async()=>{if(vaultMode){await openVaultPicker();return;}try{const r=await fetch('/examples/reading-demo.pdf');if(!r.ok)throw new Error('示例文件暂时无法读取');const blob=await r.blob();await importFiles([new File([blob],'reading-demo.pdf',{type:'application/pdf'})]);}catch(err){notify(err.message);}};
   const searchJump=async result=>{const opened=await openFromLibrary(result.documentId,result.page||1);if(!opened)return;setFind(query.trim());if(result.source==='notes'){setTab('notes');revealNotes();}if(result.source==='annotation'){setTab('annotations');revealNotes();}};
   const beginAnnotation=value=>{
+    if(!bookmarkNavigationAllowed())return;
     try{const draft=drafts.newDraft(value);newDraftRef.current=draft;setComment(draft.comment);setColor(draft.color);setModal(true);}catch(error){notify(error.message);}
   };
   const changeComment=value=>{const draft=newDraftRef.current;if(!draft||draft.attempt)return;newDraftRef.current=drafts.write({...draft,comment:value});setComment(value);};
   const changeColor=value=>{const draft=newDraftRef.current;if(!draft||draft.attempt)return;newDraftRef.current=drafts.write({...draft,color:value});setColor(value);};
   const discardNewDraft=()=>{const draft=newDraftRef.current;if(draft?.generation)drafts.clear(draft);newDraftRef.current=null;setModal(false);setSelection(null);setComment('');};
   const restoreNewDraft=draft=>{
+    if(!bookmarkNavigationAllowed())return;
     if(!current||draft.documentId!==current.id||draft.selection.page>current.pageCount){notify('草稿的文献或页码不再有效，请在历史草稿中核对评论。');return;}
     commitPage(draft.selection.page);setSelection({...draft.selection,restored:true});newDraftRef.current=draft;setComment(draft.comment);setColor(draft.color);setModal(true);
   };
@@ -208,6 +218,7 @@ export default function App() {
   };
   const openStorage=()=>{setStorageError('');setStorageOpen(true);void refreshStorage().catch(error=>setStorageError(error.message));};
   const flushStorage=async()=>{
+    assertBookmarksSaved();
     if(importing||opening||exporting)throw new Error('导入、打开或导出尚未完成，请稍候再试。');
     await notesRef.current?.flush();
     if(notesRef.current?.isDirty())throw new Error('仍有未保存的笔记，请先处理保留的草稿。');
@@ -266,7 +277,7 @@ export default function App() {
   const unlinkedVaultPdfs=vaultMode?vaultInventory.files.filter(file=>file.documentId===null):[];
   const matchingVaultPdfs=unlinkedVaultPdfs.filter(file=>`${file.name}\n${file.path}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const matchingLinkedVaultPdfs=vaultMode?vaultInventory.files.filter(file=>file.documentId&&documents.some(doc=>doc.id===file.documentId&&`${doc.filename}\n${file.name}\n${file.path}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))&&!results.some(result=>result.documentId===file.documentId)):[];
-  const documentBusy=importing||opening||exporting||storageBusy||vaultPreparing||vaultOpening||desktopSwitching;
+  const documentBusy=importing||opening||exporting||storageBusy||vaultPreparing||vaultOpening||desktopSwitching||bookmarkState.busy;
   return <div className="app-shell" inert={desktopSwitching||vaultPreparing||(vaultMode&&(importing||vaultOpening))||undefined} aria-busy={desktopSwitching||vaultPreparing||vaultOpening} onDragOver={e=>{if(e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)){e.preventDefault();return;}if(e.dataTransfer.types.includes('Files')){e.preventDefault();setDragging(true);}}} onDrop={e=>{e.preventDefault();setDragging(false);if(!e.dataTransfer.types.includes(DOCUMENT_DRAG_TYPE)&&e.dataTransfer.files.length)importFiles(e.dataTransfer.files);}}>
     <input ref={input} className="hidden-input" type="file" accept=".pdf,application/pdf" multiple aria-label="选择 PDF 文件" onChange={e=>importFiles(e.target.files)}/>
     <aside id="library-panel" className={`sidebar library-sidebar ${showLibrary?'':'collapsed'}`} aria-label="文献栏" inert={modal||!showLibrary||undefined}>
@@ -275,10 +286,10 @@ export default function App() {
     <main className="main-workspace" inert={modal||undefined}>
       <header className="workspace-header"><button className="icon-button library-toggle" aria-label={showLibrary?'收起文献栏':'展开文献栏'} title={showLibrary?'收起文献栏':'展开文献栏'} aria-expanded={showLibrary} aria-controls="library-panel" onClick={toggleLibrary}>{showLibrary?<PanelLeftClose size={19}/>:<PanelLeftOpen size={19}/>}</button><div className="header-title"><span className="eyebrow">YOUR READING SPACE</span><h1 title={current?.title}>{current?current.title:'把论文读成自己的理解。'}</h1></div><div className="header-actions"><button className="secondary-button vault-settings-button" onClick={openStorage}><Library size={15}/> 资料位置</button><button className="secondary-button translation-settings-button" onClick={()=>translationRef.current?.openSettings()}><Languages size={15}/> 翻译设置</button>{current&&!codex.dismissed&&<div className="codex-status" data-shared={codex.shared} role="status"><span>{codex.status==='shared'?'选区已共享':codex.status==='error'?'阅读上下文暂不可用':codex.status==='ready'?'阅读上下文已就绪':'正在准备阅读上下文…'}</span><button className="icon-button small" aria-label={codex.shared?'停止共享选区':'关闭 Codex 状态'} onClick={codex.shared?codex.clear:codex.dismiss}><X size={13}/></button></div>}{current&&<><button className="secondary-button export-button" aria-label="导出 Markdown" title="导出 Markdown" disabled={exporting} onClick={exportMarkdown}>{exporting?<LoaderCircle size={15} className="spin"/>:<Download size={15}/>}<span>导出 Markdown</span></button><button className="icon-button panel-toggle" aria-label={showNotes?'收起笔记面板':'展开笔记面板'} onClick={toggleNotes}>{showNotes?<PanelRightClose size={19}/>:<PanelRightOpen size={19}/>}</button></>}<span className="local-pill">LOCAL</span></div></header>
       {current?<div className={`reading-layout ${showNotes?'':'notes-hidden'}`}>
-        <Reader document={current} page={page} onPage={changePage} annotations={annotations} selection={selection} onSelection={setSelection} selectionLocked={modal||translationSettingsOpen||storageOpen||vaultPickerOpen||vaultPreparing} find={find} focusedAnnotation={focused} focusTick={focusTick} tocOpen={tocOpen} onToggleToc={toggleToc}/>
+        <Reader document={current} page={page} onPage={changePage} annotations={annotations} selection={selection} onSelection={setSelection} selectionLocked={opening||modal||translationSettingsOpen||storageOpen||vaultPickerOpen||vaultPreparing||desktopSwitching} find={find} focusedAnnotation={focused} focusTick={focusTick} tocOpen={tocOpen} onToggleToc={toggleToc} onBookmarkStateChange={bookmarksChanged}/>
         <aside className={`notes-panel ${showNotes?'':'collapsed'}`} aria-label="笔记与批注" inert={opening||undefined}><div className="panel-tabs"><button className={tab==='notes'?'selected':''} onClick={()=>setTab('notes')}><Pencil size={14}/> 笔记</button><button className={tab==='annotations'?'selected':''} onClick={()=>setTab('annotations')}><MessageSquare size={14}/> 批注 <span>{annotations.length}</span></button></div>
           <div className={tab==='notes'?'panel-content':'panel-content invisible'}><Notes key={current.id} ref={notesRef} document={current} onSaved={savedDoc} onError={notify} onDirtyChange={notesDirtyChanged} storageMode={storage?.mode}/></div>
-          {tab==='annotations'&&<div className="annotations-body"><div className="section-eyebrow">MARGINALIA</div><h2>与原文的对话</h2><p className="notes-intro">选中文字可高亮；扫描页、公式和图表可用“区域批注”框选。点击批注可回到标记处。</p>{currentDrafts.filter(draft=>!draft.annotationId).map(draft=><div className="draft-hint" key={draft.target}><p>第 {draft.selection.page} 页有未保存的{draft.selection.kind==='region'?'区域':'文字'}批注草稿。</p><button className="text-button" onClick={()=>restoreNewDraft(draft)}>恢复第 {draft.selection.page} 页批注草稿</button><button className="text-button" onClick={()=>drafts.clear(draft)}>放弃草稿</button></div>)}{currentDrafts.filter(draft=>draft.annotationId&&!annotations.some(annotation=>annotation.id===draft.annotationId)).map(draft=><div className="draft-hint" key={draft.target}><p>对应批注已不在文献中，这份评论草稿仍可复制。</p><textarea readOnly aria-label="已删除批注的评论草稿" value={draft.comment}/><button className="text-button" onClick={()=>drafts.clear(draft)}>放弃草稿</button></div>)}{annotations.length?annotations.slice().sort((a,b)=>a.page-b.page||a.createdAt.localeCompare(b.createdAt)).map(a=><AnnotationCard key={a.id} annotation={a} drafts={drafts} onJump={a=>{setSelection(null);commitPage(a.page);setFocused(a.id);setFocusTick(t=>t+1);setFind('');if(window.matchMedia('(max-width:780px)').matches){setShowNotes(false);setTocOpen(false);}}} onUpdate={updateAnnotation} onDelete={deleteAnnotation} onReload={reloadAnnotation}/>):<div className="empty-annotations"><Highlighter size={28} strokeWidth={1.25}/><p>给值得回看的地方，留下想法。</p><span>选中文字或框选区域 → 写下评论</span></div>}{historicalDrafts.length>0&&<details className="historical-drafts"><summary>其他窗口与历史批注草稿（{historicalDrafts.length}）</summary><p>请核对文献与页码后复制评论；这些草稿不会自动载入或覆盖当前窗口。</p>{historicalDrafts.map((draft,index)=><label key={draft.storedKey}>{draft.annotationId?'已有批注评论':`第 ${draft.selection.page} 页${draft.selection.kind==='region'?'区域':'文字'}批注`}<textarea readOnly aria-label={`其他窗口或历史批注草稿 ${index+1}`} value={draft.comment}/></label>)}</details>}</div>}
+          {tab==='annotations'&&<div className="annotations-body"><div className="section-eyebrow">MARGINALIA</div><h2>与原文的对话</h2><p className="notes-intro">选中文字可高亮；扫描页、公式和图表可用“区域批注”框选。点击批注可回到标记处。</p>{currentDrafts.filter(draft=>!draft.annotationId).map(draft=><div className="draft-hint" key={draft.target}><p>第 {draft.selection.page} 页有未保存的{draft.selection.kind==='region'?'区域':'文字'}批注草稿。</p><button className="text-button" onClick={()=>restoreNewDraft(draft)}>恢复第 {draft.selection.page} 页批注草稿</button><button className="text-button" onClick={()=>drafts.clear(draft)}>放弃草稿</button></div>)}{currentDrafts.filter(draft=>draft.annotationId&&!annotations.some(annotation=>annotation.id===draft.annotationId)).map(draft=><div className="draft-hint" key={draft.target}><p>对应批注已不在文献中，这份评论草稿仍可复制。</p><textarea readOnly aria-label="已删除批注的评论草稿" value={draft.comment}/><button className="text-button" onClick={()=>drafts.clear(draft)}>放弃草稿</button></div>)}{annotations.length?annotations.slice().sort((a,b)=>a.page-b.page||a.createdAt.localeCompare(b.createdAt)).map(a=><AnnotationCard key={a.id} annotation={a} drafts={drafts} onJump={a=>{if(!bookmarkNavigationAllowed())return;setSelection(null);commitPage(a.page);setFocused(a.id);setFocusTick(t=>t+1);setFind('');if(window.matchMedia('(max-width:780px)').matches){setShowNotes(false);setTocOpen(false);}}} onUpdate={updateAnnotation} onDelete={deleteAnnotation} onReload={reloadAnnotation}/>):<div className="empty-annotations"><Highlighter size={28} strokeWidth={1.25}/><p>给值得回看的地方，留下想法。</p><span>选中文字或框选区域 → 写下评论</span></div>}{historicalDrafts.length>0&&<details className="historical-drafts"><summary>其他窗口与历史批注草稿（{historicalDrafts.length}）</summary><p>请核对文献与页码后复制评论；这些草稿不会自动载入或覆盖当前窗口。</p>{historicalDrafts.map((draft,index)=><label key={draft.storedKey}>{draft.annotationId?'已有批注评论':`第 ${draft.selection.page} 页${draft.selection.kind==='region'?'区域':'文字'}批注`}<textarea readOnly aria-label={`其他窗口或历史批注草稿 ${index+1}`} value={draft.comment}/></label>)}</details>}</div>}
           {drafts.storageError&&<p className="inline-error" role="alert">浏览器批注草稿无法写入，请保留当前窗口并确认保存成功后再关闭。</p>}
         </aside>
         {opening&&<div className="opening-mask" role="status"><LoaderCircle className="spin"/> 正在打开文献…</div>}

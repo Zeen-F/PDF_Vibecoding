@@ -135,7 +135,7 @@ test('an SQL commit failure removes only the newly created managed note and roll
   h.store.discardImportedPdf(receipt);assert.deepEqual(await readdir(h.store.pdfDir),[]);
   const originals=path.join(h.dataDir,'recoveries','originals'),backups=await readdir(originals);
   assert.equal(backups.filter(name=>name.endsWith('.md')).length,1);assert.equal(backups.filter(name=>name.endsWith('.pdf')).length,1);
-  assert.match(await readFile(path.join(originals,backups.find(name=>name.endsWith('.md'))),'utf8'),/paperdesk_format: 1/);
+  assert.match(await readFile(path.join(originals,backups.find(name=>name.endsWith('.md'))),'utf8'),/paperdesk_format: 3/);
   assert.equal(hash(await readFile(path.join(originals,backups.find(name=>name.endsWith('.pdf'))))),hash(sample));
   await index.refresh();assert.deepEqual(index.pdfReferences(),[]);
 });
@@ -151,4 +151,27 @@ test('a failed original-source association rolls back its new Markdown while lea
   assert.equal(saved,true);assert.equal(hash(await readFile(source)),hash(sample));await assert.rejects(readFile(h.store.notePath(id)),{code:'ENOENT'});
   assert.deepEqual(index.pdfReferences(),[]);await assert.rejects(readdir(h.store.pdfDir),{code:'ENOENT'});
   await index.refresh();assert.equal(h.db.prepare('SELECT COUNT(*) AS count FROM documents').get().count,0);
+});
+
+test('bookmarks survive refresh and note/position/classification saves without reparsing PDF and failed multi-file commits restore bookmark rows and Markdown',async t=>{
+  const h=await fixture(t),record=await h.createRecord(),other=await h.createRecord('另一份正文',Buffer.concat([sample,Buffer.from('\n% second for rollback\n')]));let parses=0;
+  const index=h.indexFor({},async()=>{parses++;return{pages:['text1','text2']};});await index.initialize();assert.equal(parses,2);
+  const now=new Date().toISOString(),bookmark={id:randomUUID(),document_id:record.document.id,page:2,title:'个人页面',created_at:now,updated_at:now};
+  index.transaction(()=>h.db.prepare('INSERT INTO bookmarks(id,document_id,page,title,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(bookmark.id,bookmark.document_id,bookmark.page,bookmark.title,now,now));
+  assert.deepEqual(index.snapshot(record.document.id).bookmarks.map(row=>({...row})),[bookmark]);assert.deepEqual(h.store.readDocument(record.document.id).bookmarks,[bookmark]);
+  const folderId=randomUUID();
+  index.transaction(()=>{
+    h.db.prepare('INSERT INTO folders(id,name,name_key,created_at,updated_at) VALUES(?,?,?,?,?)').run(folderId,'学习','学习',now,now);
+    h.db.prepare('UPDATE documents SET notes_zh=?,last_page=2,folder_id=? WHERE id=?').run('新的正文',folderId,record.document.id);
+  });
+  await index.refresh();assert.equal(parses,2);assert.deepEqual(h.store.readDocument(record.document.id).bookmarks,[bookmark]);
+  const previous=await readFile(record.notePath),otherPrevious=await readFile(other.notePath);let writes=0;
+  const failing=h.indexFor({writeDocument(...args){writes++;if(writes===2)throw Object.assign(new Error('isolated second note failure'),{status:409});return h.store.writeDocument(...args);}});await failing.initialize();
+  assert.throws(()=>failing.transaction(()=>{
+    h.db.prepare('UPDATE bookmarks SET title=? WHERE id=?').run('必须回滚的标签',bookmark.id);
+    h.db.prepare('UPDATE documents SET title=? WHERE id=?').run('触发第二文件',other.document.id);
+  }),/isolated second note failure/);
+  assert.ok(writes>=2);assert.deepEqual(await readFile(record.notePath),previous);assert.deepEqual(await readFile(other.notePath),otherPrevious);
+  assert.equal(h.db.prepare('SELECT title FROM bookmarks WHERE id=?').get(bookmark.id).title,bookmark.title);
+  assert.deepEqual(h.store.readDocument(record.document.id).bookmarks,[bookmark]);
 });

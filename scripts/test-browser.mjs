@@ -17,6 +17,7 @@ import { translationWorkflow, translationTestOptions } from '../tests/translatio
 import { annotationDraftWorkflow } from '../tests/annotation-drafts.browser.mjs';
 import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
 import { vaultWorkflow } from '../tests/vault.browser.mjs';
+import { bookmarkWorkflow } from '../tests/bookmarks.browser.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -608,6 +609,9 @@ try {
   await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview, onLayoutPreview });
   await annotationDraftWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await readingPositionWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, dataDir: join(tempDir, 'data') });
+  const bookmarkVisualDir=join(root,'.local','verification','bookmarks');
+  await mkdir(bookmarkVisualDir,{recursive:true,mode:0o700});
+  await bookmarkWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(bookmarkVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
   const vaultVisualDir=join(root,'.local','verification','obsidian-vault');
   await mkdir(vaultVisualDir,{recursive:true,mode:0o700});
   await vaultWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(vaultVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});

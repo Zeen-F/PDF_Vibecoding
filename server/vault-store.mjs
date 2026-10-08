@@ -67,10 +67,11 @@ function unique(rows, key, label) {
   if (new Set(values).size !== values.length) invalid(`${label}包含重复标识。`);
 }
 function validateState(input, expectedId) {
-  object(input, ['version', 'document', 'annotations', 'annotationRequests', 'positionWriters', 'pdfSource'], '文献状态');
-  if (![1, 2].includes(input.version)) invalid('此 Markdown 使用不支持的 Paperdesk 格式版本，请使用相应版本打开。');
-  if (input.version === 2) validatePdfSource(input.pdfSource);
+  object(input, ['version', 'document', 'annotations', 'annotationRequests', 'positionWriters', 'pdfSource', 'bookmarks'], '文献状态');
+  if (![1, 2, 3].includes(input.version)) invalid('此 Markdown 使用不支持的 Paperdesk 格式版本，请使用相应版本打开。');
+  if (input.version === 2 || (input.version === 3 && Object.hasOwn(input, 'pdfSource'))) validatePdfSource(input.pdfSource);
   else if (Object.hasOwn(input, 'pdfSource')) invalid('旧版文献状态不能包含原位 PDF 来源。');
+  if (input.version < 3 && Object.hasOwn(input, 'bookmarks')) invalid('旧版文献状态不能包含页面书签，请使用新格式保存。');
   const doc = input.document;
   object(doc, ['id', 'sha256', 'title', 'filename', 'page_count', 'byte_size', 'created_at', 'updated_at', 'text_available', 'notes_zh', 'notes_en', 'last_page', 'folder_id'], '文献属性');
   uuid(doc.id); if (doc.id !== expectedId) invalid('文献文件名与元数据 UUID 不一致，请先核对原文件。');
@@ -117,6 +118,17 @@ function validateState(input, expectedId) {
     if (row.document_id !== doc.id) invalid('阅读位置记录绑定了其他文献。');
     uuid(row.writer_id, '阅读窗口'); integer(row.sequence, 1, Number.MAX_SAFE_INTEGER, '阅读位置序号');
     page(row.page, doc.page_count); integer(row.updated_at, 0, Number.MAX_SAFE_INTEGER, '阅读位置时间');
+  }
+  if (input.version === 3) {
+    array(input.bookmarks, '页面书签', doc.page_count); unique(input.bookmarks, 'id', '页面书签'); unique(input.bookmarks, 'page', '页面书签页码');
+    for (const row of input.bookmarks) {
+      object(row, ['id', 'document_id', 'page', 'title', 'created_at', 'updated_at'], '页面书签');
+      uuid(row.id, '书签'); if (row.document_id !== doc.id) invalid('页面书签绑定了其他文献。');
+      page(row.page, doc.page_count); text(row.title, 200, '书签标题', true);
+      if (row.title.trim() !== row.title || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(row.title)) invalid('书签标题必须是去除首尾空格的单行文本。');
+      timestamp(row.created_at, '书签创建日期'); timestamp(row.updated_at, '书签更新日期');
+      if (Date.parse(row.updated_at) < Date.parse(row.created_at)) invalid('书签更新时间不能早于创建时间。');
+    }
   }
   return input;
 }
@@ -184,7 +196,7 @@ export function validateVaultDirectory(vaultDir) {
 }
 function scalar(value) { return JSON.stringify(value).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e'); }
 function pdfLink(state, noteRelativeDir) {
-  if (state.version === 1) return `../PDFs/${state.document.id}.pdf`;
+  if (!state.pdfSource) return `../PDFs/${state.document.id}.pdf`;
   return path.posix.relative(noteRelativeDir, state.pdfSource.path).split('/').map(segment => encodeURIComponent(segment)
     .replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
 }
@@ -234,7 +246,11 @@ function annotationMarkdown(row, linkBase) {
   return `### [PDF 第 ${row.page} 页](${link}) · ${row.color}\n\n${quote}\n\n${visible(row.comment) || '（暂无评论）'}\n`;
 }
 function generatedMarkdown(state, noteRelativeDir) {
-  return `${START}## Paperdesk 批注\n\n此区域由 Paperdesk 维护；请在上方正文编辑阅读笔记。\n\n${state.annotations.map(row => annotationMarkdown(row, pdfLink(state, noteRelativeDir))).join('\n')}${STATE_START}${scalar(state)}${STATE_END}${END}`;
+  const bookmarks = state.version >= 3 ? `## 页面书签\n\n${state.bookmarks.length
+    ? [...state.bookmarks].sort((a,b) => a.page-b.page || a.id.localeCompare(b.id)).map(row =>
+      `- [PDF 第 ${row.page} 页](${pdfLink(state,noteRelativeDir)}#page=${row.page}) · ${row.title.replaceAll('<!--','&lt;!--')}\n`).join('') + '\n'
+    : '（暂无页面书签）\n\n'}` : '';
+  return `${START}## Paperdesk 批注\n\n此区域由 Paperdesk 维护；请在上方正文编辑阅读笔记。\n\n${state.annotations.map(row => annotationMarkdown(row, pdfLink(state, noteRelativeDir))).join('\n')}${bookmarks}${STATE_START}${scalar(state)}${STATE_END}${END}`;
 }
 function signature(stat) { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`; }
 function futureDirectory(requested) {
@@ -338,8 +354,8 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         if (!saved) return null;
         const { state, notes } = parseDocument(saved.source, id, noteRelativeDir);
         return { document: { ...state.document, notes_zh: notes, notes_en: '' },
-          annotations: state.annotations, annotationRequests: state.annotationRequests, positionWriters: state.positionWriters,
-          ...(state.version === 2 ? { pdfSource: state.pdfSource } : {}),
+          annotations: state.annotations, annotationRequests: state.annotationRequests, positionWriters: state.positionWriters, bookmarks: state.bookmarks ?? [],
+          ...(state.pdfSource ? { pdfSource: state.pdfSource } : {}),
           token: saved.token, pdfPath: verifyPdf(state.document, state.pdfSource), notePath: file };
       });
     }
@@ -510,7 +526,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         try { unlinkSync(temp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
     }
-    function writeDocument({ document, annotations, annotationRequests = [], positionWriters = [], pdfSource }, expectedToken) {
+    function writeDocument({ document, annotations, annotationRequests = [], positionWriters = [], bookmarks, pdfSource }, expectedToken) {
       return guard(() => {
         if (libraryEstablished) readLibrary();
         const id = uuid(document?.id), file = notePath(id);
@@ -518,7 +534,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         const previous = markdown(file, true);
         const prior = previous ? parseDocument(previous.source, id, noteRelativeDir) : null;
         const source = pdfSource === undefined ? prior?.state.pdfSource : pdfSource;
-        const state = validateState({ version: source === undefined ? 1 : 2, document: normalized, annotations, annotationRequests, positionWriters,
+        const state = validateState({ version: 3, document: normalized, annotations, annotationRequests, positionWriters, bookmarks: bookmarks === undefined ? prior?.state.bookmarks ?? [] : bookmarks,
           ...(source === undefined ? {} : { pdfSource: source }) }, id);
         verifyPdf(state.document, state.pdfSource);
         let properties = prior?.properties || frontmatter(state, noteRelativeDir);
@@ -546,6 +562,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
         });
         unique(records.map(record => record.document), 'sha256', '文献 PDF');
         unique(records.flatMap(record => record.annotations), 'id', '跨文献批注');
+        unique(records.flatMap(record => record.bookmarks), 'id', '跨文献页面书签');
         return records;
       });
     }

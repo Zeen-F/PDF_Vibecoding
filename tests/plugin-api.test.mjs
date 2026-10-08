@@ -71,6 +71,9 @@ test('plugin identity and page reads are scoped to one library and preserve orig
   const source = bookmarkedPdf();
   const doc = await lib.app.upload(source);
   assert.equal(doc.notesRevision, revision('', ''));
+  const savedBookmark = await lib.app.request(`/api/documents/${doc.id}/bookmarks`, { page: 3, title: '插件读取前的个人书签' });
+  assert.equal(savedBookmark.status, 201);
+  const bookmarksBefore = { bookmarks: [(await savedBookmark.json()).bookmark] };
   const before = await lib.app.get('/api/plugin/status');
   assert.deepEqual(Object.keys(before).sort(), ['apiVersion', 'instanceId', 'launcherProtocol', 'libraryId', 'productVersion', 'service']);
   assert.equal(before.service, 'paperdesk');
@@ -111,8 +114,9 @@ test('plugin identity and page reads are scoped to one library and preserve orig
   const db = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
   try {
     assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA);
-    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
+    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'bookmarks', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
   } finally { db.close(); }
+  assert.deepEqual(await lib.app.get(`/api/documents/${doc.id}/bookmarks`), bookmarksBefore);
   assert.deepEqual(await readFile(path.join(lib.dataDir, 'pdfs', `${doc.id}.pdf`)), source);
   assert.deepEqual(Buffer.from(await (await fetch(`${lib.app.base}/api/documents/${doc.id}/file`)).arrayBuffer()), source);
 });

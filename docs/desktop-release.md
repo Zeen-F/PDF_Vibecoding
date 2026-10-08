@@ -6,6 +6,10 @@
 
 关闭窗口会先等待笔记和阅读位置保存，再隐藏窗口；点击 Dock 图标可重新显示。使用 **⌘Q／退出纸间** 才退出应用并停止它管理的服务。保存失败时保留窗口与草稿；切换文献库和退出的保存过程中暂时锁定编辑，避免后续输入落到错误的文献库。
 
+## alpha.5 本机开发预览
+
+1.2.0-alpha.5 开发分支支持 Obsidian 仓库与个人页面书签，详见 [仓库规则](obsidian-vault.md) 和 [书签使用说明](bookmarks.md)；以下公开下载仍对应 beta.5。alpha.5 使用 schema 5，新选择的完整 schema 4 文献库可经只读校验后在启动时备份并升级；更早结构仍须按既有流程先升级。旧数据库在 DDL 前在线一致性备份到数据目录的 `recoveries/migrations/`，备份失败会停止升级。升级前正常退出并备份完整文献库；仓库模式同时保留全部管理 Markdown 和库外数据目录。
+
 ## 下载与安装
 
 在 [1.1.0-beta.5 Release](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.1.0-beta.5) 中下载：

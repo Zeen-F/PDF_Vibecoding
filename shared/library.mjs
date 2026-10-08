@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA = 4;
+export const CURRENT_SCHEMA = 5;
 export const THEMES = Object.freeze([
   Object.freeze({ id: 'forest', label: '森林' }),
   Object.freeze({ id: 'sand', label: '暖砂' }),

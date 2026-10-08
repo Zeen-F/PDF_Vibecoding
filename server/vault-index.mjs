@@ -38,13 +38,15 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
     annotations: db.prepare('SELECT * FROM annotations WHERE document_id = ? ORDER BY id').all(id),
     annotationRequests: db.prepare('SELECT * FROM annotation_requests WHERE document_id = ? ORDER BY request_id').all(id),
     positionWriters: db.prepare('SELECT * FROM reading_position_writers WHERE document_id = ? ORDER BY writer_id').all(id),
+    bookmarks: db.prepare('SELECT * FROM bookmarks WHERE document_id = ? ORDER BY page, id').all(id),
     ...(pdfSources.has(id) ? { pdfSource: { ...pdfSources.get(id) } } : {}),
   });
   const libraryState = () => ({ folders: db.prepare('SELECT * FROM folders ORDER BY id').all(), theme: db.prepare('SELECT theme FROM library_preferences WHERE id = 1').get().theme });
   const comparable = record => JSON.stringify({ document: Object.fromEntries(DOCUMENT_FIELDS.map(key => [key, record.document[key] ?? null])),
     annotations: [...record.annotations].sort((a,b) => a.id.localeCompare(b.id)),
     annotationRequests: [...record.annotationRequests].sort((a,b) => a.request_id.localeCompare(b.request_id)),
-    positionWriters: [...record.positionWriters].sort((a,b) => a.writer_id.localeCompare(b.writer_id)), pdfSource: record.pdfSource ?? null });
+    positionWriters: [...record.positionWriters].sort((a,b) => a.writer_id.localeCompare(b.writer_id)),
+    bookmarks: [...(record.bookmarks ?? [])].sort((a,b) => a.page-b.page || a.id.localeCompare(b.id)), pdfSource: record.pdfSource ?? null });
   function applyLibrary(state) {
     const ids = new Set(state.folders.map(folder => folder.id));
     for (const old of db.prepare('SELECT id FROM folders').all()) if (!ids.has(old.id)) db.prepare('DELETE FROM folders WHERE id = ?').run(old.id);
@@ -59,13 +61,15 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
     db.prepare(`INSERT INTO documents(${DOCUMENT_FIELDS.join(',')}) VALUES (${DOCUMENT_FIELDS.map(() => '?').join(',')})
       ON CONFLICT(id) DO UPDATE SET ${DOCUMENT_FIELDS.slice(1).map(field => `${field}=excluded.${field}`).join(',')}`)
       .run(...DOCUMENT_FIELDS.map(field => doc[field] ?? null));
-    for (const table of ['annotations', 'annotation_requests', 'reading_position_writers']) db.prepare(`DELETE FROM ${table} WHERE document_id = ?`).run(doc.id);
+    for (const table of ['annotations', 'annotation_requests', 'reading_position_writers', 'bookmarks']) db.prepare(`DELETE FROM ${table} WHERE document_id = ?`).run(doc.id);
     for (const a of record.annotations) db.prepare(`INSERT INTO annotations(id,document_id,page,kind,quote,comment,color,rects,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
       .run(a.id,a.document_id,a.page,a.kind,a.quote,a.comment,a.color,a.rects,a.created_at,a.updated_at);
     for (const r of record.annotationRequests) db.prepare('INSERT INTO annotation_requests(document_id,request_id,request_hash,annotation_id,created_at) VALUES (?,?,?,?,?)')
       .run(r.document_id,r.request_id,r.request_hash,r.annotation_id,r.created_at);
     for (const w of record.positionWriters) db.prepare('INSERT INTO reading_position_writers(document_id,writer_id,sequence,page,updated_at) VALUES (?,?,?,?,?)')
       .run(w.document_id,w.writer_id,w.sequence,w.page,w.updated_at);
+    for (const b of record.bookmarks ?? []) db.prepare('INSERT INTO bookmarks(id,document_id,page,title,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+      .run(b.id,b.document_id,b.page,b.title,b.created_at,b.updated_at);
     tokens.set(doc.id, record.token);
     if (record.pdfSource) pdfSources.set(doc.id, { ...record.pdfSource });
     else pdfSources.delete(doc.id);

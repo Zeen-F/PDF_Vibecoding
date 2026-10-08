@@ -14,7 +14,7 @@ function filterEntries(entries, query) {
   });
 }
 
-export default function Contents({ document, page, onJump, onClose }) {
+export default function Contents({ document, page, onJump, onClose, embedded = false, disabled = false }) {
   const [data, setData] = useState(null), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
   const [query, setQuery] = useState(''), [expanded, setExpanded] = useState(new Set());
   const [manualOffset, setManualOffset] = useState(() => {
@@ -74,7 +74,7 @@ export default function Contents({ document, page, onJump, onClose }) {
         {hasChildren ? <button className="contents-disclosure" aria-label={`${open ? '收起' : '展开'}章节：${entry.title}`} aria-expanded={Boolean(open)} disabled={Boolean(trimmed)} onClick={() => setExpanded(previous => {
           const next = new Set(previous); next.has(entry.id) ? next.delete(entry.id) : next.add(entry.id); return next;
         })}>{open ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}</button> : <span className="contents-disclosure-spacer"/>}
-        <button ref={selected ? activeRef : null} className="contents-jump" aria-current={selected ? 'location' : undefined} disabled={destination === null} aria-label={destination === null ? `${entry.title}，页码未确认` : `${entry.title}，PDF 第 ${destination} 页`} title={destination === null ? `${entry.title}：没有可确认的本机页码` : `${entry.title} · PDF 第 ${destination} 页${entry.printedPage ? ` · 书中 ${entry.printedPage} 页` : ''}`} onClick={() => onJump(destination)}>
+        <button ref={selected ? activeRef : null} className="contents-jump" aria-current={selected ? 'location' : undefined} disabled={disabled || destination === null} aria-label={destination === null ? `${entry.title}，页码未确认` : `${entry.title}，PDF 第 ${destination} 页`} title={destination === null ? `${entry.title}：没有可确认的本机页码` : `${entry.title} · PDF 第 ${destination} 页${entry.printedPage ? ` · 书中 ${entry.printedPage} 页` : ''}`} onClick={() => onJump(destination)}>
           <span>{entry.title}</span><small>{destination ?? '—'}</small>
         </button>
       </div>
@@ -82,7 +82,7 @@ export default function Contents({ document, page, onJump, onClose }) {
     </li>;
   })}</ul>;
 
-  return <aside className="contents-panel" aria-label="目录面板" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
+  return <aside role="complementary" className={embedded ? 'contents-inner' : 'contents-panel'} aria-label="目录面板" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}>
     <div className="contents-heading"><div><span className="section-eyebrow">CONTENTS</span><h2><ListTree size={17}/> 章节目录</h2></div><button className="icon-button" aria-label="关闭目录" onClick={onClose}><X size={17}/></button></div>
     {error ? <div className="contents-message" role="alert"><p>目录读取失败：{error}</p><button className="text-button" onClick={() => setAttempt(value => value + 1)}>重试目录识别</button></div>
       : !data ? <div className="contents-message" role="status"><LoaderCircle className="spin" size={17}/><p>正在识别目录…</p></div>

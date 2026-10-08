@@ -177,9 +177,9 @@ test('schema 4 adds only retry metadata, preserves old records and PDF bytes, an
   t.after(() => rm(backup, { recursive: true, force: true }));
   await cp(lib.dataDir, join(backup, 'library'), { recursive: true });
   await lib.start();
-  assert.equal(CURRENT_SCHEMA, 4);
+  assert.equal(CURRENT_SCHEMA, 5);
   lib.database(db => {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA);
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM annotation_requests').get().count, 0);
