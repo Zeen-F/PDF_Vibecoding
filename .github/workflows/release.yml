@@ -103,11 +103,20 @@ jobs:
               vaultSummaries.push({ kind, status: error.code === 'ENOENT' ? 'not-run' : 'unreadable-evidence' });
             }
           }
+          let browserArchive;
+          try {
+            const result = JSON.parse(await readFile('.local/verification/browser-release/latest.json', 'utf8'));
+            browserArchive = { status: result.status, version: result.version, archive: result.archive,
+              sha256: result.sha256, checkCount: result.checks?.length || 0, cleanup: result.cleanup === true,
+              durationMs: result.durationMs };
+          } catch (error) {
+            browserArchive = { status: error.code === 'ENOENT' ? 'not-run' : 'unreadable-evidence' };
+          }
           await writeFile(path.join(evidence, 'verification-summary.json'), JSON.stringify({
-            workflowStatus: process.env.JOB_STATUS, vaultSummaries, runId: process.env.GITHUB_RUN_ID,
+            workflowStatus: process.env.JOB_STATUS, vaultSummaries, browserArchive, runId: process.env.GITHUB_RUN_ID,
             runAttempt: process.env.GITHUB_RUN_ATTEMPT, summaries,
           }, null, 2) + '\n');
-          if (process.env.JOB_STATUS === 'success' && [...summaries, ...vaultSummaries].some(result => result.status !== 'passed')) {
+          if (process.env.JOB_STATUS === 'success' && ([...summaries, ...vaultSummaries, browserArchive].some(result => result.status !== 'passed') || !browserArchive.cleanup)) {
             throw new Error('A successful release run must have passed source and packaged reliability evidence.');
           }
           NODE

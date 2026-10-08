@@ -36,6 +36,7 @@ const manifestPath = path.join(releaseDir, manifestName);
 // Keep this list explicit so a browser archive can never accidentally include
 // the local library, ignored files, or another generated release artifact.
 const allowedRootFiles = new Set([
+  '.agents/plugins/marketplace.json',
   '.editorconfig',
   '.node-version',
   '.npmrc',

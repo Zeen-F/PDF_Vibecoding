@@ -226,6 +226,11 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
   await page.goto(base);
 
   async function importFixture(name, buffer) {
+    // The hidden input bypasses the disabled import button. Wait for startup
+    // restoration or the previous document switch to finish before changing it.
+    const importButton = page.getByRole('button', { name: '导入 PDF', exact: true });
+    await expect(page.getByRole('spinbutton', { name: '页码', exact: true })).toBeEnabled();
+    await expect(importButton).toBeEnabled();
     const pending = page.waitForResponse(response => response.url() === `${base}/api/documents` && response.request().method() === 'POST');
     await page.getByLabel('选择 PDF 文件').setInputFiles({ name, mimeType: 'application/pdf', buffer });
     const response = await pending;
@@ -233,6 +238,7 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
     const { document } = await response.json();
     await expect(page.getByRole('heading', { name: document.title, exact: true })).toBeVisible();
     await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+    await expect(importButton).toBeEnabled();
     return document;
   }
 

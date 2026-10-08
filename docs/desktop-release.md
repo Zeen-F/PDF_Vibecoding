@@ -99,6 +99,7 @@ npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app
 PAPERDESK_ACCEPTANCE_DIR=.local/beta1-verification/packaged-release npm run test:desktop:reliability -- --packaged release/mac-arm64/Paperdesk.app
 node scripts/test-vault-desktop.mjs --packaged release/mac-arm64/Paperdesk.app
 npm run browser:dist
+node scripts/test-browser-release.mjs --archive release/Paperdesk-1.2.0-beta.1-browser.zip
 npm run release:checksums
 ```
 

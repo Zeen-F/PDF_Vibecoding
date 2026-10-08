@@ -34,6 +34,8 @@ npm start
 - `Paperdesk-<版本>-browser.zip`
 - `SHA256SUMS-browser`
 
+生成 ZIP 后运行 `node scripts/test-browser-release.mjs --archive release/Paperdesk-1.2.0-beta.1-browser.zip`，在临时目录独立安装生产依赖并检查普通库和合成 Obsidian 库；正常停止并清理临时安装后，结果摘要保存在忽略的 `.local/verification/browser-release/`。
+
 打包器只选取明确允许的 Git 跟踪文件、MIT 许可证和构建后的 `dist/`；包内不含 `node_modules/`、正式文献库、`.local/`、数据库、日志或环境变量文件。生产依赖按锁文件在使用者本机安装。包内保留源代码和 `START-HERE.md`，可在安装开发依赖后重新构建。
 
 发布前需在独立目录解压，安装生产依赖，并实际启动包内服务；使用原创示例检查 PDF 渲染、引文批注、笔记保存、书签、导出、停止和重启后的读回，并检查合成 Obsidian 知识库的原位文件与外部导入。测试资料不能使用正式文献库。完成读回与证据核对后，停止测试进程，保留验收摘要和校验值，清理合成文献库、解压安装副本及依赖缓存。浏览器包、桌面包和匿名下载校验分别记录，以 [本版说明](history/1.2.0-beta.1.md) 与实际结果为准。
