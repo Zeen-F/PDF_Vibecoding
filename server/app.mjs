@@ -19,9 +19,9 @@ import { getVaultConfig } from './vault-config.mjs';
 import { createVaultStore } from './vault-store.mjs';
 import { createVaultIndex } from './vault-index.mjs';
 import { listVaultPdfs } from './vault-pdfs.mjs';
+import { pdfAssetPaths } from '../shared/pdf-assets.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
-const pdfPackageDir = path.join(rootDir, 'node_modules/pdfjs-dist');
 const MAX_PAGES = 2000;
 const MAX_TEXT = 20_000_000;
 const COLORS = new Set(['yellow', 'green', 'pink']);
@@ -151,9 +151,7 @@ async function parsePdf(filePath, { expectedSha256, snapshotDir } = {}) {
     task = getDocument({
       url: pathToFileURL(filePath).href, disableStream: true, disableAutoFetch: true, isEvalSupported: false,
       disableFontFace: true, useSystemFonts: false, useWorkerFetch: false,
-      cMapUrl: `${path.join(pdfPackageDir, 'cmaps')}${path.sep}`, cMapPacked: true,
-      standardFontDataUrl: `${path.join(pdfPackageDir, 'standard_fonts')}${path.sep}`,
-      wasmUrl: `${path.join(pdfPackageDir, 'wasm')}${path.sep}`,
+      ...pdfAssetPaths, cMapPacked: true,
       stopAtErrors: true, verbosity: 0,
     });
     const pdf = await task.promise;

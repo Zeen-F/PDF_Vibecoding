@@ -7,7 +7,7 @@ import { mkdtemp, access, mkdir, readdir, realpath, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { browserLaunchConfig, probeBrowserService, runBrowserLauncher } from '../scripts/launch.mjs';
+import { browserLaunchConfig, browserOpenCommand, probeBrowserService, runBrowserLauncher } from '../scripts/launch.mjs';
 import { libraryIdentity, LAUNCHER_PROTOCOL, PRODUCT_VERSION } from '../shared/service-identity.mjs';
 import { getVaultConfig } from '../server/vault-config.mjs';
 import { isolatedTestEnvironment } from '../scripts/test-isolated.mjs';
@@ -15,6 +15,13 @@ import { isolatedTestEnvironment } from '../scripts/test-isolated.mjs';
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const config = browserLaunchConfig({ rootDir, env: { PORT: '4317', PAPERDESK_DATA_DIR: path.join(tmpdir(), 'synthetic-paperdesk-launcher') } });
 const identity = { service: 'paperdesk', apiVersion: 1, libraryId: config.libraryId, productVersion: PRODUCT_VERSION, launcherProtocol: LAUNCHER_PROTOCOL };
+
+test('browser opener uses native platform commands and only opens the local reader', () => {
+  assert.deepEqual(browserOpenCommand(config.baseUrl, 'win32'), ['rundll32.exe', ['url.dll,FileProtocolHandler', `${config.baseUrl}/`]]);
+  assert.equal(browserOpenCommand(config.baseUrl, 'darwin')[0], '/usr/bin/open');
+  assert.equal(browserOpenCommand(config.baseUrl, 'linux')[0], 'xdg-open');
+  assert.throws(() => browserOpenCommand('https://example.com'), /本机/);
+});
 
 function controlledProbe(status = identity, health = { ok: true }, extra = {}) {
   const calls = [];
@@ -59,10 +66,13 @@ test('vault launcher resolves canonical source, shared library identity and defa
   t.after(() => rm(directory, { recursive: true, force: true }));
   const vaultDir = path.join(directory, 'vault'), alias = path.join(directory, 'alias');
   await mkdir(path.join(vaultDir, '.obsidian'), { recursive: true });
-  await symlink(vaultDir, alias, 'dir');
+  await symlink(vaultDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
   const expected = getVaultConfig({ vaultDir: alias, vaultSubdir: 'Reading' });
   const value = browserLaunchConfig({ rootDir, env: { PAPERDESK_VAULT_DIR: alias, PAPERDESK_VAULT_SUBDIR: 'Reading' } });
   assert.equal(value.vaultDir, await realpath(vaultDir));
+  const direct = browserLaunchConfig({ rootDir, env: { PAPERDESK_VAULT_DIR: await realpath(vaultDir), PAPERDESK_VAULT_SUBDIR: 'Reading' } });
+  assert.equal(value.libraryId, direct.libraryId, 'A junction or Windows short path must identify the same vault as its native path');
+  assert.equal(value.dataDir, direct.dataDir, 'Aliases must share a cache before it exists');
   assert.equal(value.vaultSubdir, 'Reading');
   assert.equal(value.dataDir, expected.dataDir);
   assert.equal(value.libraryId, libraryIdentity(expected.libraryDir));
@@ -272,7 +282,6 @@ test('server CLI losing the bind race exits without creating or migrating its ta
 
 test('real synthetic backend starts, reuses only its library, refuses a different library and shuts down cleanly', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'paperdesk-launcher-live-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const reservation = createServer();
   reservation.listen(0, '127.0.0.1');
   await once(reservation, 'listening');
@@ -282,10 +291,12 @@ test('real synthetic backend starts, reuses only its library, refuses a differen
   const opened = [], errors = [];
   let child, childExit;
   t.after(async () => {
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    child.kill('SIGTERM');
-    const timer = setTimeout(() => child.kill('SIGKILL'), 6000);
-    try { await childExit; } finally { clearTimeout(timer); }
+    if (child && child.exitCode === null && child.signalCode === null) {
+      if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {}); else child.kill('SIGTERM');
+      const timer = setTimeout(() => child.kill('SIGKILL'), 6000);
+      try { await childExit; } finally { clearTimeout(timer); }
+    }
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const options = {
     rootDir, env: { ...isolatedTestEnvironment(), PORT: String(port), PAPERDESK_DATA_DIR: dataDir },
@@ -311,14 +322,13 @@ test('real synthetic backend starts, reuses only its library, refuses a differen
   assert.equal(status.libraryId, libraryIdentity(dataDir));
   assert.equal(status.productVersion, PRODUCT_VERSION);
   assert.equal(status.launcherProtocol, LAUNCHER_PROTOCOL);
-  child.kill('SIGTERM');
+  if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {}); else child.kill('SIGTERM');
   const [code] = await childExit;
   assert.equal(code, 0);
 });
 
 test('real vault launcher starts with its canonical cache and reuses the vault across cache choices', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'paperdesk-launcher-vault-live-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const vaultDir = path.join(directory, 'vault'), otherVault = path.join(directory, 'other-vault');
   await mkdir(path.join(vaultDir, '.obsidian'), { recursive: true });
   await mkdir(path.join(otherVault, '.obsidian'), { recursive: true });
@@ -329,10 +339,12 @@ test('real vault launcher starts with its canonical cache and reuses the vault a
   const cache = path.join(directory, 'cache'), opened = [], errors = [];
   let child, childExit;
   t.after(async () => {
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    child.kill('SIGTERM');
-    const timer = setTimeout(() => child.kill('SIGKILL'), 6000);
-    try { await childExit; } finally { clearTimeout(timer); }
+    if (child && child.exitCode === null && child.signalCode === null) {
+      if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {}); else child.kill('SIGTERM');
+      const timer = setTimeout(() => child.kill('SIGKILL'), 6000);
+      try { await childExit; } finally { clearTimeout(timer); }
+    }
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const options = { rootDir,
     env: { ...isolatedTestEnvironment(), PORT: String(port), PAPERDESK_VAULT_DIR: vaultDir, PAPERDESK_DATA_DIR: cache },
@@ -359,12 +371,11 @@ test('real vault launcher starts with its canonical cache and reuses the vault a
   })).state, 'blocked');
   assert.deepEqual(await readdir(otherVault), ['.obsidian']);
   assert.equal(opened.length, 2);
-  child.kill('SIGTERM'); assert.equal((await childExit)[0], 0);
+  if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {}); else child.kill('SIGTERM'); assert.equal((await childExit)[0], 0);
 });
 
 test('two real concurrent launchers reuse one backend and do not retain the losing child', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'paperdesk-launcher-concurrent-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const reservation = createServer();
   reservation.listen(0, '127.0.0.1');
   await once(reservation, 'listening');
@@ -372,11 +383,12 @@ test('two real concurrent launchers reuse one backend and do not retain the losi
   await new Promise(resolve => reservation.close(resolve));
   const children = [], exits = [], opened = [], errors = [];
   t.after(async () => {
-    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {}); else child.kill('SIGTERM');
     const timer = setTimeout(() => {
       for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }, 6000);
     try { await Promise.all(exits); } finally { clearTimeout(timer); }
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const options = {
     rootDir, env: { ...isolatedTestEnvironment(), PORT: String(port), PAPERDESK_DATA_DIR: directory },

@@ -1,7 +1,6 @@
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-
-const pdfPackageDir = fileURLToPath(new URL('../node_modules/pdfjs-dist/', import.meta.url));
+import { pathToFileURL } from 'node:url';
+import { pdfAssetPaths } from '../shared/pdf-assets.mjs';
 
 process.once('message', async ({ filePath, data, page: pageNumber, width }) => {
   let task, page, canvas, result;
@@ -22,9 +21,7 @@ process.once('message', async ({ filePath, data, page: pageNumber, width }) => {
     task = getDocument({
       ...source, disableStream: true, disableAutoFetch: true,
       isEvalSupported: false, disableFontFace: true, useSystemFonts: false, useWorkerFetch: false,
-      cMapUrl: `${path.join(pdfPackageDir, 'cmaps')}${path.sep}`, cMapPacked: true,
-      standardFontDataUrl: `${path.join(pdfPackageDir, 'standard_fonts')}${path.sep}`,
-      wasmUrl: `${path.join(pdfPackageDir, 'wasm')}${path.sep}`, stopAtErrors: true, verbosity: 0,
+      ...pdfAssetPaths, cMapPacked: true, stopAtErrors: true, verbosity: 0,
     });
     const pdf = await task.promise;
     page = await pdf.getPage(pageNumber);

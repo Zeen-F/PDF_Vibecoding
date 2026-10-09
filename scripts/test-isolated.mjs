@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const storageVariables = new Set(['PAPERDESK_VAULT_DIR', 'PAPERDESK_VAULT_SUBDIR', 'PAPERDESK_DATA_DIR']);
 
@@ -24,25 +24,35 @@ export function isolatedTestEnvironment(environment = process.env) {
 export function runIsolatedNode(args, { environment = process.env, cwd = process.cwd(), stdio = 'inherit' } = {}) {
   if (!args.length) throw new Error('Usage: node scripts/test-isolated.mjs <Node arguments or script>');
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd, env: isolatedTestEnvironment(environment), stdio, shell: false });
+    const childStdio = Array.isArray(stdio) ? [...stdio] : [stdio, stdio, stdio];
+    if (!childStdio.includes('ipc')) childStdio.push('ipc');
+    const preload = fileURLToPath(new URL('./test-process-lifecycle.mjs', import.meta.url));
+    const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, ...args], { cwd, env: isolatedTestEnvironment(environment), stdio: childStdio, shell: false });
     let shutdownTimer, requestedSignal;
     const signals = new Map([['SIGINT', 130], ['SIGTERM', 143]]);
     const handlers = new Map();
     const cleanup = () => {
       clearTimeout(shutdownTimer);
       for (const [signal, handler] of handlers) process.off(signal, handler);
+      process.off('message', onMessage);
     };
     for (const signal of signals.keys()) {
       const handler = () => {
         if (requestedSignal) { child.kill('SIGKILL'); return; }
         requestedSignal = signal;
-        child.kill(signal);
-        shutdownTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
+        if (child.connected) child.send({ type: 'paperdesk-test-shutdown', signal }, error => { if (error) child.kill(signal); });
+        else child.kill(signal);
+        shutdownTimer = setTimeout(() => child.kill('SIGKILL'), 30_000);
         shutdownTimer.unref();
       };
       handlers.set(signal, handler);
       process.on(signal, handler);
     }
+    const onMessage = message => {
+      if (message?.type === 'paperdesk-test-shutdown') handlers.get(message.signal === 'SIGINT' ? 'SIGINT' : 'SIGTERM')();
+    };
+    process.on('message', onMessage);
+    process.channel?.unref();
     child.once('error', error => { cleanup(); reject(error); });
     child.once('close', (code, signal) => {
       cleanup();

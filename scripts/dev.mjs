@@ -36,12 +36,17 @@ function shutdown(code = 0, signal = 'SIGTERM') {
       if (child.exitCode !== null || child.signalCode !== null) resolve();
       else child.once('close', resolve);
     }));
-    for (const child of running) child.kill(signal);
+    for (const child of running) {
+      if (child.connected) {
+        const type = children.get(child) === 'API' ? 'paperdesk-shutdown' : 'paperdesk-test-shutdown';
+        child.send({ type, signal }, error => { if (error) child.kill(signal); });
+      } else child.kill(signal);
+    }
     const timer = setTimeout(() => {
       for (const child of running) {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       }
-    }, 5000);
+    }, 10_000);
     timer.unref();
     await Promise.all(exited);
     clearTimeout(timer);
@@ -50,7 +55,7 @@ function shutdown(code = 0, signal = 'SIGTERM') {
 }
 
 function launch(label, args, env) {
-  const child = spawn(process.execPath, args, { cwd: root, env, stdio: 'inherit' });
+  const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['inherit', 'inherit', 'inherit', 'ipc'] });
   children.set(child, label);
   child.once('error', error => {
     children.delete(child);
@@ -68,6 +73,9 @@ function launch(label, args, env) {
 
 process.once('SIGINT', () => { void shutdown(130, 'SIGINT'); });
 process.once('SIGTERM', () => { void shutdown(143); });
+process.on('message', message => { if (message?.type === 'paperdesk-shutdown') void shutdown(); });
+if (process.connected) process.once('disconnect', () => { void shutdown(1); });
+process.channel?.unref();
 
 try {
   if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Paperdesk requires Node.js 24 or newer. Use the Node 24 LTS version in .nvmrc.');
@@ -80,7 +88,8 @@ try {
     const env = developmentEnvironment(process.env, { apiPort, dataDir });
     console.log(`Development UI: http://127.0.0.1:${uiPort}\nDevelopment API: http://127.0.0.1:${apiPort}\nDevelopment data: ${dataDir}`);
     launch('API', ['server/index.mjs'], env);
-    launch('Vite', [fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))], env);
+    launch('Vite', ['--import', new URL('./test-process-lifecycle.mjs', import.meta.url).href,
+      fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))], env);
   }
 } catch (error) {
   console.error(error.message);

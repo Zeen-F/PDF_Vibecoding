@@ -78,11 +78,11 @@ test('test wrapper relays termination and waits for child cleanup', async t => {
   const script = `import {writeFileSync} from 'node:fs';
     process.on('SIGTERM',()=>{writeFileSync(process.argv[1],'cleaned');process.exit(0)});
     console.log('ready');setInterval(()=>{},1000);`;
-  const child = spawn(process.execPath, [wrapper, '--input-type=module', '--eval', script, marker], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [wrapper, '--input-type=module', '--eval', script, marker], { cwd: root, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const exited = once(child, 'exit'), timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
   t.after(() => clearTimeout(timer));
   await once(child.stdout, 'data');
-  child.kill('SIGTERM');
+  child.send({ type: 'paperdesk-test-shutdown', signal: 'SIGTERM' });
   assert.equal((await exited)[0], 143);
   assert.equal(await readFile(marker, 'utf8'), 'cleaned');
 });

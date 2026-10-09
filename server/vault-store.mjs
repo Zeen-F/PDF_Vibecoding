@@ -176,7 +176,7 @@ function checkedPath(root, target, { missing = false, directory = false } = {}) 
     if (index < parts.length - 1 || directory) {
       if (!info.isDirectory()) invalid('Obsidian 文件夹路径被普通文件占用。');
     } else if (!info.isFile()) invalid('Paperdesk 文件路径必须指向普通文件。');
-    if (!inside(root, realpathSync(current))) invalid('文件实际路径越出了指定 Obsidian 知识库。');
+    if (!inside(root, realpathSync.native(current))) invalid('文件实际路径越出了指定 Obsidian 知识库。');
   }
   return lstatSync(target);
 }
@@ -189,7 +189,7 @@ export function validateVaultDirectory(vaultDir) {
     if (!existsSync(requested)) invalid('没有找到指定的 Obsidian 知识库文件夹。');
     const info = lstatSync(requested);
     if (info.isSymbolicLink() || !info.isDirectory()) invalid('请使用真实的 Obsidian 知识库文件夹，不能选择符号链接或文件。');
-    const canonical = realpathSync(requested);
+    const canonical = realpathSync.native(requested);
     checkedPath(canonical, path.join(canonical, '.obsidian'), { directory: true });
     return canonical;
   });
@@ -264,7 +264,7 @@ function futureDirectory(requested) {
     }
     if (!missing.length && info.isSymbolicLink()) invalid('恢复目录不能是符号链接。');
     if (!info.isDirectory() && !info.isSymbolicLink()) invalid('恢复目录路径被普通文件占用。');
-    return path.join(realpathSync(current), ...missing);
+    return path.join(realpathSync.native(current), ...missing);
   }
 }
 
@@ -379,7 +379,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
     function preserveCreatedFile(file) {
       mkdirSync(recoveryRoot, { recursive: true, mode: 0o700 });
       if (lstatSync(recoveryRoot).isSymbolicLink() || !lstatSync(recoveryRoot).isDirectory()
-        || inside(canonical, realpathSync(recoveryRoot))) invalid('恢复目录必须是知识库之外的真实文件夹。');
+        || inside(canonical, realpathSync.native(recoveryRoot))) invalid('恢复目录必须是知识库之外的真实文件夹。');
       const originalName = path.basename(file).replace(/^\./, '').replace(/\.[0-9a-f-]+\.rollback$/, '');
       const backup = path.join(recoveryRoot, `import-${randomUUID()}-${originalName}`);
       try { linkSync(file, backup); }
@@ -413,7 +413,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       return guard(() => {
         uuid(id); hash(expectedSha256, '上传 PDF 校验和'); integer(expectedByteSize, 1, Number.MAX_SAFE_INTEGER, '上传 PDF 大小');
         const source = lstatSync(temporaryPath);
-        if (!source.isFile() || source.isSymbolicLink() || inside(canonical, realpathSync(temporaryPath))) invalid('上传临时 PDF 必须是知识库之外的真实文件。');
+        if (!source.isFile() || source.isSymbolicLink() || inside(canonical, realpathSync.native(temporaryPath))) invalid('上传临时 PDF 必须是知识库之外的真实文件。');
         if (checkedPath(canonical, notePath(id), { missing: true })) fileConflict('知识库已有同名笔记，导入未覆盖它，请重新导入。');
         ensureDirectory(pdfDir);
         const file = pdfPath(id);
@@ -479,7 +479,7 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       // can still finish its write without destroying the recovery copy.
       mkdirSync(recoveryRoot, { recursive: true, mode: 0o700 });
       if (lstatSync(recoveryRoot).isSymbolicLink() || !lstatSync(recoveryRoot).isDirectory()
-        || inside(canonical, realpathSync(recoveryRoot))) invalid('恢复目录必须是知识库之外的真实文件夹。');
+        || inside(canonical, realpathSync.native(recoveryRoot))) invalid('恢复目录必须是知识库之外的真实文件夹。');
       const saved = path.join(recoveryRoot, `${path.basename(file, '.md')}-${Date.now()}-${randomUUID()}.md`);
       try { linkSync(file, saved); }
       catch (error) {

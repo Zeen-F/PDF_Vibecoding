@@ -11,6 +11,7 @@ import { extractToc } from '../server/toc.mjs';
 import { createReaderRenderer } from '../server/reader-render.mjs';
 import { MAX_NOTE_LENGTH, mergeNotes } from '../shared/notes.mjs';
 import { legacyVaultMarkdown } from './fixtures/vault-legacy.mjs';
+import { directoryLinkType, fileSymlinkSkipReason } from './fixtures/filesystem-links.mjs';
 
 const sample = readFileSync(new URL('../public/examples/reading-demo.pdf', import.meta.url));
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -169,7 +170,7 @@ test('externally corrupted metadata IDs or bounds never become indexed records',
   }
 });
 
-test('PDF existence, size, hash and symlink integrity are verified, including changes after cached reads', t => {
+test('PDF existence, size and hash integrity are verified, including changes after cached reads', t => {
   const { store, payload, base } = setup(t);
   const saved = store.writeDocument(payload, null), file = saved.pdfPath;
   const modified = Buffer.from(sample); modified[modified.length - 1] ^= 1;
@@ -179,7 +180,13 @@ test('PDF existence, size, hash and symlink integrity are verified, including ch
   assert.throws(() => store.readDocument(payload.document.id), status409);
   unlinkSync(file);
   assert.throws(() => store.readDocument(payload.document.id), status409);
-  const external = path.join(base, 'external.pdf'); writeFileSync(external, sample); symlinkSync(external, file);
+});
+
+test('a managed PDF file symlink is rejected without changing its target', { skip: fileSymlinkSkipReason() }, t => {
+  const { store, payload, base } = setup(t);
+  store.writeDocument(payload, null);
+  const file = store.pdfPath(payload.document.id); unlinkSync(file);
+  const external = path.join(base, 'external.pdf'); writeFileSync(external, sample); symlinkSync(external, file, 'file');
   assert.throws(() => store.readDocument(payload.document.id), status409);
   assert.deepEqual(readFileSync(external), sample);
 });
@@ -189,7 +196,7 @@ test('vault validation is read-only and refuses missing markers, marker links, v
   const empty = path.join(base, 'empty'); mkdirSync(empty);
   assert.throws(() => validateVaultDirectory(empty), status409);
   assert.deepEqual(readdirSync(empty), []);
-  const linked = path.join(base, 'linked-vault'); symlinkSync(vault, linked);
+  const linked = path.join(base, 'linked-vault'); symlinkSync(vault, linked, directoryLinkType);
   assert.throws(() => validateVaultDirectory(linked), status409);
   for (const subdir of ['../outside', '/absolute', 'Paperdesk/../outside', '.obsidian', 'Paperdesk\\..\\outside']) {
     assert.throws(() => createVaultStore({ vaultDir: vault, subdir }), status409);
@@ -197,23 +204,27 @@ test('vault validation is read-only and refuses missing markers, marker links, v
   assert.throws(() => store.pdfPath('../source'), status409);
   assert.throws(() => store.notePath(randomUUID().toUpperCase()), status409);
   const actual = path.join(base, 'actual-folder'); mkdirSync(actual);
-  symlinkSync(actual, path.join(vault, 'linked-folder'));
+  symlinkSync(actual, path.join(vault, 'linked-folder'), directoryLinkType);
   assert.throws(() => createVaultStore({ vaultDir: vault, subdir: 'linked-folder/Paperdesk' }), status409);
   assert.deepEqual(readdirSync(actual), []);
-  rmSync(path.join(vault, '.obsidian'), { recursive: true }); symlinkSync(actual, path.join(vault, '.obsidian'));
+  rmSync(path.join(vault, '.obsidian'), { recursive: true }); symlinkSync(actual, path.join(vault, '.obsidian'), directoryLinkType);
   assert.throws(() => validateVaultDirectory(vault), status409);
 });
 
-test('linked note and conflict files are rejected without touching their targets', t => {
+test('real note file symlinks are rejected without touching their targets', { skip: fileSymlinkSkipReason() }, t => {
   const { store, payload, base } = setup(t);
   const target = path.join(base, 'personal.md'); writeFileSync(target, '# 保留个人文件\n');
-  const note = store.notePath(payload.document.id); symlinkSync(target, note);
+  const note = store.notePath(payload.document.id); symlinkSync(target, note, 'file');
   assert.throws(() => store.readDocument(payload.document.id), status409);
   assert.throws(() => store.writeDocument(payload, null), status409);
-  const conflictTarget = path.join(base, 'elsewhere'); mkdirSync(conflictTarget);
-  symlinkSync(conflictTarget, path.join(store.rootDir, 'Notes', 'Conflicts'));
-  assert.throws(() => store.writeConflict(payload.document.id, 'unsaved'), status409);
   assert.equal(readFileSync(target, 'utf8'), '# 保留个人文件\n');
+});
+
+test('linked conflict folders are rejected without creating files in their targets', t => {
+  const { store, payload, base } = setup(t);
+  const conflictTarget = path.join(base, 'elsewhere'); mkdirSync(conflictTarget);
+  symlinkSync(conflictTarget, path.join(store.rootDir, 'Notes', 'Conflicts'), directoryLinkType);
+  assert.throws(() => store.writeConflict(payload.document.id, 'unsaved'), status409);
   assert.deepEqual(readdirSync(conflictTarget), []);
 });
 
@@ -245,7 +256,7 @@ test('reserved folders do not silently import unrelated UUID-less Markdown and t
 
 test('recovery directory aliases into the vault are refused before creating any recovery directories', t => {
   const { base, vault } = setup(t);
-  const alias = path.join(base, 'recovery-alias'); symlinkSync(vault, alias);
+  const alias = path.join(base, 'recovery-alias'); symlinkSync(vault, alias, directoryLinkType);
   assert.throws(() => createVaultStore({ vaultDir: vault, recoveryDir: path.join(alias, 'must-not-create') }), status409);
   assert.equal(readdirSync(vault).includes('must-not-create'), false);
   assert.throws(() => createVaultStore({ vaultDir: vault, recoveryDir: vault }), status409);
@@ -328,17 +339,22 @@ test('version 2 keeps a nested original PDF in place, encodes page links, preser
   unlinkSync(source);assert.throws(()=>store.readDocument(payload.document.id),status409);
 });
 
-test('version 2 PDF references reject traversal, absolute, hidden, malformed and symlink paths',t=>{
+test('version 2 PDF references reject traversal, absolute, hidden, malformed and linked directory paths',t=>{
   const{store,payload,base}=setup(t);
   const badPaths=['../outside.pdf','/absolute.pdf','C:/outside.pdf','dir//file.pdf','dir/../file.pdf','dir\\file.pdf',
     '.obsidian/file.pdf','dir/.private/file.pdf','.hidden.pdf','directory/file.txt','dir/\u0000file.pdf'];
   for(const relative of badPaths)assert.throws(()=>store.writeDocument({...payload,pdfSource:{kind:'vault',path:relative}},null),status409);
   assert.throws(()=>store.writeDocument({...payload,pdfSource:{kind:'outside',path:'file.pdf'}},null),status409);
   assert.throws(()=>store.writeDocument({...payload,pdfSource:{kind:'vault',path:'file.pdf',extra:true}},null),status409);
-  const outside=path.join(base,'outside.pdf');writeFileSync(outside,sample);symlinkSync(outside,path.join(store.vaultDir,'linked.pdf'));
-  assert.throws(()=>store.inspectPdfSource({kind:'vault',path:'linked.pdf'}),status409);
-  const directory=path.join(base,'outside-dir');mkdirSync(directory);writeFileSync(path.join(directory,'inside.pdf'),sample);symlinkSync(directory,path.join(store.vaultDir,'linked-directory'));
+  const directory=path.join(base,'outside-dir');mkdirSync(directory);writeFileSync(path.join(directory,'inside.pdf'),sample);symlinkSync(directory,path.join(store.vaultDir,'linked-directory'),directoryLinkType);
   assert.throws(()=>store.inspectPdfSource({kind:'vault',path:'linked-directory/inside.pdf'}),status409);
+  assert.equal(store.readDocument(payload.document.id),null);assert.equal(sha256(readFileSync(path.join(directory,'inside.pdf'))),sha256(sample));
+});
+
+test('version 2 PDF references reject real source file symlinks', { skip: fileSymlinkSkipReason() }, t=>{
+  const{store,payload,base}=setup(t),outside=path.join(base,'outside.pdf');writeFileSync(outside,sample);
+  symlinkSync(outside,path.join(store.vaultDir,'linked.pdf'),'file');
+  assert.throws(()=>store.inspectPdfSource({kind:'vault',path:'linked.pdf'}),status409);
   assert.equal(store.readDocument(payload.document.id),null);assert.equal(sha256(readFileSync(outside)),sha256(sample));
 });
 
@@ -409,16 +425,21 @@ test('import rollback refuses externally replaced PDFs and edited Markdown and r
   assert.throws(()=>store.discardNewDocument(record),error=>error.status===409&&error.code==='VAULT_FILE_CONFLICT');assert.equal(readFileSync(record.notePath,'utf8'),external);
 });
 
-test('managed import paths reject linked folders and inputs and partial failed copies are recovered outside the vault',t=>{
+test('managed import paths reject linked folders and partial failed copies are recovered outside the vault',t=>{
   const{store,base}=setup(t),incoming=path.join(base,'incoming.upload');writeFileSync(incoming,sample);
-  const linked=path.join(base,'linked.upload');symlinkSync(incoming,linked);
-  assert.throws(()=>store.importPdf(randomUUID(),linked,sha256(sample),sample.length),status409);
-  const target=path.join(base,'outside');mkdirSync(target);rmSync(store.pdfDir,{recursive:true});symlinkSync(target,store.pdfDir);
+  const target=path.join(base,'outside');mkdirSync(target);rmSync(store.pdfDir,{recursive:true});symlinkSync(target,store.pdfDir,directoryLinkType);
   assert.throws(()=>store.importPdf(randomUUID(),incoming,sha256(sample),sample.length),status409);assert.deepEqual(readdirSync(target),[]);
   unlinkSync(store.pdfDir);
   assert.throws(()=>store.importPdf(randomUUID(),incoming,sha256('wrong checksum'),sample.length),error=>error.status===409&&error.code==='VAULT_FILE_CONFLICT');
   assert.deepEqual(readdirSync(store.pdfDir),[]);assert.deepEqual(readFileSync(incoming),sample);
   const backups=readdirSync(path.join(base,'recovery'));assert.equal(backups.length,1);assert.equal(sha256(readFileSync(path.join(base,'recovery',backups[0]))),sha256(sample));
+});
+
+test('managed imports reject real input file symlinks without changing their sources', { skip: fileSymlinkSkipReason() }, t=>{
+  const{store,base}=setup(t),incoming=path.join(base,'incoming.upload');writeFileSync(incoming,sample);
+  const linked=path.join(base,'linked.upload');symlinkSync(incoming,linked,'file');
+  assert.throws(()=>store.importPdf(randomUUID(),linked,sha256(sample),sample.length),status409);
+  assert.deepEqual(readFileSync(incoming),sample);
 });
 
 test('legacy version 1 and 2 generated bytes remain readable and upgrade to version 3 bookmarks without changing sources or frontmatter',t=>{

@@ -11,9 +11,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const rootFiles = new Set(['.editorconfig', '.node-version', '.npmrc', '.nvmrc', 'CONTRIBUTING.md',
+const rootFiles = new Set(['.editorconfig', '.gitattributes', '.node-version', '.npmrc', '.nvmrc', 'CONTRIBUTING.md',
   'PDF_Vibecoding.code-workspace', 'README.md', 'START-HERE.md', 'LICENSE', 'electron-builder.config.cjs',
-  'index.html', 'package-lock.json', 'package.json', 'vite.config.js', '启动纸间.command', '.agents/plugins/marketplace.json']);
+  'index.html', 'package-lock.json', 'package.json', 'vite.config.js', '启动纸间.cmd', '启动纸间.command', '.agents/plugins/marketplace.json']);
 const prefixes = ['desktop/', 'docs/', 'plugins/', 'public/examples/', 'scripts/', 'server/', 'shared/',
   'src/', 'tests/', 'dist/'];
 const samplePdfs = new Set(['public/examples/reading-demo.pdf', 'dist/examples/reading-demo.pdf', 'tests/fixtures/password-protected.pdf']);

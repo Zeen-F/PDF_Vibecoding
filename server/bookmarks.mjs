@@ -67,7 +67,9 @@ export function backupBeforeMigration(db, dataDir, schemaVersion, currentSchema)
   try { if(copy.prepare('PRAGMA quick_check').all().some(row=>row.quick_check !== 'ok')
     || copy.prepare('PRAGMA user_version').get().user_version !== schemaVersion) throw new Error('升级前一致性备份未通过读回检查，文献库未升级。'); }
   finally { copy.close(); }
-  const saved = openSync(file,'r'); try { fsyncSync(saved); } finally { closeSync(saved); }
+  // Windows FlushFileBuffers requires a writable handle, even after VACUUM
+  // INTO has closed and the snapshot has passed its read-only checks.
+  const saved = openSync(file,'r+'); try { fsyncSync(saved); } finally { closeSync(saved); }
   return file;
 }
 

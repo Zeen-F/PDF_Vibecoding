@@ -1,39 +1,48 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { _electron as electron, expect } from '@playwright/test';
 import { startDesktopRuntime } from '../desktop/runtime.mjs';
 import { clearInheritedTestStorage } from './test-isolated.mjs';
+import { desktopTestTarget, testEvidenceDirectory, temporaryTestDirectory, removeTestDirectory, closeTestApplication, testShutdownHandlers } from './desktop-test-support.mjs';
 
 clearInheritedTestStorage();
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+// Avoid a trailing backslash in the quoted Windows Electron app argument.
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const { values } = parseArgs({ options: { packaged: { type: 'string' } } });
 const appBundle = values.packaged ? path.resolve(values.packaged) : null;
-if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Desktop acceptance requires an Apple Silicon Mac.');
-const executablePath = appBundle ? path.join(appBundle, 'Contents/MacOS/Paperdesk') : createRequire(import.meta.url)('electron');
+const { executablePath, appPath: packagedAppPath } = desktopTestTarget(appBundle);
 await access(executablePath);
-const artifactDir = path.join(root, '.local/verification/desktop');
-await mkdir(artifactDir, { recursive: true });
-const temporary = await mkdtemp(path.join(tmpdir(), 'paperdesk-desktop-'));
+const originalPdf = await readFile(path.join(root, 'public/examples/reading-demo.pdf'));
+if (process.env.PAPERDESK_ACCEPTANCE_DIR) testEvidenceDirectory(root, root);
+const temporary = await temporaryTestDirectory('paperdesk-desktop-');
+const artifactDir = testEvidenceDirectory(root, temporary);
 const userData = path.join(temporary, 'profile');
 const fixtureLibrary = path.join(temporary, 'existing-library');
 const label = appBundle ? 'packaged' : 'source';
 const env = { ...process.env, PAPERDESK_DESKTOP_USER_DATA: userData, PAPERDESK_DESKTOP_PORT: '0' };
 delete env.ELECTRON_RUN_AS_NODE;
-let application, fixture, document, baseUrl;
+let application, fixture, document, baseUrl, cleanupPromise;
 let readerSessionId;
 const errors = [];
-const originalPdf = await readFile(path.join(root, 'public/examples/reading-demo.pdf'));
 const pdfHash = bytes => createHash('sha256').update(bytes).digest('hex');
 const originalHash = pdfHash(originalPdf);
+
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    await closeTestApplication(application, userData);
+    await fixture?.close();
+    await removeTestDirectory(temporary, 'paperdesk-desktop-');
+  })();
+  return cleanupPromise;
+}
+const removeShutdownHandlers = testShutdownHandlers(cleanup);
 
 async function launch() {
   const result = await electron.launch({ executablePath, args: appBundle ? [] : [root], cwd: temporary, env, chromiumSandbox: true, timeout: 60_000 });
@@ -77,6 +86,7 @@ async function chooseLibrary(directory) {
 }
 
 try {
+  await mkdir(artifactDir, { recursive: true });
   let page = await launch();
   await expect(page.getByRole('button', { name: '导入第一篇 PDF' })).toBeVisible();
   assert.equal((await request('/documents')).documents.length, 0, 'Tests must start with an isolated empty library');
@@ -174,15 +184,32 @@ try {
 
   // A second launch must focus the existing instance, with no second window/server.
   const second = spawn(executablePath, appBundle ? [] : [root], { cwd: temporary, env, stdio: 'ignore' });
-  const secondExit = await Promise.race([once(second, 'exit'), new Promise((_, reject) => setTimeout(() => { second.kill(); reject(new Error('Second instance did not exit')); }, 15_000).unref())]);
+  let secondTimer;
+  let secondExit;
+  try {
+    secondExit = await Promise.race([once(second, 'close'), new Promise((_, reject) => { secondTimer = setTimeout(() => { second.kill(); reject(new Error('Second instance did not exit')); }, 15_000); })]);
+  } finally { clearTimeout(secondTimer); }
   assert.equal(secondExit[0], 0);
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 1);
 
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
-  await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false);
-  assert.equal((await request('/health')).ok, true);
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
-  console.log('PASS: single-instance launch and macOS window hide keep one healthy service');
+  if (process.platform === 'darwin') {
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false);
+    assert.equal((await request('/health')).ok, true);
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
+    console.log('PASS: single-instance launch and macOS window hide keep one healthy service');
+  } else {
+    const stoppedUrl = baseUrl, closed = application.waitForEvent('close', { timeout: 30_000 });
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close()).catch(error => {
+      if (!/closed|Target page|Session closed/.test(error.message)) throw error;
+    });
+    await closed; application = null;
+    await assert.rejects(fetch(stoppedUrl + '/api/health', { signal: AbortSignal.timeout(1000) }));
+    page = await launch();
+    editor = page.getByRole('textbox', { name: '笔记', exact: true });
+    await expect(editor).toHaveValue(finalNotes);
+    console.log('PASS: single-instance launch, native window close/service stop and restart preserve saved notes');
+  }
 
   // A failed save must cancel native quit and preserve the window and draft.
   await application.evaluate(({ dialog }) => {
@@ -251,7 +278,7 @@ try {
   console.log('PASS: native existing-library selection and restart preserve records and original PDF bytes');
 
   if (appBundle) {
-    const resources = path.join(appBundle, 'Contents/Resources/app');
+    const resources = packagedAppPath;
     for (const forbidden of ['data', '.local', 'tests', 'scripts', '.env', '.git', 'src']) {
       await assert.rejects(access(path.join(resources, forbidden)), `Private/development path must not be shipped: ${forbidden}`);
     }
@@ -263,15 +290,12 @@ try {
       }
     }
     await checkTree(resources);
-    assert.ok(security.appPath.startsWith(appBundle), 'The application must run from its installed bundle');
+    assert.equal(path.resolve(security.appPath), path.resolve(packagedAppPath), 'The application must run from its installed bundle');
     console.log('PASS: packaged application contains no personal library, database, environment file or development data');
   }
   assert.deepEqual(errors, [], 'Desktop renderer must not raise uncaught errors');
   console.log(`PASS: ${label} desktop acceptance complete`);
 } finally {
-  if (application) {
-    await application.close().catch(() => application.process().kill('SIGKILL'));
-  }
-  await fixture?.close();
-  await rm(temporary, { recursive: true, force: true });
+  removeShutdownHandlers();
+  await cleanup();
 }

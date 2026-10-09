@@ -15,6 +15,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBrowserArchive } from './browser-archive.mjs';
 
 const execFile = promisify(execFileCallback);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -38,6 +39,7 @@ const manifestPath = path.join(releaseDir, manifestName);
 const allowedRootFiles = new Set([
   '.agents/plugins/marketplace.json',
   '.editorconfig',
+  '.gitattributes',
   '.node-version',
   '.npmrc',
   '.nvmrc',
@@ -50,6 +52,7 @@ const allowedRootFiles = new Set([
   'package-lock.json',
   'package.json',
   'vite.config.js',
+  '启动纸间.cmd',
   '启动纸间.command',
 ]);
 const allowedPrefixes = [
@@ -169,7 +172,7 @@ function startHere(versionValue) {
     '## 运行环境',
     '',
     '- Node.js 24 或更新版本（建议使用 Node.js 24 LTS）',
-    '- 本次已在 macOS 验证；其他系统尚未验证',
+    '- Windows 可使用 PowerShell；macOS 可使用终端。请在目标系统安装依赖，不要复制其他系统的 node_modules',
     '',
     '## 安装与启动',
     '',
@@ -182,7 +185,16 @@ function startHere(versionValue) {
     '',
     '然后在浏览器打开 <http://127.0.0.1:4317>。服务只监听本机地址。结束使用时回到终端按 **Control+C**。',
     '',
-    '如果 4317 端口已被占用，可以先关闭已有实例，或设置其他端口后启动，例如 `PORT=4320 npm start`。',
+    'Windows PowerShell 请使用 `npm.cmd ci --omit=dev` 和 `npm.cmd start`，无需放宽执行策略。也可以双击“启动纸间.cmd”；它在需要时安装锁定依赖并检查构建产物。结束时按 Ctrl+C，等待服务退出后再关闭启动窗口。',
+    '',
+    '如果 4317 端口已被占用，先核对已有实例，再正常停止它；或设置其他端口后启动。PowerShell：',
+    '',
+    '```powershell',
+    '$env:PORT = "4320"',
+    'npm.cmd start',
+    '```',
+    '',
+    'macOS 终端可以执行 `PORT=4320 npm start`。只关闭自己启动且已经核对身份的实例。',
     '',
     '## 文献库与数据',
     '',
@@ -197,6 +209,16 @@ function startHere(versionValue) {
     '```sh',
     'PAPERDESK_VAULT_DIR="/path/to/ObsidianVault" PAPERDESK_DATA_DIR="/path/outside-vault/PaperdeskCache" npm start',
     '```',
+    '',
+    'Windows PowerShell 示例：',
+    '',
+    '```powershell',
+    '$env:PAPERDESK_VAULT_DIR = "D:\\ObsidianVault"',
+    '$env:PAPERDESK_DATA_DIR = "D:\\PaperdeskCache"',
+    'npm.cmd start',
+    '```',
+    '',
+    '结束该次设置后可在 PowerShell 用 `Remove-Item Env:PAPERDESK_VAULT_DIR, Env:PAPERDESK_DATA_DIR -ErrorAction SilentlyContinue` 清除当前终端的变量。',
     '',
     '默认管理子文件夹是 Paperdesk，可用 PAPERDESK_VAULT_SUBDIR 指定单层文件夹名。已有关联笔记请保留固定名称；笔记正文两边可编辑，批注、书签与分类由 Paperdesk 修改。冲突暂停保存，副本写入并读回成功后才确认保留，正文需要手工比较合并。',
     '',
@@ -242,9 +264,26 @@ try {
     }
   }
 
-  // LICENSE and this packager may be newly added in the release branch and
-  // therefore not appear in git ls-files until the caller stages them.
-  for (const relative of ['LICENSE', 'scripts/package-browser.mjs']) {
+  // Required runtime/packaging files may be newly added in a development
+  // branch and therefore not appear in git ls-files until the caller stages them.
+  // Keep this explicit; never sweep untracked files from a personal workspace.
+  const requiredBranchFiles = [
+    '.gitattributes',
+    'LICENSE',
+    'docs/windows.md',
+    'scripts/package-browser.mjs',
+    'scripts/browser-archive.mjs',
+    'scripts/desktop-test-support.mjs',
+    'scripts/test-process-lifecycle.mjs',
+    'shared/pdf-assets.mjs',
+    'tests/browser-archive.test.mjs',
+    'tests/desktop-test-support.test.mjs',
+    'tests/dev-lifecycle.test.mjs',
+    'tests/release-checksums.test.mjs',
+    'tests/fixtures/filesystem-links.mjs',
+    '启动纸间.cmd',
+  ];
+  for (const relative of requiredBranchFiles) {
     try {
       await lstat(path.join(root, relative));
       assertSafeArchivePath(relative);
@@ -260,7 +299,7 @@ try {
   await writeFile(path.join(packageRoot, 'START-HERE.md'), startHere(version), { mode: 0o644 });
 
   temporaryZipPath = path.join(releaseDir, `.${zipName}-${randomUUID()}.tmp`);
-  await execFile('zip', ['-qrX', temporaryZipPath, topFolder], { cwd: stagingRoot });
+  await createBrowserArchive(packageRoot, temporaryZipPath, topFolder);
   const zipInfo = await lstat(temporaryZipPath);
   if (!zipInfo.isFile() || zipInfo.size === 0) throw new Error('Browser archive is missing or empty.');
   await rename(temporaryZipPath, zipPath);

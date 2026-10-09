@@ -89,15 +89,27 @@ export async function probeBrowserService(config, {
   return { state: 'compatible' };
 }
 
+export function browserOpenCommand(baseUrl, platform = process.platform) {
+  const url = new URL(baseUrl);
+  if (url.protocol !== 'http:' || url.hostname !== HOST || url.username || url.password) {
+    throw new Error('启动器只能打开本机纸间地址。');
+  }
+  if (platform === 'win32') return ['rundll32.exe', ['url.dll,FileProtocolHandler', url.href]];
+  if (platform === 'darwin') return ['/usr/bin/open', [url.href]];
+  return ['xdg-open', [url.href]];
+}
+
 function openBrowser(baseUrl) {
-  const child = spawn('/usr/bin/open', [baseUrl], { stdio: 'ignore' });
+  const [command, args] = browserOpenCommand(baseUrl);
+  const child = spawn(command, args, { stdio: 'ignore', windowsHide: true, shell: false });
   child.on('error', error => console.error(`无法自动打开浏览器：${error.message}。请手动访问 ${baseUrl}`));
   child.unref();
 }
 
-async function stopOwnedChild(child, exited, timeoutMs = 5500) {
+async function stopOwnedChild(child, exited, timeoutMs = 10000) {
   if (exited()) return;
-  child.kill('SIGTERM');
+  if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {});
+  else child.kill('SIGTERM');
   await new Promise(resolve => {
     let timer;
     const finish = () => { clearTimeout(timer); child.off('exit', finish); resolve(); };
@@ -111,7 +123,7 @@ async function stopOwnedChild(child, exited, timeoutMs = 5500) {
 export async function runBrowserLauncher({
   rootDir = root, env = process.env, probe = probeBrowserService, spawnImpl = spawn,
   open = openBrowser, log = console.log, error = console.error, onChild = () => {},
-  startupTimeoutMs = 15_000, pollIntervalMs = 250, shutdownTimeoutMs = 5500, signal,
+  startupTimeoutMs = 15_000, pollIntervalMs = 250, shutdownTimeoutMs = 10000, signal,
 } = {}) {
   const config = browserLaunchConfig({ rootDir, env });
   let inspection = await probe(config);
@@ -181,8 +193,19 @@ export async function runBrowserLauncher({
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   let child;
   const controller = new AbortController();
-  const interrupt = () => { controller.abort(); child?.kill('SIGINT'); };
-  const terminate = () => { controller.abort(); child?.kill('SIGTERM'); };
+  const stop = () => {
+    controller.abort();
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    if (child.connected) child.send({ type: 'paperdesk-shutdown' }, () => {});
+    else child.kill('SIGTERM');
+    const timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }, 10000);
+    timer.unref();
+    child.once('exit', () => clearTimeout(timer));
+  };
+  const interrupt = stop;
+  const terminate = stop;
   process.on('SIGINT', interrupt);
   process.on('SIGTERM', terminate);
   try {

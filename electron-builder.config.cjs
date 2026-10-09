@@ -4,7 +4,7 @@ module.exports = {
   productName: 'Paperdesk',
   directories: { output: 'release', buildResources: '.local/desktop-assets' },
   asar: false,
-  // @napi-rs/canvas uses Node-API, so its arm64 binary needs no Electron rebuild.
+  // @napi-rs/canvas uses Node-API, so its platform binary needs no Electron rebuild.
   npmRebuild: false,
   electronDist: 'node_modules/electron/dist',
   publish: null,
@@ -33,6 +33,15 @@ module.exports = {
     hardenedRuntime: false,
     notarize: false,
     extendInfo: { CFBundleDisplayName: '纸间 Paperdesk' },
+  },
+  win: {
+    target: [{ target: 'portable', arch: ['x64'] }],
+    artifactName: 'Paperdesk-${version}-win-${arch}.${ext}',
+    icon: '.local/desktop-assets/icon.ico',
+    signExecutable: false,
+  },
+  portable: {
+    requestExecutionLevel: 'user',
   },
   dmg: {
     sign: false,

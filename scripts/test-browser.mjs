@@ -19,6 +19,7 @@ import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
 import { vaultWorkflow } from '../tests/vault.browser.mjs';
 import { bookmarkWorkflow } from '../tests/bookmarks.browser.mjs';
 import { waitForImportReady } from '../tests/browser-import.mjs';
+import { testEvidenceDirectory } from './desktop-test-support.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pageErrors = [];
@@ -31,21 +32,24 @@ let cleanupPromise;
 
 function cleanup() {
   cleanupPromise ??= (async () => {
-    await browser?.close();
-    await harnessServer?.close();
+    const failures = [];
+    const stop = async action => { try { await action(); } catch (error) { failures.push(error); } };
+    await stop(() => browser?.close());
+    await stop(() => harnessServer?.close());
     if (appServer) {
       appServer.closeAllConnections();
-      await new Promise((resolve, reject) => appServer.close(error => error ? reject(error) : resolve()));
+      await stop(() => new Promise((resolve, reject) => appServer.close(error => error && error.code !== 'ERR_SERVER_NOT_RUNNING' ? reject(error) : resolve())));
     }
-    await runtime?.close();
-    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    await stop(() => runtime?.close());
+    if (!failures.length && tempDir) await rm(tempDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    if (failures.length) throw new AggregateError(failures, 'Browser test cleanup failed; the temporary fixture was preserved');
   })();
   return cleanupPromise;
 }
 
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.once(signal, () => {
-    void cleanup().finally(() => process.exit(code));
+    void cleanup().then(() => process.exit(code), error => { console.error(error); process.exit(1); });
   });
 }
 
@@ -254,8 +258,15 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
 
   async function chapterExpanded(navigation, title) {
     const expand = navigation.getByRole('button', { name: `展开章节：${title}`, exact: true });
-    if (await expand.isVisible()) await expand.click();
-    await expect(navigation.getByRole('button', { name: `收起章节：${title}`, exact: true })).toBeVisible();
+    const collapse = navigation.getByRole('button', { name: `收起章节：${title}`, exact: true });
+    const toggle = expand.or(collapse);
+    // Restoring the active page can auto-expand its ancestors between a state
+    // read and click. Keep locating the same control when its label changes,
+    // then verify the final state after any in-flight restoration has settled.
+    await expect(async () => {
+      if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true', { timeout: 1000 });
+    }).toPass({ timeout: 15_000, intervals: [100, 250] });
   }
 
   const bookmarked = await importFixture('original-bookmark-exercise.pdf', bookmarkedPdf());
@@ -618,10 +629,11 @@ try {
   await nativeReaderWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, onTranslationPreview, onLayoutPreview });
   await annotationDraftWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}` });
   await readingPositionWorkflow({ context, base: `http://127.0.0.1:${appServer.address().port}`, dataDir: join(tempDir, 'data') });
-  const bookmarkVisualDir=join(root,'.local','verification','bookmarks');
+  const evidence = testEvidenceDirectory(root, tempDir);
+  const bookmarkVisualDir=join(evidence,'bookmarks');
   await mkdir(bookmarkVisualDir,{recursive:true,mode:0o700});
   await bookmarkWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(bookmarkVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
-  const vaultVisualDir=join(root,'.local','verification','obsidian-vault');
+  const vaultVisualDir=join(evidence,'obsidian-vault');
   await mkdir(vaultVisualDir,{recursive:true,mode:0o700});
   await vaultWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(vaultVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
