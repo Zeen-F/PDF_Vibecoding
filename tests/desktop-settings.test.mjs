@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { readDesktopSettings, writeDesktopSettings } from '../desktop/settings.mjs';
@@ -76,7 +76,7 @@ test('vault settings reject a cache inside the vault before writing any settings
 });
 
 test('Windows vault cache defaults to the roaming application directory outside the source vault', { skip: process.platform !== 'win32' }, async t => {
-  const root = await mkdtemp(path.join(tmpdir(), 'paperdesk-settings-win-'));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'paperdesk-settings-win-')));
   const previous = process.env.APPDATA;
   t.after(async () => {
     if (previous === undefined) delete process.env.APPDATA;

@@ -17,7 +17,10 @@ const APP_ID = '2026100700001234', KEY = 'synthetic-key+&=不是密码';
 const configUrl = '/api/translation/settings', translateUrl = '/api/translation';
 const md5 = value => createHash('md5').update(value, 'utf8').digest('hex');
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
-async function until(check) { for (let i = 0; i < 100; i++) { if (check()) return; await delay(2); } assert.fail('Expected isolated operation did not start'); }
+async function until(check) { for (let i = 0; i < 500; i++) { if (check()) return; await delay(10); } assert.fail('Expected isolated operation did not start'); }
+// Only deliberately stalled providers use a shorter deadline. CI disk work
+// must not turn a valid/error response into an unrelated 40–100 ms timeout.
+const expirationTimeoutMs = 2000;
 
 async function fixture(t, { timeoutMs = 15_000 } = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'paperdesk-translation-'));
@@ -183,7 +186,7 @@ test('failures and provider errors remain charged with safe messages and no auto
 });
 
 test('a stalled provider expires, remains charged and never retries or fills the cache', async t => {
-  const lib = await fixture(t, { timeoutMs: 1000 }); await lib.configure();
+  const lib = await fixture(t, { timeoutMs: expirationTimeoutMs }); await lib.configure();
   lib.setHandler(() => new Promise(() => {}));
   await rejected(await lib.request(translateUrl, 'POST', { text: 'timeout' }), 504, [KEY, APP_ID]);
   assert.equal(lib.calls.length, 1);
@@ -194,13 +197,13 @@ test('a stalled provider expires, remains charged and never retries or fills the
 });
 
 test('queued requests expire without late sends, account changes cannot switch a waiting request, and shutdown is bounded', async t => {
-  const lib = await fixture(t, { timeoutMs: 100 }); await lib.configure();
+  const lib = await fixture(t, { timeoutMs: expirationTimeoutMs }); await lib.configure();
   const gate = deferred();
   lib.setHandler(async ({ fields }) => { await gate.promise; return Response.json({ from: 'en', to: 'zh', trans_result: [{ dst: fields.get('q') === 'first' ? '第一' : '第二' }] }); });
   const first = lib.request(translateUrl, 'POST', { text: 'first' });
   await until(() => lib.calls.length === 1);
   const queued = lib.request(translateUrl, 'POST', { text: 'queued' });
-  await delay(10);
+  await until(() => lib.receivedRequests.filter(req => req.path === translateUrl && req.method === 'POST').length === 2);
   await lib.configure({ appId: '2026100700009876', apiKey: 'other-synthetic-key' });
   gate.resolve();
   assert.equal((await first).status, 200); await rejected(await queued, 409); assert.equal(lib.calls.length, 1);
@@ -266,7 +269,7 @@ test('a SQLite reservation lock cannot turn a timed-out request into a late prov
 });
 
 test('pending work is bounded and shutdown discards unsent queued requests without charging them', async t => {
-  const lib = await fixture(t, { timeoutMs: 2000 }); await lib.configure();
+  const lib = await fixture(t); await lib.configure();
   lib.setHandler(() => new Promise(() => {}));
   const waiting = Array.from({ length: 8 }, (_, i) => lib.request(translateUrl, 'POST', { text: 'pending-' + i }));
   await until(() => lib.calls.length === 1);
@@ -436,7 +439,8 @@ test('switching the active provider cancels queued work while preserving the pro
   const lib = await fixture(t); lib.setHandler(providerMock); await lib.configure();
   const gate = deferred(); lib.setHandler(async call => { await gate.promise; return providerMock(call); });
   const first = lib.request(translateUrl, 'POST', { text: 'first' }); await until(() => lib.calls.length === 1);
-  const queued = lib.request(translateUrl, 'POST', { text: 'queued' }); await delay(10);
+  const queued = lib.request(translateUrl, 'POST', { text: 'queued' });
+  await until(() => lib.receivedRequests.filter(req => req.path === translateUrl && req.method === 'POST').length === 2);
   await lib.json(configUrl, 'PUT', { provider: 'azure', apiKey: AZURE_KEY }); gate.resolve();
   const result = await (await first).json(); assert.equal(result.translation.provider, 'baidu'); assert.equal(result.settings.activeProvider, 'azure');
   await rejected(await queued, 409); assert.equal(lib.calls.length, 1);
@@ -459,7 +463,7 @@ test('all non-Baidu adapters bound requests and sanitize HTTP, malformed respons
     }
     lib.setHandler(() => Response.json({ error: 'PRIVATE_UPSTREAM_DETAIL' }));
     await rejected(await lib.request(translateUrl, 'POST', { text: 'malformed' }), 502, ['PRIVATE_UPSTREAM_DETAIL']);
-    const timeoutLib = await fixture(t, { timeoutMs: 40 });
+    const timeoutLib = await fixture(t, { timeoutMs: expirationTimeoutMs });
     await timeoutLib.json(configUrl, 'PUT', config);
     timeoutLib.setHandler(() => new Promise(() => {}));
     await rejected(await timeoutLib.request(translateUrl, 'POST', { text: 'timeout' }), 504, ['synthetic-key', 'timeout']);
@@ -637,7 +641,7 @@ test('connection tests obey the candidate monthly limit and reserve failures wit
 });
 
 test('connection-test errors are finite safe categories while the existing translation error response remains unchanged', async t => {
-  const lib = await fixture(t, { timeoutMs: 70 });
+  const lib = await fixture(t);
   const secrets = [KEY, APP_ID, 'PRIVATE_UPSTREAM_DETAIL'];
   const captured = [], originalError = console.error; console.error = (...values) => captured.push(values.join(' ')); t.after(() => { console.error = originalError; });
   const upstream = [
@@ -658,10 +662,15 @@ test('connection-test errors are finite safe categories while the existing trans
   await rejectedTest(await lib.request(testUrl, 'POST', testCandidates['openai-compatible']), 502, 'response', secrets);
   lib.setHandler(() => { throw new Error(secrets.join(' ')); });
   await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.deepl), 502, 'connection', secrets);
-  lib.setHandler(() => new Promise(() => {}));
-  await rejectedTest(await lib.request(testUrl, 'POST', testCandidates.deepl), 504, 'timeout', secrets);
-  assert.equal(lib.calls.length, 17);
-  assert.equal(readSidecar(lib, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), testCharacters * 17);
+  const stalled = await fixture(t, { timeoutMs: expirationTimeoutMs });
+  stalled.setHandler(() => new Promise(() => {}));
+  await rejectedTest(await stalled.request(testUrl, 'POST', testCandidates.deepl), 504, 'timeout', secrets);
+  assert.equal(stalled.calls.length, 1);
+  assert.equal(stalled.calls[0].options.signal.aborted, true);
+  assert.equal(readSidecar(stalled, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), testCharacters);
+  assert.equal(readSidecar(stalled, db => db.prepare('SELECT count(*) AS n FROM cache').get().n), 0);
+  assert.equal(lib.calls.length, 16);
+  assert.equal(readSidecar(lib, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), testCharacters * 16);
   assert.equal(readSidecar(lib, db => db.prepare('SELECT count(*) AS n FROM cache').get().n), 0);
   assert.ok(captured.every(line => secrets.every(value => !line.includes(value))));
   await lib.configure(); lib.setHandler(() => new Response('PRIVATE_UPSTREAM_DETAIL', { status: 401 }));
@@ -690,7 +699,8 @@ test('queued tests bind the saved tested profile revision, ignore unrelated acti
   const lib = await fixture(t); lib.setHandler(providerMock); await lib.configure();
   let gate = deferred(); lib.setHandler(async call => { await gate.promise; return providerMock(call); });
   const first = lib.request(translateUrl, 'POST', { text: 'hold one' }); await until(() => lib.calls.length === 1);
-  const tested = lib.request(testUrl, 'POST', testCandidates.azure); await delay(10);
+  const tested = lib.request(testUrl, 'POST', testCandidates.azure);
+  await until(() => lib.receivedRequests.filter(req => req.path === testUrl && req.method === 'POST').length === 1);
   await lib.json(configUrl, 'PUT', testCandidates.deepl); gate.resolve();
   assert.equal((await first).status, 200); assert.equal((await tested).status, 200); assert.equal(lib.calls.length, 2);
   assert.equal((await lib.json(configUrl)).settings.activeProvider, 'deepl');
@@ -698,10 +708,11 @@ test('queued tests bind the saved tested profile revision, ignore unrelated acti
   await lib.json(configUrl, 'PUT', testCandidates.deepl);
   gate = deferred(); const before = lib.calls.length;
   const second = lib.request(translateUrl, 'POST', { text: 'hold two' }); await until(() => lib.calls.length === before + 1);
-  const stale = lib.request(testUrl, 'POST', testCandidates.azure); await delay(10);
+  const stale = lib.request(testUrl, 'POST', testCandidates.azure);
+  await until(() => lib.receivedRequests.filter(req => req.path === testUrl && req.method === 'POST').length === 2);
   await lib.json(configUrl, 'PUT', { ...testCandidates.azure, apiKey: 'new-saved-key' }); gate.resolve();
   assert.equal((await second).status, 200); await rejectedTest(await stale, 409, 'changed'); assert.equal(lib.calls.length, before + 1);
-  const expiring = await fixture(t, { timeoutMs: 80 }); expiring.setHandler(() => new Promise(() => {})); expiring.setSleep(() => new Promise(() => {}));
+  const expiring = await fixture(t, { timeoutMs: expirationTimeoutMs }); expiring.setHandler(() => new Promise(() => {})); expiring.setSleep(() => new Promise(() => {}));
   const timed = expiring.request(testUrl, 'POST', testCandidates.azure); await until(() => expiring.calls.length === 1);
   const queued = expiring.request(testUrl, 'POST', testCandidates.deepl);
   await rejectedTest(await timed, 504, 'timeout'); await rejectedTest(await queued, 504, 'timeout');
@@ -709,7 +720,7 @@ test('queued tests bind the saved tested profile revision, ignore unrelated acti
 });
 
 test('test and translation queues share their capacity and close cancels only unsent tests without late provider calls', async t => {
-  const lib = await fixture(t, { timeoutMs: 2000 }); await lib.configure(); lib.setHandler(() => new Promise(() => {}));
+  const lib = await fixture(t); await lib.configure(); lib.setHandler(() => new Promise(() => {}));
   const first = lib.request(translateUrl, 'POST', { text: 'active' }); await until(() => lib.calls.length === 1);
   const pending = Array.from({ length: 7 }, () => lib.request(testUrl, 'POST', testCandidates.azure));
   await until(() => lib.receivedRequests.filter(req => req.path === testUrl && req.method === 'POST').length === 7);
