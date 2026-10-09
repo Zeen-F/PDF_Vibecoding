@@ -47,7 +47,7 @@ export function createReaderRenderer({ timeoutMs = 30_000, maxQueue = 4 } = {}) 
     let child;
     try {
       child = fork(workerFile, [], {
-        execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced',
+        execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', windowsHide: true,
         env: { ...process.env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },
       });
     } catch {

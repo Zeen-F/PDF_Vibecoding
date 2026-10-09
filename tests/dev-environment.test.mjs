@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { developmentEnvironment } from '../scripts/dev-environment.mjs';
 
 test('development cannot inherit production vault files or its cache location', () => {
-  const production = { PAPERDESK_VAULT_DIR: '/synthetic/production-vault', PAPERDESK_VAULT_SUBDIR: 'Formal', PAPERDESK_DATA_DIR: '/synthetic/production-cache', PORT: '4317', PATH: '/synthetic/runtime' };
+  const production = { PAPERDESK_VAULT_DIR: '/synthetic/production-vault', PAPERDESK_VAULT_SUBDIR: 'Formal', PAPERDESK_DATA_DIR: '/synthetic/production-cache', PORT: '4317', PATH: '/synthetic/runtime', Paperdesk_Vault_Dir: '/synthetic/mixed-case-vault', paperdesk_data_dir: '/synthetic/mixed-case-cache', Port: '4319' };
   const before = { ...production };
   const development = developmentEnvironment(production, { apiPort: 4328, dataDir: '/synthetic/dev-data' });
   assert.equal(development.PAPERDESK_VAULT_DIR, undefined);
   assert.equal(development.PAPERDESK_VAULT_SUBDIR, undefined);
+  for (const name of ['Paperdesk_Vault_Dir', 'paperdesk_data_dir', 'Port']) assert.equal(development[name], undefined);
   assert.equal(development.PAPERDESK_DATA_DIR, '/synthetic/dev-data');
   assert.equal(development.PORT, '4328');
   assert.equal(development.DEV_API_PORT, '4328');

@@ -19,10 +19,28 @@ import { getVaultConfig } from '../server/vault-config.mjs';
 
 const sample = await readFile(new URL('../public/examples/reading-demo.pdf', import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const cleanupTasks = new WeakMap();
+
+function onCleanup(t, action) {
+  const tasks = cleanupTasks.get(t);
+  if (tasks) tasks.push(action);
+  else t.after(action);
+}
 
 async function temporaryDirectory(t) {
   const directory = await mkdtemp(join(tmpdir(), 'paperdesk-desktop-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const tasks = [];
+  cleanupTasks.set(t, tasks);
+  t.after(async () => {
+    const errors = [];
+    // Windows cannot unlink an open SQLite database. Close every resource even
+    // when an earlier teardown fails, then remove only this synthetic directory.
+    for (const action of tasks) {
+      try { await action(); } catch (error) { errors.push(error); }
+    }
+    try { await rm(directory, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, 'Desktop test cleanup failed');
+  });
   return directory;
 }
 
@@ -31,7 +49,7 @@ async function serverAtRandomPort(t, handler) {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  t.after(() => new Promise((done, reject) => {
+  onCleanup(t, () => new Promise((done, reject) => {
     server.closeAllConnections();
     server.close(error => error ? reject(error) : done());
   }));
@@ -73,7 +91,7 @@ test('desktop reuses only the exact healthy running library and does not own its
   const dataDir = await temporaryDirectory(t);
   const application = createApp({ dataDir });
   const existing = await serverAtRandomPort(t, application.app);
-  t.after(() => application.close());
+  onCleanup(t, () => application.close());
   const runtime = await startDesktopRuntime({ dataDir: join(dataDir, '.'), preferredPort: existing.port });
   assert.equal(runtime.owned, false);
   assert.equal(runtime.baseUrl, existing.baseUrl);
@@ -113,7 +131,7 @@ test('different libraries and incompatible or unhealthy services survive desktop
         response.end(JSON.stringify(request.url === '/api/plugin/status' ? status : { ok: mismatch.healthy !== false }));
       });
       const runtime = await startDesktopRuntime({ dataDir, preferredPort: existing.port });
-      t.after(() => runtime.close());
+      onCleanup(t, () => runtime.close());
       assert.equal(runtime.owned, true);
       assert.notEqual(runtime.baseUrl, existing.baseUrl);
       assert.deepEqual(await json(runtime.baseUrl, '/api/health'), { ok: true });
@@ -126,7 +144,7 @@ test('different libraries and incompatible or unhealthy services survive desktop
 test('desktop drains an accepted note save before shutdown and reads all persisted data after restart', async t => {
   const dataDir = await temporaryDirectory(t);
   let runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
-  t.after(() => runtime.close());
+  onCleanup(t, () => runtime.close());
   const preferredPort = Number(new URL(runtime.baseUrl).port);
   const document = await importSample(runtime.baseUrl);
   const { annotation } = await json(runtime.baseUrl, `/api/documents/${document.id}/annotations`, {
@@ -172,9 +190,9 @@ test('desktop drains an accepted note save before shutdown and reads all persist
 test('desktop bounds stalled active connections during shutdown', async t => {
   const dataDir = await temporaryDirectory(t);
   const runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
-  t.after(() => runtime.close());
+  onCleanup(t, () => runtime.close());
   const socket = connect(Number(new URL(runtime.baseUrl).port), '127.0.0.1');
-  t.after(() => socket.destroy());
+  onCleanup(t, () => socket.destroy());
   await once(socket, 'connect');
   socket.write('POST /api/documents HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100000\r\n\r\n');
   socket.on('error', () => {});
@@ -203,7 +221,7 @@ test('an admitted import finishes safely when slow disk work outlives forced HTT
     return originalRename(source, destination);
   });
   syncBuiltinESMExports();
-  t.after(async () => {
+  onCleanup(t, async () => {
     releaseDisk();
     await runtime.close();
     renameMock.mock.restore();
@@ -249,7 +267,7 @@ test('existing-library inspection checks original PDFs and leaves a stopped WAL-
 test('desktop accepts schema 4 without changing files and backs it up before migrating to schema 5', async t => {
   const dataDir = await temporaryDirectory(t);
   let runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
-  t.after(() => runtime.close());
+  onCleanup(t, () => runtime.close());
   const document = await importSample(runtime.baseUrl);
   const saved = await json(runtime.baseUrl, `/api/documents/${document.id}`, {
     method: 'PATCH', body: { notesZh: '旧库升级后保留的笔记 Ω', notesEn: '', lastPage: 2, expectedNotesRevision: document.notesRevision },
@@ -378,7 +396,7 @@ test('schema 5 inspection validates bookmark structure and records without chang
 test('existing-library inspection refuses nonempty WAL instead of ignoring committed live records', async t => {
   const dataDir = await temporaryDirectory(t);
   const runtime = await startDesktopRuntime({ dataDir, preferredPort: 0 });
-  t.after(() => runtime.close());
+  onCleanup(t, () => runtime.close());
   await importSample(runtime.baseUrl);
   const before = await snapshot(dataDir);
   await assert.rejects(validateExistingLibrary(dataDir), /正常停止原阅读服务/);
@@ -435,7 +453,7 @@ test('desktop vault identity uses the managed directory, independent of its loca
   await mkdir(join(vaultDir, '.obsidian'), { recursive: true });
   const config = getVaultConfig({ vaultDir, dataDir });
   const runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
-  t.after(() => runtime.close());
+  onCleanup(t, () => runtime.close());
   assert.equal(runtime.vaultDir, config.vaultDir);
   assert.equal(runtime.vaultSubdir, 'Paperdesk');
   assert.equal(runtime.libraryDir, config.libraryDir);
@@ -454,7 +472,7 @@ test('desktop vault restarts from official PDF and Markdown after cache removal'
   const vaultDir = join(root, 'vault'), dataDir = join(root, 'cache');
   await mkdir(join(vaultDir, '.obsidian'), { recursive: true });
   let runtime = await startDesktopRuntime({ vaultDir, dataDir, preferredPort: 0 });
-  t.after(() => runtime.close());
+  onCleanup(t, () => runtime.close());
   const relativePdf = '参考资料/原始 阅读 # 1.pdf', originalPdf = join(vaultDir, ...relativePdf.split('/'));
   await mkdir(join(vaultDir, '参考资料'), { recursive: true });
   await writeFile(originalPdf, sample);
@@ -491,10 +509,19 @@ test('Obsidian URI validation permits only an existing Markdown file inside the 
   assert.equal(await validateVaultNoteUri(valid, libraryDir), `obsidian://open?path=${encodeURIComponent(await realpath(note))}`);
   const outside = join(root, 'outside.md');
   await writeFile(outside, '外部文件');
-  await symlink(outside, join(libraryDir, 'outside.md'));
+  // File symlinks require an optional Windows privilege. Directory junctions
+  // exercise the same realpath escape check without elevating the test process.
+  let linkedNote = join(libraryDir, 'outside.md');
+  if (process.platform === 'win32') {
+    const outsideDir = join(root, 'external-notes');
+    await mkdir(outsideDir);
+    await writeFile(join(outsideDir, 'outside.md'), '外部文件');
+    await symlink(outsideDir, join(libraryDir, 'external-notes'), 'junction');
+    linkedNote = join(libraryDir, 'external-notes', 'outside.md');
+  } else await symlink(outside, linkedNote);
   const cases = [
     'https://example.com', 'obsidian://advanced-uri?vault=anything', `${valid}&file=anything`, `${valid}#anything`,
-    `obsidian://open?path=${encodeURIComponent(outside)}`, `obsidian://open?path=${encodeURIComponent(join(libraryDir, 'outside.md'))}`,
+    `obsidian://open?path=${encodeURIComponent(outside)}`, `obsidian://open?path=${encodeURIComponent(linkedNote)}`,
     'obsidian://open?path=relative.md', `obsidian://open?path=${encodeURIComponent(join(libraryDir, 'missing.md'))}`,
   ];
   for (const value of cases) await assert.rejects(validateVaultNoteUri(value, libraryDir));

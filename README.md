@@ -1,23 +1,26 @@
 # 纸间 Paperdesk
 
+Windows 工作区的使用、开发和清理说明见 [Windows 指南](docs/windows.md)。已安装依赖并构建后，可以双击根目录 `启动纸间.cmd` 打开本机浏览器版；Windows 桌面目录包使用 `release/win-unpacked/Paperdesk.exe`。
+
 我是软件开发小白，这个软件是通过和 AI 对话、反复试用和修改，**vibe coding** 出来的。最初只是想给自己做一个方便读 PDF、划重点和记笔记的工具，于是有了「纸间」。
 
 现在把它开源，也欢迎大家反馈问题、提建议或提交改进。项目还在持续完善，目前发布的是预览版。
 
 ## 下载与使用
 
-最新预览版本：[**1.2.0-beta.1 · GitHub Release**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.1)。
+最新预览版本：[**1.2.0-beta.2 · GitHub Release**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.2)。
 
 | 版本 | 适合谁 | 使用方式 |
 | --- | --- | --- |
-| macOS 桌面版 | 使用 M 系列 Mac，希望直接打开软件 | 下载 [macOS DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.1/Paperdesk-1.2.0-beta.1-mac-arm64.dmg)，将 Paperdesk 拖入「应用程序」；无需安装 Node.js |
-| 本机浏览器版 | 希望通过本机端口在浏览器里使用 | 下载 [浏览器版 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.1/Paperdesk-1.2.0-beta.1-browser.zip)，安装 Node.js 24+ 后启动，打开 `http://127.0.0.1:4317` |
+| Windows 桌面版 | 使用 Windows 10/11 x64，希望直接打开软件 | 下载 [Windows ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-win-x64.zip)，完整解压后打开 Paperdesk.exe；无需安装 Node.js |
+| macOS 桌面版 | 使用 M 系列 Mac，希望直接打开软件 | 下载 [macOS DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-mac-arm64.dmg)，将 Paperdesk 拖入「应用程序」；无需安装 Node.js |
+| 本机浏览器版 | 希望通过本机端口在浏览器里使用 | 下载 [浏览器版 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-browser.zip)，安装 Node.js 24+ 后启动，打开 `http://127.0.0.1:4317` |
 
-桌面版尚未经过 Apple 签名或公证；首次打开如果被 macOS 阻止，可在「系统设置 → 隐私与安全性」中允许。Obsidian 仓库、页面书签和升级注意事项见 [本版变更记录](docs/history/1.2.0-beta.1.md)。安装及已有文献库的使用方式见 [桌面版说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.1/docs/desktop-release.md)。
+桌面版尚未经过 Apple 签名或公证；首次打开如果被 macOS 阻止，可在「系统设置 → 隐私与安全性」中允许。Obsidian 仓库、页面书签和升级注意事项见 [本版变更记录](docs/history/1.2.0-beta.2.md)。安装及已有文献库的使用方式见 [桌面版说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/desktop-release.md)。
 
 ## 可以做什么
 
-以下功能以 **1.2.0-beta.1** 为准，桌面版和本机浏览器版使用同一套阅读功能。
+以下功能以 **1.2.0-beta.2** 为准，桌面版和本机浏览器版使用同一套阅读功能。
 
 | 功能 | 说明 |
 | --- | --- |
@@ -48,7 +51,7 @@
 - 独立文献库：正常停止应用或服务后备份完整目录，包括数据库、`pdfs/` 及已有翻译数据库；运行中不能只复制主数据库。
 - Obsidian 仓库：正常退出后备份完整 Paperdesk 管理目录和所有关联的源 PDF，保留库外恢复资料及翻译设置；备份整个知识库更方便。已有源 PDF 的位置和内容不改写。
 
-**升级到 1.2.0-beta.1 前请正常退出并备份完整资料。** 本版使用 **schema 5**，新增个人页面书签；程序在修改旧数据库结构前创建并读回检查 SQLite 一致性备份，包含已提交的 WAL 内容。备份失败会停止升级，数据库迁移在事务中完成。自动数据库备份不能替代 PDF、Markdown 和翻译设置的完整备份。
+**升级到 1.2.0-beta.2 前请正常退出并备份完整资料。** 本版沿用 **schema 5** 与个人页面书签格式；程序在修改旧数据库结构前创建并读回检查 SQLite 一致性备份，包含已提交的 WAL 内容。备份失败会停止升级，数据库迁移在事务中完成。自动数据库备份不能替代 PDF、Markdown 和翻译设置的完整备份。
 
 - 默认／已记住库在启动时升级；菜单新选择完整 schema 4 库先只读校验，再在启动时备份并升级。schema 3 或更早的库须先通过本版浏览器／源码服务升级，详见 [升级步骤](docs/desktop-release.md#升级到-120-beta1)。
 - Obsidian 的旧 v1／v2 文献 Markdown 继续可读，成功保存时写入支持书签的 v3 完整状态，保留原位或导入来源。旧程序不能读取新增格式。
@@ -72,7 +75,7 @@ npm ci --omit=dev
 npm start
 ```
 
-ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.0.1:4317** 即可使用；终端保持运行，按 Control+C 停止服务。详细说明在包内的 `START-HERE.md`。浏览器版的发布验收范围为 macOS，其他系统尚未验证。
+ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.0.1:4317** 即可使用；终端保持运行，按 Control+C 停止服务。详细说明在包内的 `START-HERE.md`。浏览器 ZIP 的干净安装验收在 macOS 执行，Windows 浏览器源码入口另经完整回归；Windows 桌面使用上方的 ZIP。
 
 文献库默认在解压目录的 `data/` 中，更新前请先停止服务并备份整个文献库；也可通过 `PAPERDESK_DATA_DIR` 指定固定位置。
 
@@ -81,7 +84,7 @@ ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.
 使用本版源码时，请检出对应版本标签：
 
 ```sh
-git clone --branch v1.2.0-beta.1 https://github.com/Zeen-F/PDF_Vibecoding.git
+git clone --branch v1.2.0-beta.2 https://github.com/Zeen-F/PDF_Vibecoding.git
 cd PDF_Vibecoding
 npm ci
 npm run build
@@ -97,17 +100,17 @@ npm start
 - 扫描件可以阅读、记笔记和框选批注；目前没有 OCR，不能直接搜索或划选图片中的文字。
 - 复杂排版的选文和目录识别可能不准确，保存引文前请核对预览。
 - 暂不支持加密／权限受限 PDF、PDF 内嵌批注编辑、云同步和多人协作。
-- 桌面安装包目前只支持 Apple Silicon Mac，没有自动更新；浏览器包在 macOS 验证，其他系统尚未验证。
+- 桌面发布包面向 Apple Silicon Mac 与 Windows x64；Windows 使用和开发说明见 [Windows 指南](docs/windows.md)。没有自动更新，其他桌面架构尚未验证。
 - 多个窗口之间的阅读位置没有全局排序，建议同一文献只在一个窗口编辑。Obsidian 文件联动不保证多设备同时写入一致性；真实 Codex 宿主中的完整插件流程需单独验收。
 
 ## 开发与反馈
 
 最新发布源码的开发、检查、插件与翻译说明：
 
-- [开发指南](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.1/docs/development.md)
-- [阅读布局说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.1/docs/reader-display.md)
-- [翻译设置](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.1/docs/translation.md)
-- [Codex 插件](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.1/docs/codex-plugin.md)
+- [开发指南](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/development.md)
+- [阅读布局说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/reader-display.md)
+- [翻译设置](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/translation.md)
+- [Codex 插件](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/codex-plugin.md)
 - [反馈问题](https://github.com/Zeen-F/PDF_Vibecoding/issues) · [贡献约定](CONTRIBUTING.md)
 
 ## 文件安排

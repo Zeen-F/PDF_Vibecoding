@@ -10,16 +10,18 @@ import { createApp } from '../server/app.mjs';
 import { backupBeforeMigration } from '../server/bookmarks.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { notesRevision } from '../server/plugin-api.mjs';
+import { directoryLinkType } from './fixtures/filesystem-links.mjs';
 
 const sample=await readFile(new URL('../public/examples/reading-demo.pdf',import.meta.url));
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function fixture(t,vault=false) {
   const root=await mkdtemp(path.join(tmpdir(),'paperdesk-bookmarks-')),dataDir=path.join(root,'cache'),vaultDir=vault?path.join(root,'vault'):undefined;
-  if(vault)await mkdir(path.join(vaultDir,'.obsidian'),{recursive:true});
   let runtime,server;
   const start=async()=>{runtime=createApp({dataDir,vaultDir});await runtime.ready;server=runtime.app.listen(0,'127.0.0.1');await once(server,'listening');};
   const stop=async()=>{server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));if(runtime)await runtime.close();runtime=server=null;};
-  await start();t.after(async()=>{await stop();await rm(root,{recursive:true,force:true});});
+  t.after(async()=>{try{await stop();}finally{await rm(root,{recursive:true,force:true});}});
+  if(vault)await mkdir(path.join(vaultDir,'.obsidian'),{recursive:true});
+  await start();
   const request=(route,method='GET',body)=>fetch(`http://127.0.0.1:${server.address().port}/api${route}`,{method,headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
   const json=async(route,method='GET',body,status=200)=>{const response=await request(route,method,body);assert.equal(response.status,status,await response.clone().text());return response.json();};
   const upload=async(bytes=sample)=>{const form=new FormData();form.append('file',new Blob([bytes]),'isolated.pdf');const response=await fetch(`http://127.0.0.1:${server.address().port}/api/documents`,{method:'POST',body:form});assert.equal(response.status,201,await response.clone().text());return(await response.json()).document;};
@@ -125,8 +127,8 @@ test('migration backups refuse recovery parent links and occupied directories be
   for(const kind of ['recoveries-link','migrations-link','occupied']) {
     const h=await fixture(t),doc=await h.upload();await h.stop();h.database(db=>db.exec('DROP TABLE bookmarks;PRAGMA user_version=4;'));
     const vault=path.join(h.root,'protected-vault');await mkdir(path.join(vault,'.obsidian'),{recursive:true});await writeFile(path.join(vault,'keep.md'),'untouched vault note');
-    if(kind==='recoveries-link')await symlink(vault,path.join(h.dataDir,'recoveries'));
-    if(kind==='migrations-link'){await mkdir(path.join(h.dataDir,'recoveries'));await symlink(vault,path.join(h.dataDir,'recoveries','migrations'));}
+    if(kind==='recoveries-link')await symlink(vault,path.join(h.dataDir,'recoveries'),directoryLinkType);
+    if(kind==='migrations-link'){await mkdir(path.join(h.dataDir,'recoveries'));await symlink(vault,path.join(h.dataDir,'recoveries','migrations'),directoryLinkType);}
     if(kind==='occupied')await writeFile(path.join(h.dataDir,'recoveries'),'ordinary existing file');
     const before=h.database(db=>db.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all());
     assert.throws(()=>createApp({dataDir:h.dataDir}),/真实文件夹|符号链接/);

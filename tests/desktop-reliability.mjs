@@ -2,7 +2,6 @@
 // Run after building dist and preparing Electron; no production data or backups.
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,25 +12,42 @@ import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
 import { LAUNCHER_PROTOCOL, PRODUCT_VERSION } from '../shared/service-identity.mjs';
 import { clearInheritedTestStorage } from '../scripts/test-isolated.mjs';
+import { desktopTestTarget, testEvidenceDirectory, temporaryTestDirectory, removeTestDirectory, closeTestApplication, testShutdownHandlers } from '../scripts/desktop-test-support.mjs';
 
 clearInheritedTestStorage();
 
 const expect = playwrightExpect.configure({ timeout: 10_000 });
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const { values } = parseArgs({ options: { packaged: { type: 'string' } } });
 const appBundle = values.packaged ? path.resolve(values.packaged) : null;
-const artifacts = path.resolve(process.env.PAPERDESK_ACCEPTANCE_DIR || path.join(root, '.local/desktop-reliability'));
-const userData = path.join(artifacts, 'test-profile');
+const { executablePath, appPath: packagedAppPath } = desktopTestTarget(appBundle);
+if (process.env.PAPERDESK_ACCEPTANCE_DIR) testEvidenceDirectory(root, root);
+const temporary = await temporaryTestDirectory('paperdesk-desktop-reliability-');
+const artifacts = testEvidenceDirectory(root, temporary);
+const userData = path.join(temporary, 'test-profile');
 const library = path.join(userData, 'library');
-const executablePath = appBundle ? path.join(appBundle, 'Contents/MacOS/Paperdesk')
-  : process.env.ELECTRON_EXECUTABLE_PATH || createRequire(import.meta.url)('electron');
 const env = { ...process.env, PAPERDESK_DESKTOP_USER_DATA: userData, PAPERDESK_DESKTOP_PORT: '0' };
 delete env.ELECTRON_RUN_AS_NODE;
 const releases = new Set(), rendererErrors = [], automationErrors = [], dialogAcknowledgementRaces = [], networkEvidence = [], mainDialogs = [];
 const summary = { kind: appBundle ? 'real-packaged-electron' : 'real-source-electron', appBundle, startedAt: new Date().toISOString(), artifacts, userData, library,
   backupsCreated: false, groups: [], rendererErrors, automationErrors, dialogAcknowledgementRaces, networkEvidence, mainDialogs, status: 'running' };
-let application, page, base, a, b, annotation, db, runError, preservePriorEvidence = false;
+let application, page, base, a, b, annotation, db, runError, cleanupPromise, preservePriorEvidence = false;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    for (const release of [...releases]) release();
+    if (db) { try { db.exec('DROP TRIGGER IF EXISTS desktop_reliability_position_failure;'); } catch {} db.close(); db = null; }
+    if (application) {
+      await page?.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+      await closeTestApplication(application, userData);
+      application = null;
+    }
+    await removeTestDirectory(temporary, 'paperdesk-desktop-reliability-');
+  })();
+  return cleanupPromise;
+}
+const removeShutdownHandlers = testShutdownHandlers(cleanup);
 
 async function log(message) {
   const line = `${new Date().toISOString()} ${message}`;
@@ -70,7 +86,7 @@ const visible = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.
 const messageCount = () => application.evaluate(() => globalThis.reliabilityDialogs.length);
 
 async function launch() {
-  application = await electron.launch({ executablePath, args: appBundle ? [] : [root], cwd: artifacts, env, chromiumSandbox: true, timeout: 60_000 });
+  application = await electron.launch({ executablePath, args: appBundle ? [] : [root], cwd: temporary, env, chromiumSandbox: true, timeout: 60_000 });
   application.process().stderr?.on('data', bytes => { void appendFile(path.join(artifacts, 'electron-stderr.log'), bytes).catch(() => {}); });
   page = await application.firstWindow();
   page.on('pageerror', error => rendererErrors.push(error.message));
@@ -155,9 +171,11 @@ async function regionModal() {
   if (await toggle.getAttribute('aria-pressed') !== 'true') await toggle.click();
   const bounds = await page.locator('.pdf-paper').boundingBox();
   assert.ok(bounds);
-  await page.mouse.move(bounds.x + bounds.width * .2, bounds.y + bounds.height * .22);
+  // Start outside the existing region annotation, whose overlay deliberately
+  // owns its pointer events. This must create a new region, not click that card.
+  await page.mouse.move(bounds.x + bounds.width * .52, bounds.y + bounds.height * .3);
   await page.mouse.down();
-  await page.mouse.move(bounds.x + bounds.width * .5, bounds.y + bounds.height * .4, { steps: 8 });
+  await page.mouse.move(bounds.x + bounds.width * .8, bounds.y + bounds.height * .45, { steps: 8 });
   await page.mouse.up();
   await page.getByRole('button', { name: '添加区域批注', exact: true }).click();
   return page.getByRole('dialog', { name: /区域批注/ });
@@ -167,14 +185,13 @@ async function assertDraftStored(comment) {
 }
 
 try {
-  if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('This acceptance requires an Apple Silicon Mac.');
   await access(executablePath);
   await mkdir(artifacts, { recursive: true });
-  // Never erase or silently reopen a prior run. Set a fresh acceptance directory
-  // for another run; all original synthetic libraries remain reviewable.
-  try { await access(path.join(library, 'paperdesk.sqlite')); preservePriorEvidence = true; throw new Error(`Existing test library and evidence preserved. Choose a fresh PAPERDESK_ACCEPTANCE_DIR: ${artifacts}`); }
+  // Explicit evidence is review material; never overwrite an existing result.
+  // The actual profile/PDF/database always live in a disposable temporary root.
+  try { await access(path.join(artifacts, 'results.json')); preservePriorEvidence = true; throw new Error(`Existing evidence preserved. Choose an empty PAPERDESK_ACCEPTANCE_DIR: ${artifacts}`); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const aFile = path.join(artifacts, 'original-six-pages.pdf'), bFile = path.join(artifacts, 'original-vector-pages.pdf');
+  const aFile = path.join(temporary, 'original-six-pages.pdf'), bFile = path.join(temporary, 'original-vector-pages.pdf');
   await writeFile(aFile, Buffer.concat([bookmarkedPdf(), Buffer.from(`\n% isolated desktop ${randomUUID()}\n`)]));
   await writeFile(bFile, graphicsOnlyPdf());
 
@@ -185,7 +202,7 @@ try {
       return { node: process.versions.node, electron: process.versions.electron, userData: app.getPath('userData'), appPath: app.getAppPath(),
         sandbox: preferences.sandbox, contextIsolation: preferences.contextIsolation, nodeIntegration: preferences.nodeIntegration };
     });
-    const expectedAppPath = appBundle ? path.join(appBundle, 'Contents/Resources/app') : root;
+    const expectedAppPath = appBundle ? packagedAppPath : root;
     assert.equal(runtime.userData, userData); assert.equal(runtime.appPath.replace(/\/$/, ''), expectedAppPath.replace(/\/$/, ''));
     assert.equal(runtime.sandbox, true); assert.equal(runtime.contextIsolation, true); assert.equal(runtime.nodeIntegration, false);
     assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
@@ -302,7 +319,7 @@ try {
     await screenshot('05-position-coalesced-page4');
   });
 
-  await group('6: real BrowserWindow.close waits for latest page then hides; successful quit/restart retains page', async () => {
+  await group('6: real BrowserWindow.close waits for latest page; successful close/quit and restart retain page', async () => {
     const endpoint = `${base}/api/documents/${a.id}`, hold = gate(), order = [];
     await page.route(endpoint, async route => {
       const body = route.request().method() === 'PATCH' ? route.request().postDataJSON() : null;
@@ -312,12 +329,22 @@ try {
     });
     await page.getByRole('button', { name: '下一页', exact: true }).click(); await bounded(hold.started, 'page 5 held before native close');
     await page.getByRole('button', { name: '下一页', exact: true }).click(); await expect(currentPage(6)).toBeVisible();
+    const origin = base;
+    const closed = process.platform === 'darwin' ? null : application.waitForEvent('close', { timeout: 30_000 });
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
     await page.waitForTimeout(250); assert.equal(await visible(), true); assert.deepEqual(order, [5]);
-    hold.release(); await expect.poll(visible).toBe(false); assert.deepEqual(order, [5, 6]);
-    assert.equal((await document(a.id)).document.lastPage, 6); assert.equal((await api('/health')).ok, true);
-    await page.unroute(endpoint); await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); BrowserWindow.getAllWindows()[0].focus(); });
-    const origin = base; await quit(); delete env.PAPERDESK_DESKTOP_PORT; await launch();
+    hold.release();
+    if (process.platform === 'darwin') {
+      await expect.poll(visible).toBe(false); assert.deepEqual(order, [5, 6]);
+      assert.equal((await document(a.id)).document.lastPage, 6); assert.equal((await api('/health')).ok, true);
+      await page.unroute(endpoint); await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); BrowserWindow.getAllWindows()[0].focus(); });
+      await quit();
+    } else {
+      await closed; application = null;
+      assert.deepEqual(order, [5, 6]);
+      await assert.rejects(fetch(origin + '/api/health', { signal: AbortSignal.timeout(1_000) }));
+    }
+    delete env.PAPERDESK_DESKTOP_PORT; await launch();
     assert.equal(base, origin, 'Restart must reuse the saved test origin'); await expect(currentPage(6)).toBeVisible();
     assert.equal((await document(a.id)).annotations.length, 2);
     assert.equal((await document(a.id)).annotations.find(value => value.id === annotation.id).comment, 'Electron 请求期间继续输入的最新评论');
@@ -413,29 +440,24 @@ try {
   console.error(error.stack || error);
   if (page && !page.isClosed()) await screenshot('failure').catch(() => {});
 } finally {
+  removeShutdownHandlers();
   for (const release of [...releases]) release();
-  if (db) { try { db.exec('DROP TRIGGER IF EXISTS desktop_reliability_position_failure;'); } catch {} db.close(); }
+  if (db) { try { db.exec('DROP TRIGGER IF EXISTS desktop_reliability_position_failure;'); } catch {} db.close(); db = null; }
   if (application) {
     await captureDialogs('cleanup').catch(() => {});
     await page?.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
     try { await quit(); summary.cleanup = 'normal quit'; }
     catch {
-      // Failure cleanup is explicitly limited to this run's isolated instance.
-      // It is not counted as a successful save/quit acceptance result.
-      const child = application?.process();
-      await application?.evaluate(({ app }, profile) => {
-        if (app.getPath('userData') !== profile) throw new Error('Refusing cleanup of another profile');
-        app.exit(0);
-      }, userData).catch(() => {});
-      if (child && child.exitCode === null) child.kill('SIGTERM');
+      await closeTestApplication(application, userData);
+      application = null;
       summary.cleanup = 'forced stop of own test instance after failed acceptance';
     }
   } else summary.cleanup ||= 'all test application instances exited normally';
   summary.finishedAt = new Date().toISOString();
-  if (!preservePriorEvidence) {
+  try { if (!preservePriorEvidence) {
     await mkdir(artifacts, { recursive: true });
     await writeFile(path.join(artifacts, 'results.json'), JSON.stringify(summary, null, 2) + '\n');
-    await log(`RESULT: ${summary.status}; ${summary.groups.filter(item => item.status === 'passed').length}/${summary.groups.length} groups passed; synthetic library retained; no backups created`);
-  }
+    await log(`RESULT: ${summary.status}; ${summary.groups.filter(item => item.status === 'passed').length}/${summary.groups.length} groups passed; synthetic fixtures removed after test; no backups created`);
+  } } finally { await cleanup(); }
 }
 if (runError) process.exitCode = 1;

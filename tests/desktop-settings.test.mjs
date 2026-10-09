@@ -74,3 +74,20 @@ test('vault settings reject a cache inside the vault before writing any settings
   assert.deepEqual(await readdir(vaultDir), ['.obsidian']);
   assert.deepEqual(await readdir(root), ['vault']);
 });
+
+test('Windows vault cache defaults to the roaming application directory outside the source vault', { skip: process.platform !== 'win32' }, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'paperdesk-settings-win-'));
+  const previous = process.env.APPDATA;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const vaultDir = path.join(root, '知识库'), roaming = path.join(root, 'Roaming with spaces');
+  await mkdir(path.join(vaultDir, '.obsidian'), { recursive: true });
+  process.env.APPDATA = roaming;
+  const config = getVaultConfig({ vaultDir });
+  assert.equal(path.dirname(config.dataDir), path.join(roaming, 'Paperdesk', 'vault-cache'));
+  assert.equal(path.relative(vaultDir, config.dataDir).split(path.sep)[0], '..');
+  assert.deepEqual(await readdir(root), ['知识库'], 'Resolving settings must not create the cache or rewrite the source vault');
+});

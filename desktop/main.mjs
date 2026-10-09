@@ -7,9 +7,11 @@ import { readDesktopSettings, writeDesktopSettings } from './settings.mjs';
 import { getVaultConfig } from '../server/vault-config.mjs';
 
 const desktopDir = path.dirname(fileURLToPath(import.meta.url));
+const isMac = process.platform === 'darwin';
 const userData = path.resolve(process.env.PAPERDESK_DESKTOP_USER_DATA || path.join(app.getPath('appData'), 'Paperdesk'));
 app.setName('Paperdesk');
 app.setPath('userData', userData);
+if (process.platform === 'win32') app.setAppUserModelId('com.paperdesk.desktop');
 let runtime, window, ready = false, quitting = false, quitPending = false, switching = false, flushing;
 const pendingFlush = new Map();
 
@@ -121,7 +123,7 @@ function updateMenu() {
   const application = {
     label: 'Paperdesk', submenu: [
       { role: 'about', label: '关于纸间 Paperdesk' },
-      { type: 'separator' }, { role: 'hide', label: '隐藏纸间' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' },
+      ...(isMac ? [{ type: 'separator' }, { role: 'hide', label: '隐藏纸间' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' }] : []),
       { type: 'separator' }, { role: 'quit', label: '退出纸间', accelerator: 'CmdOrCtrl+Q' },
     ],
   };
@@ -130,7 +132,7 @@ function updateMenu() {
     { label: '文件', submenu: [
       { id: 'open-existing-library', label: '打开已有文献库…', click: guard(chooseLibrary) },
       { id: 'open-obsidian-vault', label: '打开 Obsidian 仓库…', click: guard(() => chooseLibrary(true)) },
-      { label: '在 Finder 中显示文献库', click: guard(async () => {
+      { label: isMac ? '在 Finder 中显示文献库' : '在文件资源管理器中打开文献库', click: guard(async () => {
         const error = await shell.openPath(runtime.libraryDir || runtime.dataDir); if (error) throw new Error(error);
       }) },
       { label: '在浏览器中打开', click: guard(() => shell.openExternal(runtime.baseUrl)) },
@@ -138,7 +140,7 @@ function updateMenu() {
     ] },
     { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: '显示', submenu: [{ role: 'togglefullscreen', label: '进入全屏' }] },
-    { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }] },
+    { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, ...(isMac ? [{ type: 'separator' }, { role: 'front' }] : [])] },
   ]));
 }
 
@@ -170,6 +172,10 @@ function createWindow() {
   window.on('close', event => {
     if (quitting) return;
     event.preventDefault();
+    // macOS can restore a hidden window from the Dock. Windows has no tray,
+    // so its close button uses the same save-and-stop handshake as explicit quit.
+    if (!isMac) { void quit(); return; }
+    if (switching || quitPending) return;
     void flushNotes().then(() => window.hide()).catch(error => showError('笔记尚未保存，窗口已保留', error));
   });
   window.webContents.session.on('will-download', (_event, item) => {
@@ -219,7 +225,7 @@ if (!app.requestSingleInstanceLock()) {
     const preferredPort = process.env.PAPERDESK_DESKTOP_PORT === undefined ? (settings?.port || 4317) : Number(process.env.PAPERDESK_DESKTOP_PORT);
     runtime = await startDesktopRuntime({ dataDir, preferredPort, vaultDir: settings?.vaultDir, vaultSubdir: settings?.vaultSubdir });
     await writeDesktopSettings(userData, { dataDir: runtime.dataDir, vaultDir: runtime.vaultDir, vaultSubdir: runtime.vaultSubdir, port: Number(new URL(runtime.baseUrl).port) });
-    app.setAboutPanelOptions({ applicationName: '纸间 Paperdesk', applicationVersion: app.getVersion(), version: 'macOS 桌面预览版', copyright: 'PDF、笔记与批注保存在本机。' });
+    app.setAboutPanelOptions({ applicationName: '纸间 Paperdesk', applicationVersion: app.getVersion(), version: `${isMac ? 'macOS' : 'Windows'} 桌面预览版`, copyright: 'PDF、笔记与批注保存在本机。' });
     updateMenu();
     await createWindow();
   }).catch(async error => {

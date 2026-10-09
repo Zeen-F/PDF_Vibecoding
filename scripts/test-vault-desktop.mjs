@@ -1,48 +1,51 @@
 // Real Electron acceptance with only checked-in PDF fixtures and temporary data.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { _electron as electron, expect as playwrightExpect } from '@playwright/test';
 import { clearInheritedTestStorage } from './test-isolated.mjs';
+import { desktopTestTarget, testEvidenceDirectory, temporaryTestDirectory, removeTestDirectory, closeTestApplication, testShutdownHandlers } from './desktop-test-support.mjs';
 
 clearInheritedTestStorage();
 
 const expect = playwrightExpect.configure({ timeout: 15_000 });
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const { values } = parseArgs({ options: { packaged: { type: 'string' } } });
 const appBundle = values.packaged ? path.resolve(values.packaged) : null;
-if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Desktop acceptance requires an Apple Silicon Mac.');
-const executablePath = appBundle ? path.join(appBundle, 'Contents/MacOS/Paperdesk')
-  : process.env.ELECTRON_EXECUTABLE_PATH || createRequire(import.meta.url)('electron');
+const { executablePath } = desktopTestTarget(appBundle);
 await access(executablePath);
 await access(path.join(root, 'dist/index.html'));
-const artifacts = path.join(root, '.local/verification/bookmarks');
-await mkdir(artifacts, { recursive: true });
-const temporary = await mkdtemp(path.join(tmpdir(), 'paperdesk-vault-desktop-'));
-const userData = path.join(temporary, 'profile'), vaultDir = path.join(temporary, '测试知识库'), cacheHome = path.join(temporary, 'fixture-home');
-await mkdir(path.join(vaultDir, '.obsidian'), { recursive: true });
-await mkdir(cacheHome);
-const canonicalVault = await realpath(vaultDir), canonicalTemporary = await realpath(temporary);
 const sample = path.join(root, 'public/examples/reading-demo.pdf');
 const original = await readFile(sample), hash = bytes => createHash('sha256').update(bytes).digest('hex');
+if (process.env.PAPERDESK_ACCEPTANCE_DIR) testEvidenceDirectory(root, root);
+const temporary = await temporaryTestDirectory('paperdesk-vault-desktop-');
+const artifacts = testEvidenceDirectory(root, temporary);
+const userData = path.join(temporary, 'profile'), vaultDir = path.join(temporary, '测试知识库'), cacheHome = path.join(temporary, 'fixture-home');
 const sourceRelative = '原有资料/阅读 #示例.pdf';
-const sourcePdf = path.join(canonicalVault, ...sourceRelative.split('/'));
-await mkdir(path.dirname(sourcePdf), { recursive: true });
-await writeFile(sourcePdf, original);
+let canonicalVault, canonicalTemporary, sourcePdf;
 const externalPdf = path.join(temporary, '外部导入.pdf');
 const externalBytes = Buffer.concat([original, Buffer.from('\n% isolated external import fixture\n')]);
-await writeFile(externalPdf, externalBytes);
 const label = appBundle ? 'packaged' : 'source';
 const env = { ...process.env, PAPERDESK_DESKTOP_USER_DATA: userData, PAPERDESK_DESKTOP_PORT: '0' };
+// Windows vault defaults use APPDATA before homedir. Keep even the default
+// cache-location branch entirely inside this disposable synthetic fixture.
+if (process.platform === 'win32') env.APPDATA = cacheHome;
 delete env.ELECTRON_RUN_AS_NODE;
 const rendererErrors = [], checks = [];
-let application, page, baseUrl, runError;
+let application, page, baseUrl, runError, cleanupPromise;
 const summary = { kind: `${label}-electron-obsidian-vault`, checks, rendererErrors, status: 'running' };
+
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    await closeTestApplication(application, userData);
+    await removeTestDirectory(temporary, 'paperdesk-vault-desktop-');
+  })();
+  return cleanupPromise;
+}
+const removeShutdownHandlers = testShutdownHandlers(cleanup);
 
 async function record(message) { checks.push(message); console.log(`PASS: ${message}`); }
 async function request(endpoint) {
@@ -86,8 +89,8 @@ async function importPdf(file = sample, expectedStatus = 201) {
 async function selectVaultPdf() {
   const sourceChoice = page.getByRole('button', { name: `打开 Obsidian PDF：${sourceRelative}`, exact: true });
   await expect(sourceChoice).toBeVisible();
-  await expect(sourceChoice).toContainText(path.basename(sourceRelative));
-  await expect(sourceChoice).toContainText(path.dirname(sourceRelative));
+  await expect(sourceChoice).toContainText(path.posix.basename(sourceRelative));
+  await expect(sourceChoice).toContainText(path.posix.dirname(sourceRelative));
   assert.equal((await request('/documents')).documents.length, 0, 'Listing existing PDFs must not associate them');
   assert.deepEqual(await managedPdfCopies(), []);
   await page.screenshot({ path: path.join(artifacts, `${label}-sidebar.png`) });
@@ -172,6 +175,14 @@ async function quit() {
 }
 
 try {
+  await mkdir(artifacts, { recursive: true });
+  await mkdir(path.join(vaultDir, '.obsidian'), { recursive: true });
+  await mkdir(cacheHome);
+  canonicalVault = await realpath(vaultDir); canonicalTemporary = await realpath(temporary);
+  sourcePdf = path.join(canonicalVault, ...sourceRelative.split('/'));
+  await mkdir(path.dirname(sourcePdf), { recursive: true });
+  await writeFile(sourcePdf, original);
+  await writeFile(externalPdf, externalBytes);
   await launch();
   assert.equal((await request('/storage')).mode, 'library');
   assert.equal((await request('/documents')).documents.length, 0);
@@ -314,8 +325,8 @@ try {
     await page?.screenshot({ path: path.join(artifacts, `${label}-failed.png`) }).catch(() => {});
   }
 } finally {
-  if (application) await application.close().catch(() => application.process().kill('SIGKILL'));
-  await writeFile(path.join(artifacts, `${label}-summary.json`), JSON.stringify(summary, null, 2) + '\n');
-  await rm(temporary, { recursive: true, force: true });
+  removeShutdownHandlers();
+  try { await writeFile(path.join(artifacts, `${label}-summary.json`), JSON.stringify(summary, null, 2) + '\n'); }
+  finally { await cleanup(); }
 }
 if (runError) throw runError;

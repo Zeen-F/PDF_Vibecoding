@@ -1,8 +1,6 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { pdfAssetPaths } from '../shared/pdf-assets.mjs';
 
-const pdfPackageDir = fileURLToPath(new URL('../node_modules/pdfjs-dist/', import.meta.url));
 const MAX_DEPTH = 12;
 const MAX_ENTRIES = 2000;
 const MAX_TITLE = 500;
@@ -232,9 +230,8 @@ export async function extractToc(input, { getPageTexts = () => [] } = {}) {
     : { data: new Uint8Array(input) };
   const task = getDocument({
     ...source, isEvalSupported: false, disableFontFace: true,
-    useSystemFonts: false, useWorkerFetch: false, cMapUrl: `${path.join(pdfPackageDir, 'cmaps')}${path.sep}`,
-    cMapPacked: true, standardFontDataUrl: `${path.join(pdfPackageDir, 'standard_fonts')}${path.sep}`,
-    wasmUrl: `${path.join(pdfPackageDir, 'wasm')}${path.sep}`, stopAtErrors: true, verbosity: 0,
+    useSystemFonts: false, useWorkerFetch: false, ...pdfAssetPaths,
+    cMapPacked: true, stopAtErrors: true, verbosity: 0,
   });
   try {
     const pdf = await task.promise;

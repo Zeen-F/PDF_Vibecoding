@@ -51,7 +51,7 @@ export async function ensureReaderRuntime(rawProfile) {
   let child;
   try {
     child = spawn(process.execPath, [join(workspaceRoot, 'server', 'index.mjs')], {
-      cwd: workspaceRoot, detached: true, stdio: ['ignore', log.fd, log.fd],
+      cwd: workspaceRoot, detached: true, stdio: ['ignore', log.fd, log.fd], windowsHide: true,
       env: { ...process.env, PORT: '4317', PAPERDESK_DATA_DIR: dataDir },
     });
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });

@@ -1,10 +1,10 @@
 # 纸间 Paperdesk 桌面预览版
 
-**1.2.0-beta.1** 桌面预览版面向 **Apple Silicon Mac（M 系列芯片）**。安装包带有运行环境，使用者无需安装 Node.js、开发工具或启动终端。Intel Mac 和 Windows 安装包不在本版范围内。
+**1.2.0-beta.2** 桌面预览包面向 **Apple Silicon Mac（M 系列芯片）和 Windows x64**。Windows 使用解压即用 ZIP，使用及开发方法见 [Windows 指南](windows.md)。安装包带有运行环境，使用者无需安装 Node.js、开发工具或启动终端。
 
 桌面版保留 PDF 导入、阅读、检索、文件夹、批注、笔记和 Markdown 导出，并增加 Obsidian 仓库与个人页面书签。应用在本机启动阅读服务，仅监听 `127.0.0.1`，退出时正常结束它管理的服务。
 
-关闭窗口会先等待笔记和阅读位置保存，再隐藏窗口；点击 Dock 图标可重新显示。使用 **⌘Q／退出纸间** 才退出应用并停止它管理的服务。保存失败时保留窗口与草稿；切换文献库和退出的保存过程中暂时锁定编辑，避免后续输入落到错误的文献库。
+macOS 关闭窗口会先等待笔记和阅读位置保存，再隐藏窗口；点击 Dock 图标可重新显示。使用 **⌘Q／退出纸间** 才退出应用并停止它管理的服务。Windows 关闭按钮等待保存后直接退出并停止本次服务。保存失败时保留窗口与草稿；切换文献库和退出的保存过程中暂时锁定编辑，避免后续输入落到错误的文献库。
 
 ## 本版的仓库与书签
 
@@ -14,11 +14,12 @@
 
 ## 下载与安装
 
-在 [1.2.0-beta.1 Release](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.1) 中下载：
+在 [1.2.0-beta.2 Release](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.2) 中下载：
 
 - `Paperdesk-<版本>-mac-arm64.dmg`：推荐安装包。打开后将 **Paperdesk** 拖入“应用程序”，再从“应用程序”打开。
 - `Paperdesk-<版本>-mac-arm64.zip`：解压后将 **Paperdesk.app** 放入“应用程序”。
 - `SHA256SUMS`：两种安装包的 SHA-256 校验值，用于核对下载文件。
+- `Paperdesk-<版本>-win-x64.zip`：Windows 完整解压后打开 `Paperdesk.exe`，使用 `SHA256SUMS-win` 校验。包未签名；按系统提示核对来源。
 
 本项目公开发布源码与预览安装包；下载文件后可使用 `SHA256SUMS` 核对内容。
 
@@ -26,7 +27,7 @@
 
 ## 文献库与原始资料
 
-桌面版默认使用稳定的用户数据目录中的独立文献库，位于 `~/Library/Application Support/Paperdesk/library/`，与“应用程序”中的程序文件分开。卸载或替换应用不会自动删除这份文献库。应用设置记住所选文献库目录，重新打开时恢复。
+桌面版默认使用稳定的用户数据目录中的独立文献库：Mac 位于 `~/Library/Application Support/Paperdesk/library/`，Windows 位于 `%APPDATA%/Paperdesk/library/`，与应用程序文件分开。卸载或替换应用不会自动删除这份文献库。应用设置记住所选文献库目录，重新打开时恢复。
 
 已有源码版资料不会被自动搬迁。若要继续使用，先**正常停止原来的阅读服务**，再从应用菜单选择“打开已有文献库…”，选中同时包含 `paperdesk.sqlite` 和 `pdfs/` 的完整 schema 4／5 文献库目录。schema 4 库在启动时备份并升级，schema 3 或更早库的操作顺序见下文。运行中的 SQLite 可能还有未归并的 WAL 保存记录；校验会拒绝这种状态，请正常结束原服务后重试。
 
@@ -41,6 +42,8 @@
 桌面设置和文献库路径保存在本机，不进入 Git 或安装包。安装包只包含运行代码、界面、依赖及原创阅读示例，不包含 `data/`、`.local/`、数据库、个人 PDF、笔记、截图、环境变量或密钥。
 
 ## 升级到 1.2.0-beta.1
+
+以下是首次进入 schema 5 的升级说明，beta.2 继续适用。从 beta.1 更新到 beta.2 不再增加数据库版本。
 
 本版使用 **schema 5**，增加个人页面书签。旧数据库在任何建表或改表之前，通过 SQLite 在线一致性机制备份到数据目录的 `recoveries/migrations/`，并读回检查完整性和原版本；备份包含已提交的 WAL 内容，失败则停止升级。随后迁移在同一事务中完成，失败回滚，原有文献和 PDF 保留。
 
@@ -99,15 +102,15 @@ npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app
 PAPERDESK_ACCEPTANCE_DIR=.local/beta1-verification/packaged-release npm run test:desktop:reliability -- --packaged release/mac-arm64/Paperdesk.app
 node scripts/test-vault-desktop.mjs --packaged release/mac-arm64/Paperdesk.app
 npm run browser:dist
-node scripts/test-browser-release.mjs --archive release/Paperdesk-1.2.0-beta.1-browser.zip
+node scripts/test-browser-release.mjs --archive release/Paperdesk-1.2.0-beta.2-browser.zip
 npm run release:checksums
 ```
 
 `npm run desktop` 用于从源码启动桌面窗口；`npm run desktop:pack` 只生成可用于检查的 `.app`；`npm run desktop:dist` 在 `release/` 生成 `.app`、DMG 和 ZIP。原创图标源为 `desktop/icon.svg`，生成的 PNG、ICNS 位于忽略的 `.local/desktop-assets/`。生产依赖随应用打包，开发依赖不进入安装包。
 
-发布前须用隔离文献库检查安装包启动、PDF 导入及渲染、笔记和批注保存、退出与重开，并对源码和打包应用运行四项可靠性回归、Obsidian 原位／外部导入及书签流程。DMG 还需挂载、复制应用到隔离安装目录后实际启动检查，浏览器 ZIP 需在独立解压目录安装依赖、停止和重启读回；同时确认包内不存在私人资料。不要使用正式文献库做自动回归。每轮使用新的可靠性证据目录；上述 `.local/beta1-verification/` 子目录若已存在，重跑时改用新的子目录名，不复用已有测试库。检查结果、日志和截图后停止测试进程并清理合成库、安装副本与缓存；保留可追溯的验收摘要和校验值。安装包检查通过后，`release:checksums` 只为当前版本的 DMG 和 ZIP 写入 `SHA256SUMS`，不会收录应用目录或更新元数据。
+发布前须用隔离文献库检查安装包启动、PDF 导入及渲染、笔记和批注保存、退出与重开，并对源码和打包应用运行四项可靠性回归、Obsidian 原位／外部导入及书签流程。DMG 还需挂载、复制应用到隔离安装目录后实际启动检查，浏览器 ZIP 需在独立解压目录安装依赖、停止和重启读回；同时确认包内不存在私人资料。不要使用正式文献库做自动回归。测试库和配置默认放临时目录并清理，需要留证时才指定 `.local/` 内专用证据目录，保留一份当前摘要和必要截图，不累计多轮合成库和安装副本。安装包检查通过后，macOS 的 `release:checksums` 为当前 DMG／ZIP 写入 `SHA256SUMS`；Windows 为当前 portable EXE 写入 `SHA256SUMS-win`。两者均不收录应用目录或更新元数据。
 
-GitHub Actions 的 **macOS preview release** 工作流运行在 `macos-15` arm64 环境。手动运行只检查和构建，将通过检查的安装包保存为工作流产物。推送与 `package.json` 一致的 `v<版本>` 标签时，全部检查和安装包测试通过后才创建 **Draft / Prerelease**，上传桌面安装包、浏览器 ZIP 及各自的校验文件；失败时不创建 Release。现有同名 Release 不自动覆盖。维护者检查安装说明、版本变化与产物后，再手动将草稿发布。
+GitHub Actions 的 **Desktop preview release** 工作流分别在 `macos-15` arm64 和 `windows-latest` x64 上执行。手动运行默认只检查和构建；在 `main` 上启用 `create_draft` 时，所有验证通过后才为本次提交创建版本标签和发布草稿。Mac 验收 DMG 挂载后复制出的应用，Windows 验收 ZIP 解压出的应用，两者均使用隔离文献库并检查包内私人资料。已有 `v<版本>` 标签也可触发相同流程，标签必须匹配 `package.json`。两个平台全部检查通过后，统一下载产物并核对校验值，再创建 **Draft / Prerelease**。任一平台失败时不创建发布草稿；现有标签不移动，同名 Release 不覆盖。维护者核对产物和说明后发布草稿。
 
 另行提供带构建界面的 [本机浏览器 ZIP](browser-release.md)，需要 Node.js 24+。项目已按用户选择采用 [MIT 许可证](../LICENSE)；历史已发布桌面包的许可证作为 Release 的独立附件提供，后续桌面构建包含许可证正文。
 

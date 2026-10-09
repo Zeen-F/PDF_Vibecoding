@@ -100,7 +100,7 @@ test('unconfigured, invalid settings, missing credentials and foreign origins ca
   const privacy = await lib.request(configUrl); assert.equal(privacy.headers.get('cache-control'), 'no-store');
 });
 
-test('Baidu POST signing uses the raw UTF-8 query, a fresh salt and form encoding; cache and private permissions survive restart', async t => {
+test('Baidu POST signing uses the raw UTF-8 query, a fresh salt and form encoding; cache and POSIX private permissions survive restart', async t => {
   const lib = await fixture(t); await lib.configure();
   const text = '电路 Ω🧪 + & = 10%\nline two';
   const result = await lib.translate(text, { from: 'en', to: 'zh' });
@@ -118,9 +118,12 @@ test('Baidu POST signing uses the raw UTF-8 query, a fresh salt and form encodin
   const replay = await lib.translate(text, { from: 'en', to: 'zh' }); assert.equal(replay.translation.cached, true); assert.equal(lib.calls.length, 1);
   const used = replay.settings.usedCharacters;
   for (const file of ['translation.sqlite', 'translation.sqlite-wal', 'translation.sqlite-shm']) {
-    const info = await stat(path.join(lib.dataDir, file)); assert.equal(info.mode & 0o777, 0o600);
+    const info = await stat(path.join(lib.dataDir, file));
+    assert.ok(info.isFile());
+    if (process.platform !== 'win32') assert.equal(info.mode & 0o777, 0o600);
   }
-  assert.equal((await stat(lib.dataDir)).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') assert.equal((await stat(lib.dataDir)).mode & 0o777, 0o700);
+  else t.diagnostic('POSIX mode bits do not verify Windows ACLs; cache persistence is checked separately.');
   await lib.restart();
   const resumed = await lib.translate(text, { from: 'en', to: 'zh' }); assert.equal(resumed.translation.cached, true); assert.equal(resumed.settings.usedCharacters, used);
   assert.equal(lib.calls.length, 1);
@@ -157,8 +160,10 @@ test('Unicode point and byte bounds never truncate; budget reservations serializ
   await lib.translate('next month'); assert.equal((await lib.json(configUrl)).settings.usedCharacters, 10);
 });
 
-test('failures, provider errors and timeouts remain charged with safe messages and no automatic retries', async t => {
-  const lib = await fixture(t, { timeoutMs: 70 }); await lib.configure();
+test('failures and provider errors remain charged with safe messages and no automatic retries', async t => {
+  // Error classification must not race a 70 ms wall-clock deadline while other
+  // test files perform PDF rendering or disk I/O. Exercise expiration separately.
+  const lib = await fixture(t); await lib.configure();
   const secretText = 'PRIVATE_SOURCE_FOR_FAILURE';
   const output = [], originalError = console.error;
   console.error = (...values) => output.push(values.join(' ')); t.after(() => { console.error = originalError; });
@@ -170,13 +175,22 @@ test('failures, provider errors and timeouts remain charged with safe messages a
   await rejected(await lib.request(translateUrl, 'POST', { text: 'third' }), 502, [KEY, APP_ID]);
   lib.setHandler(() => new Response(KEY + APP_ID, { status: 500 }));
   await rejected(await lib.request(translateUrl, 'POST', { text: 'fourth' }), 502, [KEY, APP_ID]);
-  lib.setHandler(() => new Promise(() => {}));
-  await rejected(await lib.request(translateUrl, 'POST', { text: 'timeout' }), 504, [KEY, APP_ID]);
-  assert.equal(lib.calls.length, 5); assert.equal(lib.calls.at(-1).options.signal.aborted, true);
-  assert.equal((await lib.json(configUrl)).settings.usedCharacters, secretText.length + 6 + 5 + 6 + 7);
+  assert.equal(lib.calls.length, 4);
+  assert.equal((await lib.json(configUrl)).settings.usedCharacters, secretText.length + 6 + 5 + 6);
   assert.equal(readSidecar(lib, db => db.prepare('SELECT COUNT(*) AS n FROM cache').get().n), 0);
   assert.ok(output.every(line => !line.includes(KEY) && !line.includes(APP_ID) && !line.includes(secretText)));
-  await lib.restart(); assert.equal((await lib.json(configUrl)).settings.usedCharacters, secretText.length + 24);
+  await lib.restart(); assert.equal((await lib.json(configUrl)).settings.usedCharacters, secretText.length + 17);
+});
+
+test('a stalled provider expires, remains charged and never retries or fills the cache', async t => {
+  const lib = await fixture(t, { timeoutMs: 1000 }); await lib.configure();
+  lib.setHandler(() => new Promise(() => {}));
+  await rejected(await lib.request(translateUrl, 'POST', { text: 'timeout' }), 504, [KEY, APP_ID]);
+  assert.equal(lib.calls.length, 1);
+  assert.equal(lib.calls[0].options.signal.aborted, true);
+  assert.equal((await lib.json(configUrl)).settings.usedCharacters, 7);
+  assert.equal(readSidecar(lib, db => db.prepare('SELECT COUNT(*) AS n FROM cache').get().n), 0);
+  await lib.restart(); assert.equal((await lib.json(configUrl)).settings.usedCharacters, 7);
 });
 
 test('queued requests expire without late sends, account changes cannot switch a waiting request, and shutdown is bounded', async t => {

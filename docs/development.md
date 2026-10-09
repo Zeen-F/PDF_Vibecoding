@@ -20,6 +20,7 @@ VS Code 或兼容编辑器可打开根目录的 `PDF_Vibecoding.code-workspace`�
 | 开发 | `npm run dev` | `http://127.0.0.1:5173` | `.local/dev-data/` |
 | 日常使用 | `npm run build` 后 `npm start` | `http://127.0.0.1:4317` | `data/` |
 | Mac 日常使用 | 双击 `启动纸间.command` | `http://127.0.0.1:4317` | `data/` |
+| Windows 日常使用 | 双击 `启动纸间.cmd` | `http://127.0.0.1:4317` | `data/` |
 
 开发命令同时管理 Vite 界面和 4318 端口上的 API，结束时按 Control+C。界面固定使用严格端口 5173，冲突时停止并提示。不要为了消除报错随意终止不明进程。
 
@@ -27,22 +28,22 @@ VS Code 或兼容编辑器可打开根目录的 `PDF_Vibecoding.code-workspace`�
 | --- | --- | --- |
 | `DEV_API_PORT` | `npm run dev` | 修改开发 API 端口，默认 4318 |
 | `DEV_DATA_DIR` | `npm run dev` | 修改开发文献库，默认 `.local/dev-data/` |
-| `PORT` | `npm start` / Mac 启动器 | 修改日常使用端口，默认 4317 |
-| `PAPERDESK_DATA_DIR` | `npm start` / Mac 启动器 | 独立文献库目录，默认 `data/`；仓库模式用于库外索引和翻译设置 |
+| `PORT` | `npm start` / Mac、Windows 启动器 | 修改日常使用端口，默认 4317 |
+| `PAPERDESK_DATA_DIR` | `npm start` / Mac、Windows 启动器 | 独立文献库目录，默认 `data/`；仓库模式用于库外索引和翻译设置 |
 | `PAPERDESK_VAULT_DIR` | `npm start` | 连接已存在的 Obsidian 知识库根目录；省略时使用独立文献库 |
 | `PAPERDESK_VAULT_SUBDIR` | `npm start` | 仓库内单层管理文件夹名，默认 `Paperdesk` |
 
 `npm run dev` 使用独立的 `DEV_DATA_DIR`，不沿用生产 `PAPERDESK_DATA_DIR`，并清除继承的 `PAPERDESK_VAULT_DIR`／`PAPERDESK_VAULT_SUBDIR`，避免关联正式知识库。检查仓库模式时使用隔离的合成知识库，按 [仓库模式说明](obsidian-vault.md#源码浏览器版) 显式启动。自定义数据目录应位于项目的忽略目录或仓库外，不能放在 `src/`、`public/`、`dist/` 等源码或静态资源位置；仓库模式的缓存也必须位于整个知识库之外。按启动输出访问对应地址。
 
-Mac 启动器会在缺少依赖或构建产物时准备运行；已有 `dist/` 时不会自动判断源码是否更新，因此修改代码后应重新 `npm run build`。已有服务只有在库身份、产品版本、启动协议与健康状态均匹配时才复用；旧服务缺少身份协议、不同库或非纸间服务会明确拒绝。服务启动先占用本机端口，再打开数据库，避免绑定竞争先迁移目标库。跨平台入口为 npm 命令；Mac 的一键启动脚本不代表 Windows/Linux 已完成验收。
+Mac 和 Windows 启动器会在缺少依赖或构建产物时准备运行；已有 `dist/` 时不会自动判断源码是否更新，因此修改代码后应重新构建。已有服务只有在库身份、产品版本、启动协议与健康状态均匹配时才复用；旧服务缺少身份协议、不同库或非纸间服务会明确拒绝。服务启动先占用本机端口，再打开数据库，避免绑定竞争先迁移目标库。Windows 的 PowerShell 使用 `npm.cmd` / `npx.cmd`，无需放宽执行策略；桌面打包入口和资料位置见 [Windows 指南](windows.md)。
 
 ## 检查
 
-1.2.0-beta.1 包含 Obsidian 仓库与个人页面书签。API 回归覆盖旧库在 DDL 前的一致性备份、schema 5 迁移、书签 CRUD／版本冲突、原位 PDF／外部导入、正式 v1／v2／v3 Markdown 兼容及索引重建；浏览器回归覆盖两种存储模式的添加、命名、跳转、草稿保护及迟到响应。`node scripts/test-vault-desktop.mjs` 另外检查真实 Electron 的仓库、外部导入、书签保存、正常退出和重开跳转；打包后追加 `--packaged <Paperdesk.app路径>`。所有资料均使用隔离临时库，证据位于忽略的 `.local/`。这些是检查范围，实际执行结果单独记录在 [本版变更记录](history/1.2.0-beta.1.md)。
+1.2.0-beta.1 包含 Obsidian 仓库与个人页面书签。API 回归覆盖旧库在 DDL 前的一致性备份、schema 5 迁移、书签 CRUD／版本冲突、原位 PDF／外部导入、正式 v1／v2／v3 Markdown 兼容及索引重建；浏览器回归覆盖两种存储模式的添加、命名、跳转、草稿保护及迟到响应。`node scripts/test-vault-desktop.mjs` 另外检查真实 Electron 的仓库、外部导入、书签保存、正常退出和重开跳转；打包后追加 `--packaged <应用路径>`。所有资料均使用隔离临时库，默认结束后清理；仅需留证时通过 `PAPERDESK_ACCEPTANCE_DIR` 指定忽略的 `.local/` 内专用目录。以上是检查范围，[本版变更记录](history/1.2.0-beta.1.md) 保留原发布验收结果，当前 Windows 检查另记在本机摘要中。
 
 macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run desktop:dist` 生成，`npm run test:desktop` 检查独立窗口；打包后运行 `npm run test:desktop -- --packaged release/mac-arm64/Paperdesk.app` 再验收。所有桌面测试使用临时用户设置和文献库。构建与发布顺序见 [桌面预览版](desktop-release.md)。
 
-四项可靠性修复另用 `npm run test:desktop:reliability` 验证真实 Electron 的评论草稿、响应丢失重试、阅读位置保存及关闭／退出保护。每轮指定新的 `PAPERDESK_ACCEPTANCE_DIR`（例如 `.local/beta1-verification/source-run-1`）；已有测试库和证据会被保留并拒绝复用。安装包使用同一命令追加 `-- --packaged <Paperdesk.app路径>`，同时指定另一证据目录。这项测试会在隔离库注入保存故障和受控异常退出，保留结果与截图；异常退出前已刷新浏览器存储，不能据此声称断电恢复。主动测试刷新只批准当次页面卸载，原生关闭和退出仍使用产品实际保存确认流程。
+四项可靠性修复另用 `npm run test:desktop:reliability` 验证真实 Electron 的评论草稿、响应丢失重试、阅读位置保存及关闭／退出保护。测试库、配置和截图默认置于临时目录并在结束时清理；仅需留证时指定 `PAPERDESK_ACCEPTANCE_DIR` 到 `.local/` 内专用目录，保留必要截图和摘要，合成库仍清理。安装包使用同一命令追加 `-- --packaged <应用路径>`，Windows 可指定 `release/win-unpacked/Paperdesk.exe`。这项测试会在隔离库注入保存故障和受控异常退出；异常退出前已刷新浏览器存储，不能据此声称断电恢复。主动测试刷新只批准当次页面卸载，原生关闭和退出仍使用产品实际保存确认流程。
 
 | 命令 | 范围 |
 | --- | --- |
@@ -50,9 +51,9 @@ macOS Apple Silicon 桌面开发使用 `npm run desktop`。安装包由 `npm run
 | `npm run build` | 准备本地 PDF 资源并构建生产界面 |
 | `npm run test:browser` | Chromium 浏览器回归；需要已有生产构建 |
 | `npm run check` | 依次执行 API 测试、生产构建和浏览器回归 |
-| `npm run test:desktop` | 真实 Electron 基础流程；使用 `-- --packaged <Paperdesk.app路径>` 检查打包应用 |
-| `npm run test:desktop:reliability` | 四项可靠性回归；每轮设置新的 `PAPERDESK_ACCEPTANCE_DIR`，打包应用追加 `-- --packaged <Paperdesk.app路径>` |
-| `node scripts/test-vault-desktop.mjs` | 真实 Electron 的 Obsidian 原位 PDF、外部导入和个人书签；打包应用追加 `--packaged <Paperdesk.app路径>` |
+| `npm run test:desktop` | 真实 Electron 基础流程；使用 `-- --packaged <应用路径>` 检查打包应用 |
+| `npm run test:desktop:reliability` | 四项可靠性回归；默认清理临时资料，需要保留证据时才设置 `PAPERDESK_ACCEPTANCE_DIR`；打包应用追加 `-- --packaged <应用路径>` |
+| `node scripts/test-vault-desktop.mjs` | 真实 Electron 的 Obsidian 原位 PDF、外部导入和个人书签；打包应用追加 `--packaged <应用路径>` |
 | `npm run browser:dist` | 构建带生产界面的本机浏览器 ZIP，并生成独立校验文件；见 [浏览器发布包](browser-release.md) |
 | `npm run plugin:setup` | 核对当前阅读服务，绑定仓库外的本机插件配置 |
 | `npm run plugin:install` | 完成绑定并向本机 Codex 安装/启用 Paperdesk 插件 |
@@ -104,7 +105,7 @@ schema 3 增加文件夹、可空文献归属和皮肤偏好，包含旧版批�
 
 ## 本机验收材料与清理
 
-测试资料、安装副本、运行日志和截图集中放入忽略的 `.local/`；每轮注明版本或提交、测试入口、实际结果和未验证范围，不把私人路径、文献或密钥写入公开验收文档。测试结束后先确认应用及测试服务已停止，再整理材料。
+临时测试资料、配置、运行日志和截图默认在系统临时目录，成功、失败与正常中断都关闭本次进程并清理。明确留证时才指定忽略的 `.local/` 目录；摘要注明版本或提交、测试入口、实际结果和未验证范围，不把私人路径、文献或密钥写入公开验收文档。测试结束后先确认应用及测试服务已停止，再整理材料。
 
 - 保留当前发布包、校验值和足以复查结果的摘要、日志／必要截图；可再生成的解包应用、浏览器安装副本、合成文献库和测试缓存应清理。
 - 不把测试证据目录当作长期文献库或自动备份目录。清理前核对目录用途和内容，保护正式 `data/`、开发中尚未提交的源码和原始资料。

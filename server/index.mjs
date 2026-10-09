@@ -30,7 +30,7 @@ server.listen(port, '127.0.0.1', async () => {
 server.on('error', async (error) => {
   console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被占用。请关闭其他实例，或设置 PORT 后重试。` : error.message);
   process.exitCode = 1;
-  await application?.close();
+  shutdown();
 });
 function shutdown() {
   if (stopping) return;
@@ -40,3 +40,9 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+// Windows cannot deliver POSIX signals gracefully to a child Node process.
+// Only the owning local parent has this IPC channel; no shutdown API is exposed.
+if (process.send) {
+  process.on('message', message => { if (message?.type === 'paperdesk-shutdown') shutdown(); });
+  process.on('disconnect', shutdown);
+}

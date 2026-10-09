@@ -12,6 +12,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createVaultStore } from '../server/vault-store.mjs';
 import { CURRENT_SCHEMA } from '../shared/library.mjs';
 import { legacyVaultMarkdown } from './fixtures/vault-legacy.mjs';
+import { directoryLinkType, fileSymlinkSkipReason } from './fixtures/filesystem-links.mjs';
 
 const sample = await readFile(new URL('../public/examples/reading-demo.pdf',import.meta.url));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -19,8 +20,6 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 async function harness(t) {
   const root = await mkdtemp(path.join(tmpdir(),'paperdesk-vault-api-'));
   let vaultDir = path.join(root,'知识库'); const dataDir = path.join(root,'cache');
-  await mkdir(path.join(vaultDir,'.obsidian'),{recursive:true});
-  vaultDir = await realpath(vaultDir);
   let app,server;
   const start = async () => {
     app = createApp({vaultDir,dataDir}); await app.ready;
@@ -30,8 +29,10 @@ async function harness(t) {
     server?.closeAllConnections(); if(server) await new Promise(resolve=>server.close(resolve));
     if(app) await app.close(); server=app=null;
   };
+  t.after(async()=>{try{await stop();}finally{await rm(root,{recursive:true,force:true});}});
+  await mkdir(path.join(vaultDir,'.obsidian'),{recursive:true});
+  vaultDir = await realpath(vaultDir);
   await start();
-  t.after(async()=>{await stop();await rm(root,{recursive:true,force:true});});
   const request = (url,method='GET',body,headers={}) => fetch(`http://127.0.0.1:${server.address().port}/api${url}`,{
     method,headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:JSON.stringify(body),
   });
@@ -220,11 +221,11 @@ test('original nested PDF selection renders file/TOC/plugin PNG without making c
   response=await h.request(`/documents/${doc.id}/file`);assert.equal(response.status,200);assert.equal(hash(Buffer.from(await response.arrayBuffer())),hash(sample));
 });
 
-test('selection rejects traversal, symlinks, hidden and malformed source files',async t=>{
-  const h=await harness(t),outside=path.join(h.root,'outside.pdf');await writeFile(outside,sample);await symlink(outside,path.join(h.vaultDir,'linked.pdf'));
-  const outsideDir=path.join(h.root,'outside-dir');await mkdir(outsideDir);await writeFile(path.join(outsideDir,'source.pdf'),sample);await symlink(outsideDir,path.join(h.vaultDir,'linked-dir'));
+test('selection rejects traversal, linked directories, hidden and malformed source files',async t=>{
+  const h=await harness(t),outside=path.join(h.root,'outside.pdf');await writeFile(outside,sample);
+  const outsideDir=path.join(h.root,'outside-dir');await mkdir(outsideDir);await writeFile(path.join(outsideDir,'source.pdf'),sample);await symlink(outsideDir,path.join(h.vaultDir,'linked-dir'),directoryLinkType);
   await writeFile(path.join(h.vaultDir,'.hidden.pdf'),sample);await writeFile(path.join(h.vaultDir,'invalid.pdf'),'invalid PDF bytes');
-  for(const relative of ['../outside.pdf',outside,'C:/outside.pdf','linked.pdf','linked-dir/source.pdf','.hidden.pdf','.obsidian/secret.pdf','dir//x.pdf','dir\\x.pdf','invalid.pdf','missing.pdf']){
+  for(const relative of ['../outside.pdf',outside,'C:/outside.pdf','linked-dir/source.pdf','.hidden.pdf','.obsidian/secret.pdf','dir//x.pdf','dir\\x.pdf','invalid.pdf','missing.pdf']){
     const response=await h.request('/vault/pdfs/open','POST',{path:relative});assert.equal(response.status,409,relative);
     const failure=await response.json();assert.equal(failure.conflictPreserved,undefined);assert.ok(!JSON.stringify(failure).includes(h.root));
   }
@@ -232,6 +233,14 @@ test('selection rejects traversal, symlinks, hidden and malformed source files',
   const listed=(await(await h.request('/vault/pdfs')).json()).files;assert.deepEqual(listed.map(item=>item.path),['invalid.pdf']);
   const response=await h.request('/documents','POST');assert.equal(response.status,400);assert.match((await response.json()).error,/请选择一个 PDF/);
   const cache=await readdir(h.dataDir,{recursive:true});assert.ok(!cache.some(item=>item.endsWith('.pdf')),'Failed opening cannot leave parsed PDF snapshots');
+});
+
+test('selection rejects a real PDF file symlink without modifying its target', { skip: fileSymlinkSkipReason() }, async t=>{
+  const h=await harness(t),outside=path.join(h.root,'outside.pdf');await writeFile(outside,sample);
+  await symlink(outside,path.join(h.vaultDir,'linked.pdf'),'file');
+  const response=await h.request('/vault/pdfs/open','POST',{path:'linked.pdf'});
+  assert.equal(response.status,409);const failure=await response.json();assert.equal(failure.conflictPreserved,undefined);assert.ok(!JSON.stringify(failure).includes(h.root));
+  assert.equal(hash(await readFile(outside)),hash(sample));assert.deepEqual((await(await h.request('/documents')).json()).documents,[]);
 });
 
 test('a missing or replaced original PDF stops reads and writes without touching formal notes and annotations',async t=>{
@@ -337,7 +346,7 @@ test('invalid uploads and SQL failures leave no formal document, note, orphan PD
 });
 
 test('a linked managed PDF folder refuses new uploads without writing to the link target',async t=>{
-  const h=await harness(t),target=path.join(h.root,'external-managed');await mkdir(target);await symlink(target,path.join(h.vaultDir,'Paperdesk','PDFs'));
+  const h=await harness(t),target=path.join(h.root,'external-managed');await mkdir(target);await symlink(target,path.join(h.vaultDir,'Paperdesk','PDFs'),directoryLinkType);
   const response=await h.importPdf();assert.equal(response.status,409);assert.equal((await response.json()).conflictPreserved,undefined);
   assert.deepEqual(await readdir(target),[]);assert.deepEqual(await readdir(path.join(h.vaultDir,'Paperdesk','Notes')),[]);assert.deepEqual(await readdir(path.join(h.dataDir,'.incoming')),[]);
 });

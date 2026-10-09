@@ -26,7 +26,7 @@ function deferred() {
 export async function nativeReaderWorkflow({ context, base, onQuestionPreview, onLibraryPreview, onTranslationPreview, onLayoutPreview }) {
   const tempDir = await mkdtemp(join(tmpdir(), 'paperdesk-native-reader-'));
   const harnesses = [];
-  let client;
+  let client, runError;
   try {
     const status = await (await fetch(`${base}/api/plugin/status`)).json();
     const profile = join(tempDir, 'profile.json');
@@ -74,7 +74,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       const opened = await client.callTool({ name: 'paperdesk_open_reader', arguments: libraryOnly ? {} : { documentId, page: pageNumber } });
       assert.notEqual(opened.isError, true);
       await page.exposeBinding('paperdeskHostRpc', async (_source, message) => {
-        const entry = { id: message.id, method: message.method, params: message.params }; calls.push(entry);
+        const entry = { id: message.id, method: message.method, params: message.params, startedAt: Date.now() }; calls.push(entry);
         const hold = holds.find(item => !item.used && item.predicate(entry));
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
@@ -97,6 +97,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         else if (message.method === 'ui/notifications/size-changed') return;
         else throw new Error(`Unexpected host RPC: ${message.method}`);
         entry.result = result;
+        entry.completedAt = Date.now();
         if (hold?.phase === 'after') { hold.entered.resolve(); await hold.release.promise; }
         if (hold) hold.finished.resolve();
         return result;
@@ -137,8 +138,23 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     }
     const image = (h, number) => h.frame.getByRole('img', { name: `PDF 第 ${number} 页`, exact: true });
     async function ready(h, number) {
-      await expect(image(h, number)).toBeVisible();
-      await expect.poll(() => image(h, number).evaluate(element => element.complete && element.naturalWidth > 0 && element.naturalHeight > 0)).toBe(true);
+      try {
+        await expect(image(h, number)).toBeVisible();
+        await expect.poll(() => image(h, number).evaluate(element => element.complete && element.naturalWidth > 0 && element.naturalHeight > 0)).toBe(true);
+      } catch (error) {
+        const requests = h.calls.filter(call => call.params?.name === 'paperdesk_reader_page').slice(-24).map(call => ({
+          page: call.params.arguments.page, width: call.params.arguments.width,
+          durationMs: (call.completedAt || Date.now()) - call.startedAt, pending: !call.completedAt,
+          isError: call.result?.isError, resultPage: call.result?._meta?.readerPage?.page,
+          error: call.result?.isError ? call.result.content?.find(block => block.type === 'text')?.text : undefined,
+        }));
+        const tiles = await h.frame.locator('.page-paper[data-page]').evaluateAll(elements => elements.map(element => ({
+          page: Number(element.dataset.page), loading: element.querySelector('.tile-loading')?.textContent,
+          imageHidden: element.querySelector('img')?.hidden, imageReady: Boolean(element.querySelector('img')?.naturalWidth),
+        })));
+        console.error('Native page readiness diagnostic:', JSON.stringify({ requestedPage: number, requests, tiles, errors: h.errors }));
+        throw error;
+      }
       await expect.poll(h.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     }
     async function drag(h, from, to, number) {
@@ -922,9 +938,18 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
       assert.ok(item.links.every(link => new URL(link.url).origin === new URL(base).origin), 'Reader links must stay within the local workspace');
     }
     assert.equal(stderr, '', 'Native MCP transport must keep stderr quiet');
+  } catch (error) {
+    runError = error;
+    throw error;
   } finally {
-    await Promise.allSettled(harnesses.map(item => item.close()));
-    await client?.close();
-    await rm(tempDir, { recursive: true, force: true });
+    const cleanupErrors = [];
+    const closed = await Promise.allSettled(harnesses.map(item => item.close()));
+    for (const item of closed) if (item.status === 'rejected') cleanupErrors.push(item.reason);
+    try { await client?.close(); } catch (error) { cleanupErrors.push(error); }
+    try { await rm(tempDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 }); } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) {
+      const error = new AggregateError(cleanupErrors, 'Native reader test cleanup failed');
+      if (runError) console.error(error); else throw error;
+    }
   }
 }

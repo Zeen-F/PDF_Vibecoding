@@ -13,7 +13,8 @@ export function getVaultConfig({ vaultDir, vaultSubdir = 'Paperdesk', dataDir } 
   const libraryDir = path.join(root, vaultSubdir);
   const key = createHash('sha256').update(libraryDir).digest('hex');
   const localRoot = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'Paperdesk')
-    : path.join(os.homedir(), '.local', 'share', 'Paperdesk');
+    : process.platform === 'win32' ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Paperdesk')
+      : path.join(os.homedir(), '.local', 'share', 'Paperdesk');
   const cache = path.resolve(dataDir || path.join(localRoot, 'vault-cache', key));
   // Resolve existing parents as well: a cache symlink cannot point back into iCloud.
   let parent = cache;
