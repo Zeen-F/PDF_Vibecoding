@@ -13,7 +13,7 @@ export function listVaultPdfs({ vaultDir, documents = [], limit = 10_000 }) {
       const directory = directories.pop();
       const info = lstatSync(directory);
       if (info.isSymbolicLink() || !info.isDirectory()) continue;
-      const real = realpathSync(directory), relative = path.relative(root, real);
+      const real = realpathSync.native(directory), relative = path.relative(root, real);
       if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
       const children = readdirSync(directory).filter(name => !name.startsWith('.')).sort();
       const nested = [];
@@ -22,7 +22,7 @@ export function listVaultPdfs({ vaultDir, documents = [], limit = 10_000 }) {
         if (stat.isSymbolicLink()) continue;
         if (stat.isDirectory()) { nested.push(file); continue; }
         if (!stat.isFile() || !/\.pdf$/i.test(name)) continue;
-        const realFile = realpathSync(file), relativeFile = path.relative(root, realFile);
+        const realFile = realpathSync.native(file), relativeFile = path.relative(root, realFile);
         if (relativeFile === '..' || relativeFile.startsWith(`..${path.sep}`) || path.isAbsolute(relativeFile)) continue;
         if (files.length === limit) return { files, truncated: true };
         const sourcePath = path.relative(root, file).split(path.sep).join('/');

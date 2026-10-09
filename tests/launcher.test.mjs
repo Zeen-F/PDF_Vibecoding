@@ -70,6 +70,9 @@ test('vault launcher resolves canonical source, shared library identity and defa
   const expected = getVaultConfig({ vaultDir: alias, vaultSubdir: 'Reading' });
   const value = browserLaunchConfig({ rootDir, env: { PAPERDESK_VAULT_DIR: alias, PAPERDESK_VAULT_SUBDIR: 'Reading' } });
   assert.equal(value.vaultDir, await realpath(vaultDir));
+  const direct = browserLaunchConfig({ rootDir, env: { PAPERDESK_VAULT_DIR: await realpath(vaultDir), PAPERDESK_VAULT_SUBDIR: 'Reading' } });
+  assert.equal(value.libraryId, direct.libraryId, 'A junction or Windows short path must identify the same vault as its native path');
+  assert.equal(value.dataDir, direct.dataDir, 'Aliases must share a cache before it exists');
   assert.equal(value.vaultSubdir, 'Reading');
   assert.equal(value.dataDir, expected.dataDir);
   assert.equal(value.libraryId, libraryIdentity(expected.libraryDir));
