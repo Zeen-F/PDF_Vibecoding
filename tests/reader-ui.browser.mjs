@@ -79,7 +79,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
         if (message.method === 'ui/initialize') {
-          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.11.0' });
+          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.11.1' });
           result = { protocolVersion: '2026-01-26', hostInfo: { name: 'isolated-browser-host', version: '1.0.0' }, hostCapabilities: capabilities };
         }
         else if (message.method === 'ui/notifications/initialized') { initialized = true; return; }

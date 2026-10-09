@@ -10,6 +10,15 @@ function refused(error) {
     || (Array.isArray(cause?.errors) && cause.errors.length > 0 && cause.errors.every(refused));
 }
 
+export function readerRuntimeEnvironment(dataDir, inherited = process.env) {
+  const environment = { ...inherited };
+  // A profile bound to an ordinary library must not inherit another vault.
+  for (const key of Object.keys(environment)) {
+    if (['PAPERDESK_VAULT_DIR', 'PAPERDESK_VAULT_SUBDIR', 'PAPERDESK_DATA_DIR', 'PORT'].includes(key.toUpperCase())) delete environment[key];
+  }
+  return { ...environment, PORT: '4317', PAPERDESK_DATA_DIR: dataDir };
+}
+
 // Starting a daemon is opt-in in the local profile. Reuse a matching service;
 // never terminate an occupant, create a new library, or start another data path.
 export async function ensureReaderRuntime(rawProfile) {
@@ -52,7 +61,7 @@ export async function ensureReaderRuntime(rawProfile) {
   try {
     child = spawn(process.execPath, [join(workspaceRoot, 'server', 'index.mjs')], {
       cwd: workspaceRoot, detached: true, stdio: ['ignore', log.fd, log.fd], windowsHide: true,
-      env: { ...process.env, PORT: '4317', PAPERDESK_DATA_DIR: dataDir },
+      env: readerRuntimeEnvironment(dataDir),
     });
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
