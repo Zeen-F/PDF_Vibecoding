@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  platform-check:
     strategy:
       fail-fast: false
       matrix:
@@ -40,3 +40,15 @@ jobs:
             | sudo tee /etc/apt/apt.conf.d/99-paperdesk-network >/dev/null
       - run: npx playwright install --with-deps chromium
       - run: npm run check
+
+  # Keep the existing protected-branch status name. A cancelled, failed, or
+  # skipped platform must never allow this aggregate gate to pass.
+  check:
+    needs: platform-check
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require both platform checks
+        env:
+          PLATFORM_RESULT: ${{ needs.platform-check.result }}
+        run: test "$PLATFORM_RESULT" = success
