@@ -258,8 +258,15 @@ async function tableOfContentsWorkflow(context, sampleDocument) {
 
   async function chapterExpanded(navigation, title) {
     const expand = navigation.getByRole('button', { name: `展开章节：${title}`, exact: true });
-    if (await expand.isVisible()) await expand.click();
-    await expect(navigation.getByRole('button', { name: `收起章节：${title}`, exact: true })).toBeVisible();
+    const collapse = navigation.getByRole('button', { name: `收起章节：${title}`, exact: true });
+    const toggle = expand.or(collapse);
+    // Restoring the active page can auto-expand its ancestors between a state
+    // read and click. Keep locating the same control when its label changes,
+    // then verify the final state after any in-flight restoration has settled.
+    await expect(async () => {
+      if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true', { timeout: 1000 });
+    }).toPass({ timeout: 15_000, intervals: [100, 250] });
   }
 
   const bookmarked = await importFixture('original-bookmark-exercise.pdf', bookmarkedPdf());
