@@ -30,7 +30,11 @@ function guard(work) {
   try { return work(); }
   catch (error) {
     if (error instanceof VaultError) throw error;
-    const failure = new VaultError('Obsidian 文件读写失败，请检查文件权限和磁盘状态；请保留当前草稿并核对原文件。');
+    const cloudReadFailure = process.platform === 'win32' && ['UNKNOWN', 'EIO'].includes(error.code)
+      && ['open', 'read'].includes(error.syscall);
+    const failure = new VaultError(cloudReadFailure
+      ? '无法读取知识库文件。若使用 iCloud 或 OneDrive，请在资源管理器中选择“始终保留在此设备上”，等待下载完成后重试；当前草稿和原文件已保留。'
+      : 'Obsidian 文件读写失败，请检查文件权限和磁盘状态；请保留当前草稿并核对原文件。');
     failure.cause = error; throw failure;
   }
 }
@@ -302,17 +306,23 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       return fd;
     }
     function markdown(file, missing = false) {
-      if (!checkedPath(canonical, file, { missing })) return null;
-      const fd = openFile(file);
-      try {
-        const before = signature(fstatSync(fd));
-        if (fstatSync(fd).size > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注。');
-        const bytes = readFileSync(fd);
-        const after = signature(fstatSync(fd));
-        if (bytes.length > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注。');
-        if (before !== after) fileConflict('Obsidian 正在修改此 Markdown 文件，请稍后重新读取。');
-        return { source: utf8.decode(bytes), token: digest(bytes), signature: after };
-      } finally { closeSync(fd); }
+      // Cloud hydration can change metadata during an otherwise read-only open.
+      // Discard unstable bytes and reopen; never weaken the signature or token
+      // checks that protect against actual external edits during saving.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!checkedPath(canonical, file, { missing })) return null;
+        const fd = openFile(file);
+        try {
+          const stat = fstatSync(fd), before = signature(stat);
+          if (stat.size > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注。');
+          const bytes = readFileSync(fd);
+          const after = signature(fstatSync(fd));
+          if (bytes.length > MAX_MARKDOWN_BYTES) invalid('Paperdesk Markdown 文件过大，请拆分正文或批注。');
+          if (before !== after) continue;
+          return { source: utf8.decode(bytes), token: digest(bytes), signature: after };
+        } finally { closeSync(fd); }
+      }
+      fileConflict('Markdown 文件仍在变化，可能正在同步或被其他程序修改。请等待同步或保存完成后重新读取；原文件未被覆盖。');
     }
     function sourcePath(pdfSource) {
       validatePdfSource(pdfSource);

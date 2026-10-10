@@ -50,6 +50,57 @@ function rewriteState(file, change) {
   return next;
 }
 
+test('a transient metadata change during Markdown reading is re-read without rewriting the original', t => {
+  const { store, payload } = setup(t), saved = store.writeDocument(payload, null);
+  const original = readFileSync(saved.notePath), identity = fs.statSync(saved.notePath);
+  const originalStat = fs.fstatSync; let reads = 0;
+  const hook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev && ++reads <= 2) stat.ctimeMs -= 1;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.equal(store.readDocument(payload.document.id).token, saved.token); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(reads >= 6, 'The unstable read must be discarded and the file reopened');
+  assert.deepEqual(readFileSync(saved.notePath), original);
+});
+
+test('continuously changing Markdown remains a bounded conflict and is never rewritten', t => {
+  const { store, payload } = setup(t), saved = store.writeDocument(payload, null);
+  const original = readFileSync(saved.notePath), identity = fs.statSync(saved.notePath);
+  const originalStat = fs.fstatSync; let reads = 0;
+  const hook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev) stat.ctimeMs += ++reads;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => store.readDocument(payload.document.id), error => error.code === 'VAULT_FILE_CONFLICT'); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(reads <= 12, 'Retries must be bounded');
+  assert.deepEqual(readFileSync(saved.notePath), original);
+});
+
+test('an external edit completed during a retried read still rejects a stale save', t => {
+  const { store, payload } = setup(t), saved = store.writeDocument(payload, null);
+  const external = readFileSync(saved.notePath, 'utf8').replace('# 阅读笔记', '# 外部最新笔记');
+  const identity = fs.statSync(saved.notePath), originalRead = fs.readFileSync;
+  let edited = false;
+  const hook = t.mock.method(fs, 'readFileSync', (...args) => {
+    const bytes = originalRead(...args);
+    if (!edited && typeof args[0] === 'number' && fs.fstatSync(args[0]).ino === identity.ino) {
+      edited = true; writeFileSync(saved.notePath, external);
+    }
+    return bytes;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => store.writeDocument(payload, saved.token), status409); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(edited, true);
+  assert.equal(readFileSync(saved.notePath, 'utf8'), external);
+});
+
 test('PDF, Markdown notes, text and region geometry, request ledger and writer sequence roundtrip without database files', t => {
   const { store, payload, recoveryDir } = setup(t);
   const saved = store.writeDocument(payload, null);
