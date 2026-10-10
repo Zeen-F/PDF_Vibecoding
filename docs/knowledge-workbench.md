@@ -2,7 +2,7 @@
 
 在 Obsidian 仓库模式选中文字或区域后，点击“发送到知识库”，核对实际 PDF 页并补充想法。只导出本次选区；不发送模型请求，不修改原 PDF 或批注。工作台关闭时也能积累材料。
 
-入口位于桌面版和本机浏览器版的选区操作栏。Codex 原生纸间阅读面板目前仍使用其已有的共享／提问入口；本轮不增加原生面板按钮。此功能属于源码中的待发布变更，已发布的 `v1.2.0-beta.2` 包不包含它。
+入口位于桌面版和本机浏览器版的选区操作栏。Codex 原生纸间阅读面板目前仍使用其已有的共享／提问入口；本轮不增加原生面板按钮。本机 `1.2.0-beta.3` Windows ZIP 已包含此功能并完成打包联调，详见[本机交付记录](history/1.2.0-beta.3.md)。GitHub 已发布的 `v1.2.0-beta.2` 包不包含它。
 
 `POST /api/integrations/knowledge/export` 接收 `requestId`（UUID）、`documentId`、`page`（实际页，1 起）、归一化 `rects`、`quote`、`comment` 和可选 PNG `image`（base64 或 data URL，最多 20 MiB）。同一 requestId 与相同内容重试返回同一个包；改变内容必须使用新 requestId。
 
