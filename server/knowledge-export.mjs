@@ -9,8 +9,25 @@ function checked(root, target) { let cursor=target; while(!fs.existsSync(cursor)
 function write(file, bytes) { const temp=file+'.'+randomUUID()+'.tmp'; try{fs.writeFileSync(temp,bytes,{flag:'wx',mode:0o600});const fd=fs.openSync(temp,'r+');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(temp,file);if(hash(fs.readFileSync(file))!==hash(bytes))throw new Error('导出读回校验失败。');}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);} }
 
 export function registerKnowledgeExport({ app, vaultStore, documentOr404, HttpError, objectBody, stringValue, uuidValue, pageValue, rectanglesValue }) {
+  const requireVault = () => {
+    if (!vaultStore) throw new HttpError(409, '请先在纸间连接 Obsidian 知识库，再发送到知识工作台。');
+  };
+  app.get('/api/integrations/knowledge/status', (_req, res) => {
+    requireVault();
+    res.json({ schema: 'paperdesk-knowledge/v1', vaultPath: vaultStore.vaultDir,
+      subdir: relative(vaultStore.vaultDir, vaultStore.rootDir) });
+  });
+  app.get('/api/integrations/knowledge/source/:id', (req, res) => {
+    requireVault();
+    const id = uuidValue(req.params.id, '文献'), doc = documentOr404(id);
+    const record = vaultStore.readDocument(id);
+    vaultStore.readPdfSnapshot(id, doc.sha256);
+    res.json({ documentId: id, pdfSha256: doc.sha256, pageCount: doc.page_count,
+      pdfPath: relative(vaultStore.vaultDir, record.pdfPath),
+      notePath: relative(vaultStore.vaultDir, vaultStore.notePath(id)) });
+  });
   app.post('/api/integrations/knowledge/export', (req,res) => {
-    if(!vaultStore)throw new HttpError(409,'请先在纸间连接 Obsidian 知识库，再发送到知识工作台。');
+    requireVault();
     const body=objectBody(req.body,['requestId','documentId','page','rects','quote','comment','image']);
     const id=uuidValue(body.requestId,'导出请求'),documentId=uuidValue(body.documentId,'文献'),doc=documentOr404(documentId);
     const page=pageValue(body.page,doc.page_count),rects=rectanglesValue(body.rects);
@@ -27,7 +44,20 @@ export function registerKnowledgeExport({ app, vaultStore, documentOr404, HttpEr
     fs.mkdirSync(exportRoot,{recursive:true});
     const folder=checked(vaultStore.vaultDir,path.join(exportRoot,id));fs.mkdirSync(folder,{recursive:true});
     const manifestFile=checked(vaultStore.vaultDir,path.join(folder,'manifest.json'));
-    if(fs.existsSync(manifestFile)){const saved=JSON.parse(fs.readFileSync(manifestFile,'utf8'));if(saved.requestHash!==requestHash)throw new HttpError(409,'此请求标识已保存不同内容，请核对后重新发送。');return res.json({id,duplicate:true,relativePath:relative(vaultStore.vaultDir,folder)});}
+    if (fs.existsSync(manifestFile)) {
+      const saved = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      if (saved.requestHash !== requestHash) throw new HttpError(409, '此请求标识已保存不同内容，请核对后重新发送。');
+      const savedHash = hash(JSON.stringify({ documentId: saved.source?.documentId, page: saved.source?.page,
+        rects: saved.source?.rects, quote: saved.source?.quote, comment: saved.comment, image: saved.image?.sha256 || null }));
+      if (saved.schema !== 'paperdesk-capture/v1' || saved.id !== id || savedHash !== requestHash)
+        throw new HttpError(409, '已保存的交换清单发生变化，请核对原包；本次输入仍可重试。');
+      if (image) {
+        const imagePath = checked(vaultStore.vaultDir, path.join(folder, 'selection.png'));
+        if (!fs.existsSync(imagePath) || hash(fs.readFileSync(imagePath)) !== hash(image))
+          throw new HttpError(409, '已保存的原图缺失或发生变化，请等待同步完成或核对原包。');
+      }
+      return res.json({ id, duplicate: true, relativePath: relative(vaultStore.vaultDir, folder) });
+    }
     const intent=checked(vaultStore.vaultDir,path.join(folder,'.request.json'));
     if(fs.existsSync(intent)){if(JSON.parse(fs.readFileSync(intent,'utf8')).requestHash!==requestHash)throw new HttpError(409,'前次导出尚未完成，请保持原内容重试。');}else write(intent,JSON.stringify({requestHash}));
     const record=vaultStore.readDocument(documentId);
