@@ -62,7 +62,7 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
           NODE
       - run: npm ci
-      - run: npx playwright install chromium
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm run test:desktop
       - name: Test source Obsidian vault and bookmarks

@@ -79,7 +79,7 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         if (hold) { hold.used = true; if (hold.phase === 'before') { hold.entered.resolve(); await hold.release.promise; } }
         let result;
         if (message.method === 'ui/initialize') {
-          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.11.0' });
+          assert.deepEqual(message.params.appInfo, { name: 'paperdesk-reader', version: '0.11.1' });
           result = { protocolVersion: '2026-01-26', hostInfo: { name: 'isolated-browser-host', version: '1.0.0' }, hostCapabilities: capabilities };
         }
         else if (message.method === 'ui/notifications/initialized') { initialized = true; return; }
@@ -182,11 +182,20 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
         return { x1: left + drawing.measureText(line).width, x2: left + drawing.measureText(line + range.selected).width,
           y: parseFloat(style.paddingTop) + parseFloat(style.borderTopWidth) + (prefix.split('\n').length - .5) * parseFloat(style.lineHeight) - element.scrollTop };
       }, { start, selected });
-      // Collapse a previous selection first; dragging inside an existing native
-      // selection starts text drag-and-drop instead of a fresh selection.
-      await h.page.mouse.click(box.x + box.width - 20, box.y + 20);
-      await h.page.mouse.move(box.x + points.x1, box.y + points.y); await h.page.mouse.down();
-      await h.page.mouse.move(box.x + points.x2, box.y + points.y, { steps: 8 }); await h.page.mouse.up();
+      // Canvas gives an initial estimate, but fallback font metrics can differ
+      // from readonly textarea glyphs on Windows. Calibrate the real pointer
+      // endpoints one pixel at a time; never assign selectionStart/End or loosen
+      // the exact quotation assertion. Arrow keys cannot select this readonly UI.
+      for (let attempt = 0; attempt < 64; attempt++) {
+        // Collapse old selection so the next drag cannot become drag-and-drop.
+        await h.page.mouse.click(box.x + box.width - 20, box.y + 20);
+        await h.page.mouse.move(box.x + points.x1, box.y + points.y); await h.page.mouse.down();
+        await h.page.mouse.move(box.x + points.x2, box.y + points.y, { steps: 8 }); await h.page.mouse.up();
+        const actual = await text.evaluate(element => ({ start: element.selectionStart, end: element.selectionEnd }));
+        if (actual.start === start && actual.end === start + selected.length) break;
+        points.x1 += Math.sign(start - actual.start);
+        points.x2 += Math.sign(start + selected.length - actual.end);
+      }
       assert.equal(await text.evaluate(element => element.value.slice(element.selectionStart, element.selectionEnd)), selected);
       await h.frame.getByRole('button', { name: '预览选中文字', exact: true }).click();
       await expect(h.frame.locator('#preview-quote')).toHaveText(selected);

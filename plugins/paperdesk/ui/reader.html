@@ -781,7 +781,7 @@ window.addEventListener('resize',()=>{if(dragging){dragging.tile.box.hidden=true
 window.addEventListener('beforeunload',event=>{if(dirty()){event.preventDefault();event.returnValue='';}});
 async function initialize() {
   hideError();clearInterval(heartbeat);status('正在连接纸间…');
-  try{const result=await request('ui/initialize',{appInfo:{name:'paperdesk-reader',version:'0.11.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']},protocolVersion:'2026-01-26'});
+  try{const result=await request('ui/initialize',{appInfo:{name:'paperdesk-reader',version:'0.11.1'},appCapabilities:{availableDisplayModes:['inline','fullscreen']},protocolVersion:'2026-01-26'});
     capabilities=result.hostCapabilities||{};renderTranslationControls();send({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}});
     if(!capabilities.serverTools){elements['library-list'].replaceChildren();const message='当前宿主没有面板工具能力。请在对话中使用纸间工具，或在浏览器继续阅读。';status(message);error(message,initialize);showLink();return;}
     await loadLibrary(true);ready=true;status('选择一篇文献开始阅读。页面与笔记只在面板中显示，选区需确认后才共享。');

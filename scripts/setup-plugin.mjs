@@ -2,11 +2,12 @@ import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir, readFile, writeFile, rename, access, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, access, unlink, realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { codexCommand } from './codex-command.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = await realpath(fileURLToPath(new URL('../', import.meta.url)));
 const { values } = parseArgs({ options: {
   'base-url': { type: 'string', default: 'http://127.0.0.1:4317' },
   config: { type: 'string' },
@@ -38,7 +39,9 @@ try {
   let previous;
   try { previous = JSON.parse(await readFile(profilePath, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('已有插件配置无法读取，未覆盖。', { cause: error }); }
-  if (previous && (previous.libraryId !== profile.libraryId || previous.workspaceRoot !== root)) {
+  const previousRoot = previous && typeof previous.workspaceRoot === 'string'
+    ? await realpath(previous.workspaceRoot).catch(() => null) : null;
+  if (previous && (previous.libraryId !== profile.libraryId || previousRoot !== root)) {
     throw new Error('已有插件配置连接另一份工作区或文献库，未覆盖。请使用 --config 指定另一份配置。');
   }
   if (values['dry-run']) {
@@ -52,11 +55,12 @@ try {
     } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
     console.log('纸间插件已绑定当前本机文献库。');
     if (values.install) {
+      const cli = codexCommand();
       for (const args of [
         ['plugin', 'marketplace', 'add', root, '--json'],
         ['plugin', 'add', 'paperdesk@paperdesk-local', '--json'],
       ]) {
-        const child = spawnSync('codex', args, { stdio: 'inherit' });
+        const child = spawnSync(cli.command, [...cli.args, ...args], { stdio: 'inherit', shell: false, windowsHide: true });
         if (child.error) throw child.error;
         if (child.status !== 0) throw new Error('Codex 插件安装未完成；文献库没有被改动。');
       }

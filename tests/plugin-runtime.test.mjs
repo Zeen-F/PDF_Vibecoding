@@ -4,12 +4,18 @@ import { mkdtemp, mkdir, writeFile, rm, access, realpath } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { ensureReaderRuntime } from '../server/plugin-runtime.mjs';
+import { ensureReaderRuntime, readerRuntimeEnvironment } from '../server/plugin-runtime.mjs';
 
 const libraryId = 'a'.repeat(64);
 const profile = { baseUrl: 'http://127.0.0.1:4317', libraryId, workspaceRoot: '/unconfigured-workspace', autoStart: true };
 function offline() { throw new TypeError('fetch failed', { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) }); }
 function reply(value, status = 200) { return new Response(JSON.stringify(value), { status }); }
+
+test('auto-start cannot inherit a different vault or data path from the Windows host', () => {
+  const inherited = { Path: 'node', Paperdesk_Vault_Dir: 'private-vault', PAPERDESK_VAULT_SUBDIR: 'Notes', paperdesk_data_dir: 'other-library', Port: '9999' };
+  assert.deepEqual(readerRuntimeEnvironment('bound-library', inherited), { Path: 'node', PORT: '4317', PAPERDESK_DATA_DIR: 'bound-library' });
+  assert.equal(inherited.Paperdesk_Vault_Dir, 'private-vault', 'The host environment is unchanged');
+});
 
 test('runtime reuses only an identity-matched live service without accessing or launching a workspace', async t => {
   t.mock.method(globalThis, 'fetch', async () => reply({ service: 'paperdesk', apiVersion: 1, libraryId }));

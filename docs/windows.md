@@ -14,6 +14,10 @@ Windows 桌面版可直接打开 `release/win-unpacked/Paperdesk.exe`（目录�
 
 桌面配置、草稿在 `%APPDATA%/Paperdesk/`，Obsidian 库外索引在其中的 `vault-cache/`。菜单可打开已有 Obsidian 知识库，原始 PDF 保持位置与内容。正式 Markdown 和 PDF 是资料，索引缓存不替代它们。
 
+## 从 Codex 打开纸间
+
+本仓库同时提供原生阅读插件。先在一个终端运行 `npm.cmd start`，在另一个终端执行 `npm.cmd run plugin:install`，再在 Codex 新会话启用“纸间 Paperdesk”并说“打开纸间阅读器”。首次连接空的 Windows 工作区会使用新的正式 `data/`；不会复制 Mac 的个人资料。插件安装后可自动启动已经绑定的默认库；自定义库和端口需先手动启动服务。四套皮肤、选区讨论和笔记保护共用现有插件能力，详细边界见 [Codex 插件说明](codex-plugin.md)。
+
 ## 开发
 
 安装 Node.js 24 LTS 后，在本文件夹的 PowerShell 中执行：

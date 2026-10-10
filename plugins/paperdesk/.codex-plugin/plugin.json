@@ -1,6 +1,6 @@
 {
   "name": "paperdesk",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "本机 PDF 单页／多页阅读、连续滚动、分类和皮肤，支持 API 选区翻译与 Work／Codex 选区讨论。",
   "author": {
     "name": "Paperdesk"
