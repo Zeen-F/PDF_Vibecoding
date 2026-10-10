@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { _electron as electron, expect as playwrightExpect } from '@playwright/test';
 import { clearInheritedTestStorage } from './test-isolated.mjs';
+import { createVaultStore } from '../server/vault-store.mjs';
 import { desktopTestTarget, testEvidenceDirectory, temporaryTestDirectory, removeTestDirectory, closeTestApplication, testShutdownHandlers } from './desktop-test-support.mjs';
 
 clearInheritedTestStorage();
@@ -179,6 +180,10 @@ try {
   await mkdir(path.join(vaultDir, '.obsidian'), { recursive: true });
   await mkdir(cacheHome);
   canonicalVault = await realpath(vaultDir); canonicalTemporary = await realpath(temporary);
+  const fixtureStore = createVaultStore({ vaultDir: canonicalVault, recoveryDir: path.join(temporary, 'recovery') });
+  fixtureStore.writeLibrary({ folders: [], theme: 'forest' }, null);
+  const libraryFile = path.join(canonicalVault, 'Paperdesk', 'Library.md');
+  const originalLibrary = await readFile(libraryFile);
   sourcePdf = path.join(canonicalVault, ...sourceRelative.split('/'));
   await mkdir(path.dirname(sourcePdf), { recursive: true });
   await writeFile(sourcePdf, original);
@@ -190,15 +195,27 @@ try {
   const previousNotes = '切换 Obsidian 仓库前，原库的待保存笔记必须完成。';
   const editor = page.getByRole('textbox', { name: '笔记', exact: true });
   await editor.fill(previousNotes);
-  await application.evaluate(async ({ dialog, Menu }, fixtureHome) => {
+  await application.evaluate(async ({ dialog, Menu }, { fixtureHome, libraryFile }) => {
     // This stub is local to the isolated Electron child. It sends the default
     // hashed vault cache into the fixture, without changing HOME or real data.
     const os = process.getBuiltinModule('node:os');
     globalThis.vaultDesktopOriginalHomedir = os.homedir;
     os.homedir = () => fixtureHome;
+    // Reproduce cloud metadata changing during the first Markdown read in the
+    // real main-process vault switch, without altering any fixture contents.
+    const fs = process.getBuiltinModule('node:fs'), identity = fs.statSync(libraryFile);
+    const originalStat = fs.fstatSync;
+    globalThis.vaultDesktopOriginalStat = originalStat;
+    globalThis.vaultDesktopMetadataReads = 0;
+    fs.fstatSync = (...args) => {
+      const stat = originalStat(...args);
+      if (stat.ino === identity.ino && stat.dev === identity.dev && ++globalThis.vaultDesktopMetadataReads <= 2) stat.ctimeMs -= 1;
+      return stat;
+    };
+    process.getBuiltinModule('node:module').syncBuiltinESMExports();
     dialog.showOpenDialog = () => new Promise(resolve => { globalThis.vaultDesktopPickerResolve = resolve; });
     Menu.getApplicationMenu().getMenuItemById('open-obsidian-vault').click();
-  }, cacheHome);
+  }, { fixtureHome: cacheHome, libraryFile });
   await expect(page.locator('.app-shell')).toHaveAttribute('inert', '');
   await expect.poll(async () => (await request(`/documents/${previousBook.id}`)).document.notesZh).toBe(previousNotes);
   await page.keyboard.type('这段文字不得进入已经锁住的原库');
@@ -209,7 +226,14 @@ try {
   await expect(page.locator('.app-shell')).not.toHaveAttribute('inert');
   await expect(page.getByRole('button', { name: '选择 Obsidian PDF', exact: true })).toBeVisible();
   baseUrl = new URL(page.url()).origin;
-  await application.evaluate(() => { process.getBuiltinModule('node:os').homedir = globalThis.vaultDesktopOriginalHomedir; });
+  assert.ok(await application.evaluate(() => {
+    process.getBuiltinModule('node:os').homedir = globalThis.vaultDesktopOriginalHomedir;
+    process.getBuiltinModule('node:fs').fstatSync = globalThis.vaultDesktopOriginalStat;
+    process.getBuiltinModule('node:module').syncBuiltinESMExports();
+    return globalThis.vaultDesktopMetadataReads >= 6;
+  }), 'Native selection must retry the transient Markdown read');
+  assert.deepEqual(await readFile(libraryFile), originalLibrary);
+  assert.deepEqual(await application.evaluate(() => globalThis.vaultDesktopMessages), []);
   await assert.rejects(fetch(previousUrl + '/api/health', { signal: AbortSignal.timeout(1000) }));
   const settings = JSON.parse(await readFile(path.join(userData, 'desktop-settings.json'), 'utf8'));
   assert.ok(settings.dataDir.startsWith(canonicalTemporary + path.sep), 'Acceptance cache must stay inside the isolated fixture');
@@ -218,7 +242,7 @@ try {
   assert.equal(storage.mode, 'vault');
   assert.equal(storage.vaultName, '测试知识库');
   assert.equal(storage.documentCount, 0);
-  await record('native vault selection flushes the old library, locks editing and opens only the isolated Obsidian root');
+  await record('native vault selection retries transient Markdown metadata, preserves bytes, flushes the old library and opens the isolated Obsidian root');
 
   const document = await selectVaultPdf();
   const annotation = await annotateVaultPdf(document);

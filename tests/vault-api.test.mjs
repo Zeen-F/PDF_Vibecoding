@@ -51,6 +51,43 @@ async function harness(t) {
   };
 }
 
+test('knowledge exports preserve source identity, images and idempotent retry; changed inputs and corrupt bundles are rejected', async t => {
+  const h = await harness(t), doc = await h.upload();
+  const status = await (await h.request('/integrations/knowledge/status')).json();
+  assert.equal(status.schema, 'paperdesk-knowledge/v1');
+  assert.equal(status.vaultPath, h.vaultDir); assert.equal(status.subdir, 'Paperdesk');
+  const source = await (await h.request(`/integrations/knowledge/source/${doc.id}`)).json();
+  assert.equal(source.pdfSha256, hash(sample)); assert.equal(source.pageCount, doc.pageCount);
+  assert.equal(source.pdfPath, h.defaultPdfPath);
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB3sAAAAASUVORK5CYII=', 'base64');
+  const payload = { requestId: randomUUID(), documentId: doc.id, page: 2,
+    rects: [{ x: .1, y: .2, width: .3, height: .2 }], quote: '', comment: '原始疑问', image: image.toString('base64') };
+  const route = '/integrations/knowledge/export';
+  const beforeNote = await readFile(h.notePath(doc.id));
+  let response = await h.request(route, 'POST', payload); assert.equal(response.status, 201, await response.clone().text());
+  const result = await response.json(), folder = path.join(h.vaultDir, result.relativePath);
+  const manifest = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.source.page, 2); assert.equal(manifest.source.pdfSha256, hash(sample));
+  assert.equal(manifest.comment, payload.comment); assert.equal(manifest.image.sha256, hash(image));
+  assert.deepEqual(await readFile(path.join(folder, 'selection.png')), image);
+  response = await h.request(route, 'POST', payload); assert.equal(response.status, 200); assert.equal((await response.json()).duplicate, true);
+  assert.equal((await h.request(route, 'POST', { ...payload, comment: '不同想法' })).status, 409);
+  await writeFile(path.join(folder, 'selection.png'), 'incomplete sync');
+  assert.equal((await h.request(route, 'POST', payload)).status, 409, 'A corrupt original must never be acknowledged as saved');
+  await writeFile(path.join(folder, 'selection.png'), image);
+  assert.equal((await h.request(route, 'POST', payload)).status, 200);
+  await writeFile(path.join(folder, 'manifest.json'), JSON.stringify({ ...manifest, comment: 'changed externally' }));
+  assert.equal((await h.request(route, 'POST', payload)).status, 409);
+  for (const patch of [{ page: 999 }, { rects: [{ x: .9, y: 0, width: .5, height: .2 }] }, { image: 'not-png' }])
+    assert.equal((await h.request(route, 'POST', { ...payload, requestId: randomUUID(), ...patch })).status, 400);
+  assert.deepEqual(await readFile(h.notePath(doc.id)), beforeNote, 'Export does not modify annotations or reading notes');
+  const pdfPath = path.join(h.vaultDir, h.defaultPdfPath);
+  assert.equal(hash(await readFile(pdfPath)), hash(sample));
+  await writeFile(pdfPath, Buffer.concat([sample, Buffer.from('\n% externally replaced')]));
+  assert.equal((await h.request(`/integrations/knowledge/source/${doc.id}`)).status, 409);
+  assert.equal((await h.request(route, 'POST', { ...payload, requestId: randomUUID() })).status, 409);
+});
+
 test('vault files are authoritative; notes, geometry, classifications, retry and position protection survive index deletion',async t=>{
   const h=await harness(t),doc=await h.upload(),endpoint=`/documents/${doc.id}`;
   assert.deepEqual(await(await h.request('/storage')).json(),{mode:'vault',vaultName:'知识库',subdir:'Paperdesk',documentCount:1});

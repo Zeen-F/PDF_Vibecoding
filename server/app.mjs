@@ -20,6 +20,7 @@ import { createVaultStore } from './vault-store.mjs';
 import { createVaultIndex } from './vault-index.mjs';
 import { listVaultPdfs } from './vault-pdfs.mjs';
 import { pdfAssetPaths } from '../shared/pdf-assets.mjs';
+import { registerKnowledgeExport } from './knowledge-export.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const MAX_PAGES = 2000;
@@ -336,6 +337,7 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   });
   // Only reader snapshots carry a transient PNG. Keep the existing note limit.
   app.use('/api/reader-sessions', express.json({ limit: '2.5mb' }));
+  app.use('/api/integrations/knowledge/export', express.json({ limit: '30mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(acceptingRequests);
   const upload = multer({
@@ -426,6 +428,7 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   });
   registerLibraryApi({ app, db, documentOr404, serializeDocument, transaction, HttpError, objectBody });
   registerBookmarksApi({ app, db, documentOr404, transaction, HttpError, objectBody, uuidValue, pageValue });
+  registerKnowledgeExport({ app, vaultStore, documentOr404, HttpError, objectBody, stringValue, uuidValue, pageValue, rectanglesValue });
   const translationApi = registerTranslationApi({ app, dataDir, HttpError, options: translationOptions });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
