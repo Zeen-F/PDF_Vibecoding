@@ -50,12 +50,26 @@ export function createReadingHistory(limit = 100) {
     current: () => entries[index] || null,
     destination: offset => entries[index + offset] || null,
     snapshot: () => ({ back: index > 0, forward: index >= 0 && index < entries.length - 1, index, length: entries.length }),
+    // Only call after the library acknowledges this deletion. Keep the known
+    // physical page, and leave unrelated sources and the history cursor intact.
+    forgetAnnotation(documentId, annotationId) {
+      entries = entries.map(target => {
+        if (target.documentId !== documentId || target.annotationId !== annotationId) return target;
+        const { annotationId: removed, ...pageTarget } = target;
+        return pageTarget;
+      });
+      return this.snapshot();
+    },
     visit(target, { replace = false, historyIndex } = {}) {
       const saved = structuredClone(target);
       if (Number.isSafeInteger(historyIndex)) {
         if (!entries[historyIndex] || key(entries[historyIndex]) !== key(saved)) throw new Error('阅读历史已变化，请重新选择位置。');
         index = historyIndex; entries[index] = saved;
-      } else if (index >= 0 && (replace || key(entries[index]) === key(saved))) entries[index] = saved;
+      } else if (index >= 0 && key(entries[index]) === key(saved)) entries[index] = saved;
+      else if (index >= 0 && replace) {
+        entries = entries.slice(0, index + 1);
+        entries[index] = saved;
+      }
       else {
         entries = [...entries.slice(0, index + 1), saved].slice(-limit);
         index = entries.length - 1;

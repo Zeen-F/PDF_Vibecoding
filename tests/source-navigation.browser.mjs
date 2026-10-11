@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -111,8 +111,49 @@ export async function sourceNavigationWorkflow({context}) {
     await page.getByRole('button',{name:'关闭来源定位',exact:true}).click();await expect(marker(second)).toHaveCount(0);
     assert.equal(new URL(page.url()).searchParams.get('capture'),null);
     await page.getByRole('combobox',{name:'阅读缩放',exact:true}).selectOption('fit');await expect(marker(second)).toHaveCount(0);
+
+    // A successful local deletion removes its focus identity from the current
+    // URL and every history entry, without blocking refresh or back/forward.
+    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    const annotationTarget={documentId:a.id,page:4,pdfSha256:a.pdfSha256,annotationId:annotation.id};
+    await jump(annotationTarget);await expectPage(4);
+    await page.getByRole('button',{name:'下一页',exact:true}).click();await expectPage(5);
+    await back.click();await expectPage(4);await expect(forward).toBeEnabled();
+    const card=page.locator(`[data-annotation-id="${annotation.id}"]`),deleteUrl=`${base}/api/documents/${a.id}/annotations/${annotation.id}`;
+    await page.route(deleteUrl,route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic unconfirmed deletion'})}));
+    await card.getByRole('button',{name:'删除批注',exact:true}).click();
+    await card.getByRole('button',{name:'删除',exact:true}).click();
+    await expect(card.getByRole('alert')).toContainText('删除结果未确认');
+    assert.equal(new URL(page.url()).searchParams.get('annotation'),annotation.id);
+    await expect(page.locator('.source-return-status')).toContainText('已定位来源批注');
+    await page.unroute(deleteUrl);
+    await card.getByRole('button',{name:'删除',exact:true}).click();await expect(card).toHaveCount(0);
+    assert.equal(new URL(page.url()).searchParams.get('annotation'),null);
+    await expect(page.locator('.source-return-status')).toHaveCount(0);
+    await expect(forward).toBeEnabled();await forward.click();await expectPage(5);
+    await back.click();await expectPage(4);
+    await page.reload();await expectPage(4);
+    assert.equal(new URL(page.url()).searchParams.get('annotation'),null);
+    await jump(annotationTarget);await expect(page.getByRole('alert')).toContainText('来源批注已删除');await expectPage(4);
+    assert.equal(new URL(page.url()).searchParams.get('annotation'),null,'External stale links still fail without restoring a deleted identity');
+
+    // Actual wheel navigation replaces the current entry but must branch after
+    // Back; unchanged scroll samples must not invalidate a usable Forward.
+    for(const number of [1,3,5]){await pageInput.fill(String(number));await pageInput.press('Enter');await expectPage(number);}
+    await back.click();await expectPage(3);await expect(forward).toBeEnabled();
+    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
+    await expectPage(3);await expect(forward).toBeEnabled();
+    const paper=await page.locator('.pdf-paper[data-page="3"]').boundingBox();
+    await page.locator('.pdf-scroll').hover();await page.mouse.wheel(0,Math.ceil(paper.height+20));
+    await expectPage(4);await expect(forward).toBeDisabled();
+    await back.click();await expectPage(1);
+    await expect(page.locator('.pdf-paper[data-page="1"]')).toBeInViewport();
+    await forward.click();await expectPage(4);
+    await expect(page.locator('.pdf-paper[data-page="4"]')).toBeInViewport();
+    assert.deepEqual(await readFile(join(vaultDir,'来源甲.pdf')),Buffer.concat([bookmarkedPdf(),Buffer.from('\n% 来源甲')]));
     assert.deepEqual(errors,[]);
     console.log('PASS: precise capture/annotation focus, repeat deduplication, cross-document history, branching, invalid identity rejection, cancelled and superseded jumps, zoom and dismissal');
+    console.log('PASS: acknowledged annotation deletion clears focus/history/URL, failed deletion preserves them, refresh/stale-link guards and continuous-scroll history branching');
   } finally {
     release?.();await page?.close();
     server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));

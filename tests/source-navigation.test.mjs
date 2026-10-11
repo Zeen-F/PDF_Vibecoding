@@ -55,6 +55,36 @@ test('reading history deduplicates repeats, keeps focus identity, truncates forw
   const before=history.current();c.page=999;assert.equal(before.page,3,'History owns a snapshot, not a mutable reference');
 });
 
+test('scrolling after going back discards the forward branch but an unchanged target preserves it',()=>{
+  const history=createReadingHistory(),targets=[1,3,5].map(page=>({documentId:id,page,pdfSha256:sha}));
+  for(const target of targets)history.visit(target);
+  history.visit(targets[1],{historyIndex:1});
+  history.visit({...targets[1]},{replace:true});
+  assert.equal(history.snapshot().forward,true,'An unchanged scroll sample is not a new route');
+  history.visit({...targets[1],page:4},{replace:true});
+  assert.deepEqual(history.snapshot(),{back:true,forward:false,index:1,length:2});
+  assert.equal(history.destination(-1).page,1);
+  assert.equal(history.destination(1),null);
+  history.visit(targets[0],{historyIndex:0});
+  assert.equal(history.destination(1).page,4,'Forward now follows the new reading route');
+});
+
+test('acknowledged annotation deletion clears every matching history identity without losing pages or the cursor',()=>{
+  const annotationId=randomUUID(),otherId=randomUUID(),history=createReadingHistory();
+  const annotation={documentId:id,page:4,pdfSha256:sha,annotationId,verifySource:true,find:''};
+  const targets=[source,annotation,{documentId:id,page:5},annotation,{...annotation,documentId:otherId}];
+  for(const target of targets)history.visit(target);
+  history.visit(annotation,{historyIndex:1});
+  const before=history.snapshot();
+  assert.deepEqual(history.forgetAnnotation(id,annotationId),before);
+  assert.deepEqual(history.current(),{documentId:id,page:4,pdfSha256:sha,verifySource:true,find:''});
+  assert.equal(history.destination(-1).captureId,captureId,'Unrelated capture identities survive');
+  assert.equal(history.destination(2).annotationId,undefined,'Older and newer matching entries are cleared');
+  assert.equal(history.destination(3).annotationId,annotationId,'Another document is not changed');
+  assert.equal(annotation.annotationId,annotationId,'Caller snapshots are not mutated');
+  assert.throws(()=>history.visit(annotation,{historyIndex:1}),/历史已变化/,'An in-flight old history target cannot restore the deleted identity');
+});
+
 test('capture return resolves only intact manifests and original PDF identities',async t=>{
   const root=await mkdtemp(join(tmpdir(),'paperdesk-source-api-')),vaultDir=join(root,'vault'),dataDir=join(root,'cache');
   await mkdir(join(vaultDir,'.obsidian'),{recursive:true});

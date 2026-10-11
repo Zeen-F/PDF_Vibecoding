@@ -92,9 +92,11 @@ export default function Reader({ document, page, onPage, annotations, selection,
   }, []);
   const syncPage = useCallback((number, source) => {
     const state = latest.current;
-    if (state.selectionLocked || number < 1 || number > state.pageCount) return;
+    if (state.selectionLocked || number < 1 || number > state.pageCount || state.page === number) return;
+    // Only skip the scroll for a page change emitted here. An unchanged scroll
+    // sample must not leave a marker that suppresses a later history jump.
     internalPage.current = number;
-    if (state.page !== number) state.onPage(number, { source });
+    state.onPage(number, { source });
   }, []);
   const acceptSelection = useCallback(value => {
     const state = latest.current;

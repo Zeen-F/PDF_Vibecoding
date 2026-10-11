@@ -293,7 +293,15 @@ export default function App() {
     }finally{setAnnotationBusy(false);}
   };
   const updateAnnotation=async(documentId,id,body)=>{try{const data=await trackAnnotation(api(`/documents/${documentId}/annotations/${id}`,{method:'PATCH',body:JSON.stringify(body)}));if(currentIdRef.current===documentId)setAnnotations(as=>as.map(a=>a.id===id?data.annotation:a));return data.annotation;}catch(err){notify(err.message);throw err;}};
-  const deleteAnnotation=async(documentId,id)=>{try{await trackAnnotation(api(`/documents/${documentId}/annotations/${id}`,{method:'DELETE'}));if(currentIdRef.current===documentId)setAnnotations(as=>as.filter(a=>a.id!==id));notify('批注已删除。','success');}catch(err){notify(err.message);throw err;}};
+  const deleteAnnotation=async(documentId,id)=>{
+    try{
+      await trackAnnotation(api(`/documents/${documentId}/annotations/${id}`,{method:'DELETE'}));
+      setHistoryState(readingHistory.current.forgetAnnotation(documentId,id));
+      restoreNavigationUrl();
+      if(currentIdRef.current===documentId){setAnnotations(as=>as.filter(a=>a.id!==id));setFocused(value=>value===id?null:value);}
+      notify('批注已删除。','success');
+    }catch(err){notify(err.message);throw err;}
+  };
   const reloadAnnotation=async(documentId,id)=>{const data=await api(`/documents/${documentId}`);const annotation=data.annotations.find(a=>a.id===id);if(!annotation)throw new Error('这条批注已被删除，草稿仍保留。');if(currentIdRef.current===documentId)setAnnotations(as=>as.map(a=>a.id===id?annotation:a));return annotation;};
   const currentDrafts=current?drafts.list(current.id):[],historicalDrafts=current?drafts.history(current.id):[];
   const exportMarkdown=async()=>{
