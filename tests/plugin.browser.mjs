@@ -184,7 +184,13 @@ export async function pluginWorkflow({ context, base }) {
     await editor.fill('恢复竞态中的原草稿'); await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.locator('.save-row [role="status"]')).toHaveText('保存失败，草稿已保留');
     stored = await getDoc(book.id);
-    await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+    const recoveryBase = await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+    assert.equal(recoveryBase.status, 200);
+    // An external write reaches this editor through its periodic heartbeat.
+    // Wait for that version before applying the shorter UI assertion timeout.
+    await page.waitForResponse(async response => response.request().method() === 'POST'
+      && response.url() === `${base}/api/reader-sessions/${reader.sessionId()}`
+      && (await response.json()).document?.notesRevision === recoveryBase.document.notesRevision, { timeout: 15000 });
     await expect(page.locator('.notes-conflict')).toBeVisible();
     await page.unroute(endpoint);
     let releaseRecovery, enteredRecovery, heldRecovery = false;
