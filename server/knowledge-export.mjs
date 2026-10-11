@@ -26,6 +26,44 @@ export function registerKnowledgeExport({ app, vaultStore, documentOr404, HttpEr
       pdfPath: relative(vaultStore.vaultDir, record.pdfPath),
       notePath: relative(vaultStore.vaultDir, vaultStore.notePath(id)) });
   });
+  app.get('/api/integrations/knowledge/capture/:id', (req, res) => {
+    requireVault();
+    const id = uuidValue(req.params.id, '采集');
+    const folder = checked(vaultStore.vaultDir, path.join(vaultStore.rootDir, 'Exports', id));
+    const file = checked(vaultStore.vaultDir, path.join(folder, 'manifest.json'));
+    if (!fs.existsSync(file)) throw new HttpError(404, '来源采集不存在或尚未同步完成，请保留工作台中的材料。');
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('invalid manifest');
+      const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (manifest.schema !== 'paperdesk-capture/v1' || manifest.id !== id
+        || typeof manifest.createdAt !== 'string' || !Number.isFinite(Date.parse(manifest.createdAt))
+        || new Date(manifest.createdAt).toISOString() !== manifest.createdAt
+        || typeof manifest.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(manifest.requestHash)) throw new Error('wrong capture identity');
+      const documentId = uuidValue(manifest.source?.documentId, '文献'), doc = documentOr404(documentId);
+      const page = pageValue(manifest.source.page, doc.page_count), rects = rectanglesValue(manifest.source.rects);
+      if (rects.length > 100 || manifest.source.pdfSha256 !== doc.sha256) throw new Error('changed source');
+      const quote = stringValue(manifest.source.quote, '引文', 100000), comment = stringValue(manifest.comment, '想法', 20000);
+      let imageHash = null;
+      if (manifest.image) {
+        if (manifest.image.file !== 'selection.png' || manifest.image.mime !== 'image/png'
+          || !/^[a-f0-9]{64}$/.test(manifest.image.sha256)) throw new Error('invalid image identity');
+        const imageFile = checked(vaultStore.vaultDir, path.join(folder, 'selection.png'));
+        const imageStat = fs.statSync(imageFile);
+        if (!imageStat.isFile() || imageStat.size > 20 * 1024 * 1024 || imageStat.size < 24) throw new Error('invalid image');
+        const image = fs.readFileSync(imageFile); imageHash = hash(image);
+        if (imageHash !== manifest.image.sha256 || !image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error('changed image');
+      }
+      if (!imageHash && !quote.trim()) throw new Error('empty capture');
+      if (hash(JSON.stringify({ documentId, page, rects, quote, comment, image: imageHash })) !== manifest.requestHash) throw new Error('changed capture');
+      // A capture is useful only for the exact original PDF, never a replacement
+      // with the same filename. No rectangles or paths are accepted from the URL.
+      vaultStore.readPdfSnapshot(documentId, doc.sha256);
+      res.json({ id, documentId, pdfSha256: doc.sha256, page, rects });
+    } catch {
+      throw new HttpError(409, '来源采集、附件或原 PDF 已改变或不完整，未跳转。请核对原包并等待同步完成。');
+    }
+  });
   app.post('/api/integrations/knowledge/export', (req,res) => {
     requireVault();
     const body=objectBody(req.body,['requestId','documentId','page','rects','quote','comment','image']);

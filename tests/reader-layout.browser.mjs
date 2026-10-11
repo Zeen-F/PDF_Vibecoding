@@ -68,7 +68,9 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   }
   async function dragRegion(number, from = [.15, .30], to = [.60, .45]) {
     const layer = tile(number).getByLabel('拖动框选批注区域', { exact: true });
-    await expect(layer).toBeVisible(); await layer.scrollIntoViewIfNeeded();
+    // Layout resizing can replace the ready overlay. Hover retries against the
+    // current node and waits for stable geometry before sampling drag bounds.
+    await layer.hover();
     const bounds = await layer.boundingBox(); assert.ok(bounds);
     await page.mouse.move(bounds.x + from[0] * bounds.width, bounds.y + from[1] * bounds.height); await page.mouse.down();
     await page.mouse.move(bounds.x + to[0] * bounds.width, bounds.y + to[1] * bounds.height, { steps: 7 }); await page.mouse.up();

@@ -55,9 +55,12 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
       .run(f.id, f.name, f.name_key, f.created_at, f.updated_at);
     db.prepare('UPDATE library_preferences SET theme = ? WHERE id = 1').run(state.theme);
   }
+  function validateDocumentFolder(doc) {
+    if (doc.folder_id && !db.prepare('SELECT id FROM folders WHERE id = ?').get(doc.folder_id)) throw new HttpError(409, '文献分类与仓库目录记录不一致，请恢复 Library.md 后重试。');
+  }
   function applyRecord(record) {
     const doc = record.document;
-    if (doc.folder_id && !db.prepare('SELECT id FROM folders WHERE id = ?').get(doc.folder_id)) throw new HttpError(409, '文献分类与仓库目录记录不一致，请恢复 Library.md 后重试。');
+    validateDocumentFolder(doc);
     db.prepare(`INSERT INTO documents(${DOCUMENT_FIELDS.join(',')}) VALUES (${DOCUMENT_FIELDS.map(() => '?').join(',')})
       ON CONFLICT(id) DO UPDATE SET ${DOCUMENT_FIELDS.slice(1).map(field => `${field}=excluded.${field}`).join(',')}`)
       .run(...DOCUMENT_FIELDS.map(field => doc[field] ?? null));
@@ -89,6 +92,7 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
       applyLibrary(library.state);
       for (const record of all) {
         if (!db.prepare('SELECT id FROM documents WHERE id = ?').get(record.document.id)) throw new HttpError(409, '仓库有新文献，请先刷新仓库。');
+        validateDocumentFolder(record.document);
         if (tokens.get(record.document.id) !== record.token) applyRecord(record);
       }
       db.exec('COMMIT'); libraryToken = library.token; return { all, library };
@@ -126,7 +130,11 @@ export function createVaultIndex({ db, store, parsePdf, dataDir, HttpError }) {
         const projectedLibrary = readLibrary();
         applyLibrary(projectedLibrary.state);
         for (const record of latest) {
-          applyRecord(record);
+          // Library changes can invalidate a document's folder even when its
+          // Markdown token is unchanged. Validate before skipping projection.
+          validateDocumentFolder(record.document);
+          // Avoid rewriting unchanged annotations/bookmarks and dirtying search.
+          if (tokens.get(record.document.id) !== record.token) applyRecord(record);
           const pdf = parsed.get(record.document.id)?.pdf;
           if (pdf) {
             db.prepare('DELETE FROM pages WHERE document_id = ?').run(record.document.id);

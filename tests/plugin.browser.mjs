@@ -184,7 +184,13 @@ export async function pluginWorkflow({ context, base }) {
     await editor.fill('恢复竞态中的原草稿'); await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.locator('.save-row [role="status"]')).toHaveText('保存失败，草稿已保留');
     stored = await getDoc(book.id);
-    await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+    const recoveryBase = await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+    assert.equal(recoveryBase.status, 200);
+    // An external write reaches this editor through its periodic heartbeat.
+    // Wait for that version before applying the shorter UI assertion timeout.
+    await page.waitForResponse(async response => response.request().method() === 'POST'
+      && response.url() === `${base}/api/reader-sessions/${reader.sessionId()}`
+      && (await response.json()).document?.notesRevision === recoveryBase.document.notesRevision, { timeout: 15000 });
     await expect(page.locator('.notes-conflict')).toBeVisible();
     await page.unroute(endpoint);
     let releaseRecovery, enteredRecovery, heldRecovery = false;
@@ -260,10 +266,10 @@ export async function pluginWorkflow({ context, base }) {
     console.log('PASS: read-only orphan/live draft recovery without sessionStorage and concurrent independent archive entries');
 
     await page.goto(`${base}/?document=${book.id}&page=1e2`);
-    await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
-    await expect(page.getByRole('alert')).toContainText('页码格式无效');
+    await expect(page.locator('.pdf-paper')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toContainText('来源链接格式无效');
     await page.goto(`${base}/?document=${book.id}&page=9999`);
-    await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+    await expect(page.locator('.pdf-paper')).toHaveCount(0);
     await expect(page.getByRole('alert')).toContainText('页码无效');
     await page.close();
 

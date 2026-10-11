@@ -828,7 +828,10 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     async function nativeGroup(number, count) {
       const expected = groupPages(number, count);
       await expect.poll(() => display.frame.locator('.page-paper[data-page]').evaluateAll(elements => elements.map(element => Number(element.dataset.page)))).toEqual(expected);
-      await Promise.all(expected.map(number => ready(display, number))); return expected;
+      // The backend renders pages serially. Give each queued tile its own
+      // readiness budget instead of timing the entire nine-page batch at once.
+      for (const target of expected) await ready(display, target);
+      return expected;
     }
     await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('1'); await expect(zoom).toHaveValue('fit');
     await display.page.setViewportSize({ width: 2560, height: 1440 });

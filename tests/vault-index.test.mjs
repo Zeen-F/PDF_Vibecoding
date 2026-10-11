@@ -175,3 +175,19 @@ test('bookmarks survive refresh and note/position/classification saves without r
   assert.equal(h.db.prepare('SELECT title FROM bookmarks WHERE id=?').get(bookmark.id).title,bookmark.title);
   assert.deepEqual(h.store.readDocument(record.document.id).bookmarks,[bookmark]);
 });
+
+test('unchanged document tokens still reject a removed folder and cannot save cleared membership into Markdown',async t=>{
+  const h=await fixture(t),record=await h.createRecord('Membership must survive'),index=h.indexFor();await index.initialize();
+  const folderId=randomUUID(),now=new Date().toISOString();
+  index.transaction(()=>{
+    h.db.prepare('INSERT INTO folders(id,name,name_key,created_at,updated_at) VALUES(?,?,?,?,?)').run(folderId,'Keep folder','keep folder',now,now);
+    h.db.prepare('UPDATE documents SET folder_id=? WHERE id=?').run(folderId,record.document.id);
+  });
+  const saved=await readFile(record.notePath),library=h.store.readLibrary();
+  h.store.writeLibrary({...library.state,folders:[]},library.token);
+  await assert.rejects(index.refresh(),error=>error.status===409&&/Library\.md/.test(error.message));
+  assert.equal(h.db.prepare('SELECT folder_id FROM documents WHERE id=?').get(record.document.id).folder_id,folderId);
+  assert.throws(()=>index.transaction(()=>h.db.prepare('UPDATE documents SET notes_zh=? WHERE id=?').run('must not save',record.document.id)),error=>error.status===409);
+  assert.deepEqual(await readFile(record.notePath),saved);
+  assert.equal(h.store.readDocument(record.document.id).document.folder_id,folderId);
+});

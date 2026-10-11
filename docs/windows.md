@@ -6,7 +6,7 @@
 
 普通用户可从 [GitHub Release](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.2) 下载 `Paperdesk-1.2.0-beta.2-win-x64.zip`，完整解压后双击 `Paperdesk.exe`；无需安装 Node.js。保留整个解压目录，不能只移动 EXE。`SHA256SUMS-win` 提供校验值。此预览包未签名；更新时先正常退出，再替换应用目录，文献库保存在应用目录之外。
 
-本机开发交付现为 `1.2.0-beta.3`：从当前 ZIP 完整解压到 `%LOCALAPPDATA%/Programs/Paperdesk/`，桌面 `Paperdesk.lnk` 指向其中的 `Paperdesk.exe`。安装位置与源码、文献库分开，更新桌面入口时同时核对目标和工作目录。新增“发送到知识库”的打包联调范围见[交付记录](history/1.2.0-beta.3.md)；公开下载仍以上方实际 Release 为准。
+本机开发交付版本为 `1.2.0-beta.4`：将当前 Windows 目录包完整更新到 `%LOCALAPPDATA%/Programs/Paperdesk/`，桌面 `Paperdesk.lnk` 指向其中的 `Paperdesk.exe`。安装位置与源码、文献库分开。桌面版是用户审查改动的入口，每次交付同时核对快捷方式目标、工作目录、运行版本及基本阅读流程。本版包含[索引搜索](search.md)与[阅读历史、来源定位](reader-display.md#阅读位置历史与来源定位)；知识工作台发送功能的既有打包联调记录见 [beta.3](history/1.2.0-beta.3.md)。公开下载仍以上方实际 Release 为准。
 
 双击根目录的 **启动纸间.cmd**。首次缺少依赖或界面时自动准备，随后打开默认浏览器中的 <http://127.0.0.1:4317>。使用完毕回到启动窗口按 **Ctrl+C**，等服务停止后再关闭窗口。关掉网页标签不会停止服务。已有兼容服务只在版本和文献库身份一致时复用；复用的第二个启动窗口结束不会停止第一个窗口拥有的服务。
 
