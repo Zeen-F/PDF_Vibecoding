@@ -12,7 +12,11 @@
 
 `GET /api/integrations/knowledge/status` 返回 `schema: paperdesk-knowledge/v1`、本机 `vaultPath` 和 `subdir`，供工作台核对真实库路径；仅凭同名库或相同端口不能确认身份。连同 `/api/plugin/status` 的 `libraryId` 保存绑定。
 
-`GET /api/integrations/knowledge/source/:id` 读回原 PDF 并核对哈希，返回 `documentId`、`pdfSha256`、`pageCount`、`pdfPath`、`notePath`。工作台核对采集时哈希和实际页码后，使用 `/?document=<UUID>&page=<实际页>` 打开阅读器。源文件缺失、改变或服务离线时，保留已保存的选区和想法，不自动跳到其他文献。
+`GET /api/integrations/knowledge/source/:id` 读回原 PDF 并核对哈希，返回 `documentId`、`pdfSha256`、`pageCount`、`pdfPath`、`notePath`。工作台核对采集时哈希和实际页码后，使用 `/?document=<UUID>&page=<实际页>&pdfSha256=<SHA-256>` 打开阅读器。来自交换包的材料追加 `&capture=<requestId>`，纸间按采集标识读回原始归一化矩形，滚动到选区并显示蓝色来源框；不把 URL 中的坐标或工作台编辑后的引文当作原始位置。旧的 document/page 链接继续可用。源文件缺失、改变、页码无效或服务离线时，保留已保存的选区和想法，不自动跳到其他文献或第 1 页。
+
+`GET /api/integrations/knowledge/capture/:id` 在同库绑定下读回 `paperdesk-capture/v1`，验证采集 UUID、清单请求哈希、实际页、归一化矩形、原图附件及原 PDF 哈希后返回 `{ id, documentId, pdfSha256, page, rects }`。缺失清单返回 404；损坏、不完整或改变的来源返回 409。阅读器还核对返回的文献、页和 PDF 哈希与链接一致；原包不改写，不复制或创建批注。
+
+阅读器工具栏提供“返回上一阅读位置”和“前进下一阅读位置”，可在搜索、批注、来源选区、页码和文献之间回看。来源框可以关闭；关闭后延迟的页面渲染不会重新显示它。打开来源期间可以“取消跳转”，随后到达的旧响应不会覆盖当前阅读位置。历史只在当前窗口保留最多 100 个位置，不跨刷新保存，也不替代浏览器返回工作台的历史。
 
 发送失败时窗口保留原输入，重试使用同一个请求标识。未完成发送会阻止切换页码及正常退出；明确点击“放弃本次发送”才丢弃当前输入。尚未提交的发送内容只保留在当前窗口，不承诺异常退出后的恢复。交换包已经落盘但回执丢失时，重试读回清单与附件后确认，损坏的包不会被当作成功保存。
 

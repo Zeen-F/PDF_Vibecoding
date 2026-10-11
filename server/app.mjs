@@ -21,6 +21,7 @@ import { createVaultIndex } from './vault-index.mjs';
 import { listVaultPdfs } from './vault-pdfs.mjs';
 import { pdfAssetPaths } from '../shared/pdf-assets.mjs';
 import { registerKnowledgeExport } from './knowledge-export.mjs';
+import { createSearchIndex } from './search-index.mjs';
 
 const rootDir = fileURLToPath(new URL('../', import.meta.url));
 const MAX_PAGES = 2000;
@@ -111,7 +112,7 @@ function originalFilename(input) {
 function serializeDocument(row) {
   if (!row) return null;
   return {
-    id: row.id, title: row.title, filename: row.filename,
+    id: row.id, title: row.title, filename: row.filename, pdfSha256: row.sha256,
     pageCount: row.page_count, byteSize: row.byte_size,
     createdAt: row.created_at, updatedAt: row.updated_at,
     textAvailable: Boolean(row.text_available), notesZh: row.notes_zh,
@@ -223,19 +224,6 @@ function localRequestOnly(req, res, next) {
 
 function markdownText(text) { return text.replace(/[\\`*_{}\[\]<>#!|~]/g, '\\$&'); }
 function blockquote(text) { return text.split(/\r?\n/).map((line) => `> ${markdownText(line)}`).join('\n'); }
-function searchText(text) {
-  // A visual line wrap must not split a phrase. CJK wraps need no added word space.
-  return text.replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])[\t ]*\r?\n[\t ]*(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])/gu, '$1')
-    .replace(/\s+/g, ' ').trim();
-}
-function snippet(text, needle) {
-  const normalized = searchText(text);
-  const position = normalized.toLowerCase().indexOf(needle);
-  const start = Math.max(0, position - 65);
-  const end = Math.min(normalized.length, start + 240);
-  return `${start > 0 ? '…' : ''}${normalized.slice(start, end)}${end < normalized.length ? '…' : ''}`;
-}
-
 /** Create a local app with its own persistent database. The caller owns its HTTP server. */
 export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR, vaultSubdir = process.env.PAPERDESK_VAULT_SUBDIR || 'Paperdesk', translationOptions } = {}) {
   const vaultConfig = vaultDir ? getVaultConfig({ vaultDir, vaultSubdir, dataDir: dataDir || process.env.PAPERDESK_DATA_DIR }) : null;
@@ -306,9 +294,12 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
     db.close();
     throw error;
   }
+  let searchIndex;
+  try { searchIndex = createSearchIndex(db); }
+  catch (error) { db.close(); throw error; }
   const app = express();
   const vaultIndex = vaultStore ? createVaultIndex({ db, store: vaultStore, parsePdf, dataDir, HttpError }) : null;
-  const ready = vaultIndex ? vaultIndex.initialize() : Promise.resolve();
+  const ready = (vaultIndex ? vaultIndex.initialize() : Promise.resolve()).then(() => searchIndex.sync());
   // A rejected startup remains observable to both the launcher and HTTP callers.
   void ready.catch(() => {});
   let closed = false;
@@ -726,32 +717,13 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
   });
 
   app.get('/api/search', (req, res) => {
-    const query = req.query.q ?? '';
-    const needle = searchText(stringValue(query, '搜索内容', 500)).toLowerCase();
-    if (!needle) return res.json({ results: [] });
-    const results = [];
-    const documents = db.prepare('SELECT * FROM documents ORDER BY updated_at DESC, id').all();
-    const pages = db.prepare('SELECT page, text FROM pages WHERE document_id = ? ORDER BY page');
-    const add = (doc, page, source, text) => {
-      const searchable = searchText(text);
-      if (results.length < 100 && searchable.toLowerCase().includes(needle)) {
-        results.push({ documentId: doc.id, title: doc.title, page, snippet: snippet(searchable, needle), source });
-      }
-    };
-    for (const doc of documents) {
-      add(doc, 1, 'title', doc.title);
-      for (const page of pages.iterate(doc.id)) {
-        add(doc, page.page, 'text', page.text);
-        if (results.length === 100) break;
-      }
-      add(doc, 1, 'notes', `${doc.notes_zh}\n${doc.notes_en}`);
-      for (const annotation of findAnnotations.iterate(doc.id)) {
-        add(doc, annotation.page, 'annotation', `${annotation.quote}\n${annotation.comment}`);
-        if (results.length === 100) break;
-      }
-      if (results.length === 100) break;
-    }
-    res.json({ results });
+    const query = stringValue(req.query.q ?? '', '搜索内容', 500);
+    res.json({ results: searchIndex.search(query) });
+  });
+  app.post('/api/search/rebuild', (req, res) => {
+    objectBody(req.body, []);
+    searchIndex.rebuild();
+    res.json({ ok: true });
   });
   app.get('/api/documents/:id/export', (req, res) => {
     const doc = documentOr404(req.params.id);

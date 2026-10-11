@@ -18,6 +18,7 @@ import { annotationDraftWorkflow } from '../tests/annotation-drafts.browser.mjs'
 import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
 import { vaultWorkflow } from '../tests/vault.browser.mjs';
 import { bookmarkWorkflow } from '../tests/bookmarks.browser.mjs';
+import { sourceNavigationWorkflow } from '../tests/source-navigation.browser.mjs';
 import { waitForImportReady } from '../tests/browser-import.mjs';
 import { testEvidenceDirectory } from './desktop-test-support.mjs';
 
@@ -636,6 +637,7 @@ try {
   const vaultVisualDir=join(evidence,'obsidian-vault');
   await mkdir(vaultVisualDir,{recursive:true,mode:0o700});
   await vaultWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(vaultVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
+  await sourceNavigationWorkflow({context});
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {

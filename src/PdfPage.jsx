@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TextLayer } from 'pdfjs-dist';
 import { FileWarning } from 'lucide-react';
 import { prepareTextLayer } from './selection.js';
@@ -24,7 +24,7 @@ function markMatches(container, query) {
 }
 
 /** A tile owns only its page's rendering tasks and geometry. */
-export default function PdfPage({ pdf, documentId, geometry, layoutCount, captions, annotations, focusedAnnotation, find, regionMode, selection, selectionLocked, onSelection, onRegister, onReady, onDimensions, onActivate, onCopy }) {
+export default function PdfPage({ pdf, documentId, geometry, layoutCount, captions, annotations, focusedAnnotation, sourceFocus, find, regionMode, selection, selectionLocked, onSelection, onRegister, onReady, onDimensions, onActivate, onCopy }) {
   const { page, scale, width, height } = geometry;
   const [ready, setReady] = useState(false), [error, setError] = useState('');
   const paperRef = useRef(null), canvasRef = useRef(null), textRef = useRef(null);
@@ -83,13 +83,14 @@ export default function PdfPage({ pdf, documentId, geometry, layoutCount, captio
       for (const canvas of record.canvas.querySelectorAll('canvas')) { canvas.width = 0; canvas.height = 0; }
     };
   }, [pdf, documentId, page, scale, layoutCount]);
-  useEffect(() => { if (ready) markMatches(textRef.current, find || ''); }, [ready, find]);
+  useLayoutEffect(() => { if (ready) markMatches(textRef.current, find || ''); }, [ready, find]);
   return <div className="pdf-tile" style={{ width }}>
     <div className={`pdf-paper ${ready ? '' : 'is-loading'}`} style={{ width, height }} ref={paperRef} data-page={page} onPointerDownCapture={() => onActivate(page)}>
       <div ref={canvasRef}/>
       <div className="textLayer" ref={textRef} tabIndex={0} aria-label="PDF 本页文字" onCopy={onCopy}/>
       {error && <div className="pdf-tile-error" role="alert"><FileWarning size={16}/>{error}</div>}
       {ready && <div className="highlight-layer" aria-hidden="true">{annotations.filter(annotation => annotation.page === page).flatMap(annotation => annotation.rects.map((rect, index) => <span key={`${annotation.id}-${index}`} className={`highlight-rect ${annotation.color} ${annotation.kind === 'region' ? 'region-annotation' : ''} ${focusedAnnotation === annotation.id ? 'focused' : ''}`} data-annotation={annotation.id} style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}/>))}</div>}
+      {ready && sourceFocus?.documentId === documentId && sourceFocus.page === page && <div className="source-focus-layer" aria-label={`来源选区，PDF 第 ${page} 页`}>{sourceFocus.rects.map((rect,index)=><span key={`${sourceFocus.captureId}-${index}`} className="source-focus-rect" data-source-capture={sourceFocus.captureId} style={{left:`${rect.x*100}%`,top:`${rect.y*100}%`,width:`${rect.width*100}%`,height:`${rect.height*100}%`}}/>)}</div>}
       {ready && regionMode && <RegionSelection enabled={!selectionLocked} documentId={documentId} page={page} canvasRef={canvasRef} selection={selection} onSelection={onSelection}/>}
     </div>
     {captions && <div className="pdf-tile-caption">第 {page} 页</div>}

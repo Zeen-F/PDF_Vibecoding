@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { readSourceLink } from '../shared/source-navigation.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export function readDeepLink(search = window.location.search) {
-  const query = new URLSearchParams(search);
-  const documentId = query.get('document');
-  const rawPage = query.get('page');
-  const page = rawPage === null ? undefined : /^[1-9]\d*$/.test(rawPage) && Number.isSafeInteger(Number(rawPage)) ? Number(rawPage) : null;
-  return { documentId, page, invalid: (rawPage !== null && (!documentId || page === null)) || query.getAll('document').length > 1 || query.getAll('page').length > 1 };
+  return readSourceLink(search);
 }
 function embeddedSettings() {
   const query = new URLSearchParams(window.location.search);

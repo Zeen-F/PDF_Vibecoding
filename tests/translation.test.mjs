@@ -302,7 +302,7 @@ test('cache is bounded to 200 entries and translation cannot change notes, schem
   const primary = new DatabaseSync(path.join(lib.dataDir, 'paperdesk.sqlite'), { readOnly: true });
   try {
     assert.equal(primary.prepare('PRAGMA user_version').get().user_version, CURRENT_SCHEMA);
-    assert.deepEqual(primary.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'bookmarks', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers']);
+    assert.deepEqual(primary.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name), ['annotation_requests', 'annotations', 'bookmarks', 'documents', 'folders', 'library_preferences', 'pages', 'reading_position_writers', 'search_dirty', 'search_entries', 'search_fts', 'search_fts_config', 'search_fts_data', 'search_fts_docsize', 'search_fts_idx', 'search_meta']);
   } finally { primary.close(); }
 });
 

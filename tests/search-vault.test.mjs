@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createApp } from '../server/app.mjs';
+
+test('unchanged vault reads do not rewrite annotations or dirty search, while external Markdown changes are indexed', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'paperdesk-search-vault-')),vaultDir=path.join(root,'vault'),dataDir=path.join(root,'cache');
+  await mkdir(path.join(vaultDir,'.obsidian'),{recursive:true});
+  const runtime=createApp({vaultDir,dataDir});await runtime.ready;
+  const server=runtime.app.listen(0,'127.0.0.1');await once(server,'listening');
+  const base=`http://127.0.0.1:${server.address().port}/api`;
+  const db=new DatabaseSync(path.join(dataDir,'paperdesk.sqlite'));
+  t.after(async()=>{db.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await runtime.close();await rm(root,{recursive:true,force:true});});
+  const request=(url,method,body)=>fetch(base+url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const search=async q=>{const res=await request('/search?q='+encodeURIComponent(q));assert.equal(res.status,200);return(await res.json()).results;};
+  const sample=await readFile(new URL('../public/examples/reading-demo.pdf',import.meta.url));
+  const form=new FormData();form.append('file',new Blob([sample],{type:'application/pdf'}),'synthetic.pdf');
+  const uploaded=await fetch(base+'/documents',{method:'POST',body:form});assert.equal(uploaded.status,201);
+  const {document}=await uploaded.json(), endpoint='/documents/'+document.id;
+  const saved=await request(endpoint,'PATCH',{notesZh:'before_external_edit',expectedNotesRevision:document.notesRevision});assert.equal(saved.status,200);
+  const annotation=await request(endpoint+'/annotations','POST',{page:2,kind:'region',quote:'',comment:'searchable region',color:'green',rects:[{x:.1,y:.2,width:.3,height:.1}]});assert.equal(annotation.status,201);
+  assert.equal((await search('searchable region')).length,1);
+  // A trigger detects even delete/reinsert cycles whose final rows look equal.
+  db.exec(`CREATE TABLE test_annotation_writes(n INTEGER); INSERT INTO test_annotation_writes VALUES(0);
+    CREATE TRIGGER test_annotation_insert AFTER INSERT ON annotations BEGIN UPDATE test_annotation_writes SET n=n+1;END;
+    CREATE TRIGGER test_annotation_delete AFTER DELETE ON annotations BEGIN UPDATE test_annotation_writes SET n=n+1;END;`);
+  for(const url of ['/health',endpoint,endpoint+'/bookmarks'])assert.equal((await request(url)).status,200);
+  assert.equal(db.prepare('SELECT n FROM test_annotation_writes').get().n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM search_dirty').get().n,0);
+  const note=path.join(vaultDir,'Paperdesk','Notes',document.id+'.md'), original=await readFile(note,'utf8');
+  await writeFile(note,original.replace('before_external_edit','after_external_edit'));
+  assert.equal((await search('before_external_edit')).length,0);
+  assert.equal((await search('after_external_edit')).length,1);
+  assert.equal((await search('searchable region')).length,1);
+  assert.equal(db.prepare('SELECT n FROM test_annotation_writes').get().n,2,'Changed source is projected exactly once');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM search_dirty').get().n,0);
+});

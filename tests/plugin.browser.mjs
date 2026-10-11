@@ -260,10 +260,10 @@ export async function pluginWorkflow({ context, base }) {
     console.log('PASS: read-only orphan/live draft recovery without sessionStorage and concurrent independent archive entries');
 
     await page.goto(`${base}/?document=${book.id}&page=1e2`);
-    await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
-    await expect(page.getByRole('alert')).toContainText('页码格式无效');
+    await expect(page.locator('.pdf-paper')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toContainText('来源链接格式无效');
     await page.goto(`${base}/?document=${book.id}&page=9999`);
-    await expect(page.getByLabel('PDF 第 1 页', { exact: true })).toBeVisible();
+    await expect(page.locator('.pdf-paper')).toHaveCount(0);
     await expect(page.getByRole('alert')).toContainText('页码无效');
     await page.close();
 

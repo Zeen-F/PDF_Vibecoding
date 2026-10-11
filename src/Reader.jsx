@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { Bookmark, ChevronLeft, ChevronRight, Highlighter, LoaderCircle, FileWarning, ListTree, ScanLine } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Bookmark, ChevronLeft, ChevronRight, Highlighter, LoaderCircle, FileWarning, ListTree, ScanLine, X } from 'lucide-react';
 import { readPdfSelection } from './selection.js';
 import { groupGeometry, groupStart, PAGE_GAP, PAGE_LAYOUTS, readDisplayPreferences, saveDisplayPreferences } from './reader-layout.js';
 import Contents from './Contents.jsx';
@@ -14,7 +14,7 @@ GlobalWorkerOptions.workerSrc = workerUrl;
 const FALLBACK_PAGE = { width: 612, height: 792 };
 const endpointLayer = node => (node?.nodeType === 1 ? node : node?.parentElement)?.closest('.pdf-paper .textLayer');
 
-export default function Reader({ document, page, onPage, annotations, selection, onSelection, selectionLocked: externalSelectionLocked, find, focusedAnnotation, focusTick, tocOpen, onToggleToc, onBookmarkStateChange }) {
+export default function Reader({ document, page, onPage, annotations, selection, onSelection, selectionLocked: externalSelectionLocked, find, focusedAnnotation, sourceFocus, onDismissSource, historyState, onHistory, focusTick, tocOpen, onToggleToc, onBookmarkStateChange }) {
   const [preferences, setPreferences] = useState(readDisplayPreferences);
   const { mode, count, zoom } = preferences;
   const [pdf, setPdf] = useState(null), [loadedId, setLoadedId] = useState(null), [error, setError] = useState('');
@@ -29,6 +29,7 @@ export default function Reader({ document, page, onPage, annotations, selection,
   const bookmarkChanged=useCallback(value=>{setBookmarkState(value);onBookmarkStateChange?.(value);},[onBookmarkStateChange]);
   const tiles = useRef(new Map()), groupsRef = useRef([]), scrollFrame = useRef(0), selectionFrame = useRef(0), dragging = useRef(false);
   const internalPage = useRef(null), pendingJump = useRef(null), jumpInFlight = useRef(null);
+  const focusAnchor = useRef(null), lastFocusedNavigation = useRef(null);
   const latest = useRef(null);
   latest.current = { documentId: document.id, page, onPage, onSelection, selection, selectionLocked, regionMode, mode, count, pageCount: document.pageCount };
   const currentStart = groupStart(page, count), currentIndex = (currentStart - 1) / count;
@@ -98,7 +99,7 @@ export default function Reader({ document, page, onPage, annotations, selection,
   const acceptSelection = useCallback(value => {
     const state = latest.current;
     if (state.selectionLocked || (value && value.documentId !== state.documentId)) return;
-    if (value) { pendingJump.current = null; jumpInFlight.current = null; syncPage(value.page, 'selection'); }
+    if (value) { focusAnchor.current = null; pendingJump.current = null; jumpInFlight.current = null; syncPage(value.page, 'selection'); }
     const previous = state.selection;
     // Pointer/key release also samples when a preview action is clicked. Keep
     // the confirmed source identity if its text and page geometry did not change.
@@ -109,7 +110,7 @@ export default function Reader({ document, page, onPage, annotations, selection,
     state.onSelection(value);
   }, [syncPage]);
   const activateTile = useCallback(number => {
-    if (!latest.current.selectionLocked) { pendingJump.current = null; jumpInFlight.current = null; syncPage(number, 'selection'); }
+    if (!latest.current.selectionLocked) { focusAnchor.current = null; pendingJump.current = null; jumpInFlight.current = null; syncPage(number, 'selection'); }
   }, [syncPage]);
   const getPdfSelection = useCallback(() => {
     const native = window.getSelection();
@@ -184,7 +185,8 @@ export default function Reader({ document, page, onPage, annotations, selection,
     const windowValue = { first: Math.max(0, first - 1), last: Math.min(nodes.length - 1, last + 1) };
     setVisibleWindow(value => value.first === windowValue.first && value.last === windowValue.last ? value : windowValue);
     const state = latest.current;
-    if (state.selectionLocked || state.selection || dragging.current || jumpInFlight.current) return;
+    if (state.selectionLocked || state.selection || dragging.current || jumpInFlight.current
+      || (focusAnchor.current?.documentId === state.documentId && focusAnchor.current.page === state.page)) return;
     const bounds = element.getBoundingClientRect();
     const candidates = [...tiles.current.values()].filter(tile => {
       const rect = tile.paper.getBoundingClientRect();
@@ -230,19 +232,26 @@ export default function Reader({ document, page, onPage, annotations, selection,
       requestAnimationFrame(() => { if (!pendingJump.current && jumpInFlight.current === target.page) jumpInFlight.current = null; });
     }
   }, [readyPages, pdf, document.id, groups, scrollToPage]);
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!sourceFocus && !focusedAnnotation && !find) { focusAnchor.current = null; lastFocusedNavigation.current = null; return; }
     if (selectionLocked || !readyPages.has(page)) return;
+    const identity = JSON.stringify([document.id,page,sourceFocus?.captureId,focusedAnnotation,find,focusTick,zoom,count,mode,viewport.width,viewport.height]);
+    if (lastFocusedNavigation.current === identity) return;
     const tile = tiles.current.get(page);
-    if (focusedAnnotation) {
-      const target = [...tile?.paper.querySelectorAll('[data-annotation]') || []].find(element => element.dataset.annotation === focusedAnnotation);
-      target?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-    } else if (find) tile?.text.querySelector('.search-match')?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
-  }, [focusedAnnotation, focusTick, find, readyPages, page, selectionLocked]);
+    let target;
+    if (sourceFocus?.documentId === document.id && sourceFocus.page === page) target = tile?.paper.querySelector('[data-source-capture]');
+    else if (focusedAnnotation) target = [...tile?.paper.querySelectorAll('[data-annotation]') || []].find(element => element.dataset.annotation === focusedAnnotation);
+    else if (find) target = tile?.text.querySelector('.search-match');
+    if (!target) return;
+    lastFocusedNavigation.current = identity;
+    focusAnchor.current = { documentId: document.id, page };
+    target.scrollIntoView({ block: find ? 'nearest' : 'center', inline: 'nearest', behavior: 'instant' });
+  }, [focusedAnnotation, sourceFocus, document.id, focusTick, find, readyPages, page, selectionLocked, zoom, count, mode, viewport.width, viewport.height]);
 
   const navigate = useCallback(next => {
     const state = latest.current;
     if (state.selectionLocked || next < 1 || next > state.pageCount) return;
-    clearSelection(); pendingJump.current = { page: next, documentId: state.documentId }; jumpInFlight.current = next;
+    focusAnchor.current = null; clearSelection(); pendingJump.current = { page: next, documentId: state.documentId }; jumpInFlight.current = next;
     state.onPage(next); scrollToPage(next);
     // Enter/blur on the already active page need no React page update, but must
     // still release the programmatic-scroll guard for later wheel navigation.
@@ -285,25 +294,26 @@ export default function Reader({ document, page, onPage, annotations, selection,
   const shownGroups = mode === 'paged' ? groups.slice(currentIndex, currentIndex + 1) : groups;
   return <section className={`reader reader-${mode} ${regionMode ? 'region-mode' : ''}`} aria-label="PDF 阅读器" ref={readerRef}>
     <div className="reader-toolbar">
-      <div className="reader-navigation"><button ref={tocButtonRef} className={`contents-toggle ${tocOpen&&navigationTab==='contents' ? 'selected' : ''}`} aria-label={tocOpen&&navigationTab==='contents' ? '收起目录' : '展开目录'} aria-expanded={tocOpen&&navigationTab==='contents'} disabled={externalSelectionLocked||bookmarkState.busy} onClick={() => toggleNavigation('contents')}><ListTree size={16}/><span>目录</span></button><button ref={bookmarkButtonRef} className={`contents-toggle bookmarks-toggle ${tocOpen&&navigationTab==='bookmarks'?'selected':''}`} aria-label={tocOpen&&navigationTab==='bookmarks'?'收起书签':'展开书签'} aria-expanded={tocOpen&&navigationTab==='bookmarks'} disabled={externalSelectionLocked||bookmarkState.busy} onClick={()=>toggleNavigation('bookmarks')}><Bookmark size={15}/><span>书签</span></button><div className="pager"><button className="icon-button" aria-label="上一页" disabled={currentStart <= 1 || busy || selectionLocked} onClick={() => navigate(Math.max(1, currentStart - count))}><ChevronLeft size={17}/></button><input aria-label="页码" type="number" min="1" max={document.pageCount} value={pageInput} disabled={selectionLocked} onChange={event => setPageInput(event.target.value)} onBlur={gotoInput} onKeyDown={event => { if (event.key === 'Enter') gotoInput(); }}/><span>/ {document.pageCount}</span><button className="icon-button" aria-label="下一页" disabled={currentStart + count > document.pageCount || busy || selectionLocked} onClick={() => navigate(currentStart + count)}><ChevronRight size={17}/></button></div></div>
+      <div className="reader-navigation"><div className="reading-history" aria-label="阅读位置历史"><button className="icon-button" aria-label="返回上一阅读位置" title="返回上一阅读位置" disabled={!historyState?.back||selectionLocked} onClick={()=>onHistory(-1)}><ArrowLeft size={16}/></button><button className="icon-button" aria-label="前进下一阅读位置" title="前进下一阅读位置" disabled={!historyState?.forward||selectionLocked} onClick={()=>onHistory(1)}><ArrowRight size={16}/></button></div><button ref={tocButtonRef} className={`contents-toggle ${tocOpen&&navigationTab==='contents' ? 'selected' : ''}`} aria-label={tocOpen&&navigationTab==='contents' ? '收起目录' : '展开目录'} aria-expanded={tocOpen&&navigationTab==='contents'} disabled={externalSelectionLocked||bookmarkState.busy} onClick={() => toggleNavigation('contents')}><ListTree size={16}/><span>目录</span></button><button ref={bookmarkButtonRef} className={`contents-toggle bookmarks-toggle ${tocOpen&&navigationTab==='bookmarks'?'selected':''}`} aria-label={tocOpen&&navigationTab==='bookmarks'?'收起书签':'展开书签'} aria-expanded={tocOpen&&navigationTab==='bookmarks'} disabled={externalSelectionLocked||bookmarkState.busy} onClick={()=>toggleNavigation('bookmarks')}><Bookmark size={15}/><span>书签</span></button><div className="pager"><button className="icon-button" aria-label="上一页" disabled={currentStart <= 1 || busy || selectionLocked} onClick={() => navigate(Math.max(1, currentStart - count))}><ChevronLeft size={17}/></button><input aria-label="页码" type="number" min="1" max={document.pageCount} value={pageInput} disabled={selectionLocked} onChange={event => setPageInput(event.target.value)} onBlur={gotoInput} onKeyDown={event => { if (event.key === 'Enter') gotoInput(); }}/><span>/ {document.pageCount}</span><button className="icon-button" aria-label="下一页" disabled={currentStart + count > document.pageCount || busy || selectionLocked} onClick={() => navigate(currentStart + count)}><ChevronRight size={17}/></button></div></div>
       <span className="reader-hint">{regionMode ? <><ScanLine size={14}/> 拖动框选区域 · Esc 取消</> : <><Highlighter size={14}/> 选中文字，留下想法</>}</span>
       <div className="reader-tools"><select aria-label="翻页方式" value={mode} disabled={selectionLocked} onChange={event => changeDisplay({ mode: event.target.value })}><option value="paged">左右翻页</option><option value="continuous">上下连续</option></select><select aria-label="页面布局" value={count} disabled={selectionLocked} onChange={event => { const next = Number(event.target.value); changeDisplay({ count: next, zoom: next > 1 ? 'page' : 'fit' }); }}>
         {PAGE_LAYOUTS.map(value => <option key={value} value={value}>{value} 页</option>)}
       </select><button className="region-toggle" aria-label="区域批注" aria-pressed={regionMode} disabled={busy || selectionLocked} onClick={toggleRegion}><ScanLine size={16}/><span>区域批注</span></button><select aria-label="阅读缩放" value={zoom} disabled={selectionLocked} onChange={event => changeDisplay({ zoom: event.target.value })}><option value="fit">适合宽度</option><option value="page">适合整屏</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
     </div>
+    {(sourceFocus||focusedAnnotation)&&<div className="source-return-status" role="status"><span>{sourceFocus?'已定位来源选区':'已定位来源批注'} · PDF 第 {page} 页</span><button className="icon-button small" aria-label="关闭来源定位" disabled={selectionLocked} onClick={onDismissSource}><X size={14}/></button></div>}
     <div className="reader-body">
       <aside className="contents-panel navigation-panel" aria-label="阅读导航" hidden={!tocOpen} onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();closeToc();}}}>
         <div className="navigation-tabs" role="tablist" aria-label="阅读导航类型"><button role="tab" aria-selected={navigationTab==='contents'} disabled={externalSelectionLocked||bookmarkState.busy} onClick={()=>setNavigationTab('contents')}>目录</button><button role="tab" aria-selected={navigationTab==='bookmarks'} disabled={externalSelectionLocked||bookmarkState.busy} onClick={()=>setNavigationTab('bookmarks')}>书签</button></div>
         {tocOpen&&navigationTab==='contents'&&<Contents key={`contents:${document.id}`} document={document} page={page} onJump={jumpFromToc} onClose={closeToc} embedded disabled={selectionLocked}/>}
         <Bookmarks key={`bookmarks:${document.id}`} document={document} page={page} active={tocOpen&&navigationTab==='bookmarks'} disabled={externalSelectionLocked} onJump={jumpFromToc} onClose={closeToc} onStateChange={bookmarkChanged}/>
       </aside>
-      <div className="pdf-scroll" ref={scrollRef} onScroll={scheduleScroll}>
+      <div className="pdf-scroll" ref={scrollRef} onScroll={scheduleScroll} onWheel={()=>{focusAnchor.current=null;}} onTouchStart={()=>{focusAnchor.current=null;}} onPointerDown={event=>{if(event.target===scrollRef.current)focusAnchor.current=null;}} onKeyDown={event=>{if(['PageDown','PageUp','Home','End','ArrowDown','ArrowUp'].includes(event.key))focusAnchor.current=null;}}>
         {busy && !error && <div className="reader-status" role="status"><LoaderCircle className="spin" size={17}/> 正在排版页面…</div>}
         {error && <div className="reader-error" role="alert"><FileWarning/><p>{error}</p><button onClick={() => window.location.reload()}>重新加载</button></div>}
         {pdf && loadedId === document.id && shownGroups.map(group => {
           const index = (group.start - 1) / count;
           return <div className={`pdf-group ${mountedSet.has(index) ? '' : 'pdf-group-unmounted'}`} key={group.start} data-group-start={group.start} ref={node => { groupsRef.current[index] = node; }} style={{ width: group.width, minHeight: group.height, gridTemplateColumns: group.columnWidths.map(value => `${value}px`).join(' '), gap: PAGE_GAP }}>
-            {mountedSet.has(index) ? group.pages.map(geometry => <PdfPage key={`${document.id}:${geometry.page}`} pdf={pdf} documentId={document.id} geometry={geometry} layoutCount={count} captions={count > 1} annotations={annotations} focusedAnnotation={focusedAnnotation} find={find} regionMode={regionMode} selection={selection} selectionLocked={selectionLocked} onSelection={acceptSelection} onRegister={registerTile} onReady={markReady} onDimensions={rememberDimensions} onActivate={activateTile} onCopy={copySelection}/>) : <div className="pdf-group-placeholder" aria-label={`第 ${group.start} 至 ${group.pages.at(-1).page} 页`} style={{ gridColumn: '1 / -1', height: group.height }}>第 {group.start}{group.pages.length > 1 ? `–${group.pages.at(-1).page}` : ''} 页</div>}
+            {mountedSet.has(index) ? group.pages.map(geometry => <PdfPage key={`${document.id}:${geometry.page}`} pdf={pdf} documentId={document.id} geometry={geometry} layoutCount={count} captions={count > 1} annotations={annotations} focusedAnnotation={focusedAnnotation} sourceFocus={sourceFocus} find={find} regionMode={regionMode} selection={selection} selectionLocked={selectionLocked} onSelection={acceptSelection} onRegister={registerTile} onReady={markReady} onDimensions={rememberDimensions} onActivate={activateTile} onCopy={copySelection}/>) : <div className="pdf-group-placeholder" aria-label={`第 ${group.start} 至 ${group.pages.at(-1).page} 页`} style={{ gridColumn: '1 / -1', height: group.height }}>第 {group.start}{group.pages.length > 1 ? `–${group.pages.at(-1).page}` : ''} 页</div>}
           </div>;
         })}
         {selectionError && <p className="pdf-selection-error" role="status">{selectionError}</p>}
