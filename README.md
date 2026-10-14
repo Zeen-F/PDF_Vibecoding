@@ -95,7 +95,7 @@ npm ci --omit=dev
 npm start
 ```
 
-Windows PowerShell 使用 `npm.cmd` 替代 `npm`。在浏览器打开 **http://127.0.0.1:4317**，保持终端运行；按 Control+C 停止服务。
+Windows PowerShell 使用 `npm.cmd` 替代 `npm`。在浏览器打开 [http://127.0.0.1:4317](http://127.0.0.1:4317)，保持终端运行；按 Control+C 停止服务。
 
 ZIP 已包含构建好的界面，无需重新构建；详细步骤在包内 `START-HERE.md`。安装依赖需要联网。浏览器 ZIP 的干净安装验收在 macOS 执行，Windows 浏览器源码入口另有回归，具体见[浏览器版说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/browser-release.md)。
 
