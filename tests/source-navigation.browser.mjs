@@ -1,4 +1,4 @@
-import { openReaderDisplay } from './reader-display-controls.mjs';
+import { openReaderDisplay, closeReaderDisplay } from './reader-display-controls.mjs';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -52,7 +52,9 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     };
     await page.goto(url(first));await expectPage(2);
     await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    await closeReaderDisplay(page);
     await openReaderDisplay(page); await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('1');
+    await closeReaderDisplay(page);
     await geometry(first,{x:.1,y:.68,width:.5,height:.2});await expect(back).toBeDisabled();await expect(page.getByRole('button',{name:'返回阅读',exact:true})).toHaveCount(0);
     // Same target repeats should refocus but must not create a second history entry.
     await jump(first);await expectPage(2);await geometry(first,{x:.1,y:.68,width:.5,height:.2});await expect(back).toBeDisabled();
@@ -116,6 +118,7 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     await expect(page.locator(`[data-annotation="${annotation.id}"].focused`)).toBeVisible();
     await back.click();await expectPage(3);await expect(marker(second)).toBeVisible();
     await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
+    await closeReaderDisplay(page);
     await page.getByRole('combobox',{name:'阅读缩放',exact:true}).selectOption('1.5');
     await geometry(second,{x:.2,y:.25,width:.6,height:.3});
     await page.getByRole('button',{name:'关闭来源定位',exact:true}).click();await expect(marker(second)).toHaveCount(0);
@@ -125,6 +128,7 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     // A successful local deletion removes its focus identity from the current
     // URL and every history entry, without blocking refresh or back/forward.
     await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    await closeReaderDisplay(page);
     const annotationTarget={documentId:a.id,page:4,pdfSha256:a.pdfSha256,annotationId:annotation.id};
     await jump(annotationTarget);await expectPage(4);
     await page.getByRole('button',{name:'下一页',exact:true}).click();await expectPage(5);
@@ -152,6 +156,7 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     for(const number of [1,3,5]){await pageInput.fill(String(number));await pageInput.press('Enter');await expectPage(number);}
     await back.click();await expectPage(3);await expect(forward).toBeEnabled();
     await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
+    await closeReaderDisplay(page);
     await expectPage(3);await expect(forward).toBeEnabled();
     const paper=await page.locator('.pdf-paper[data-page="3"]').boundingBox();
     await page.locator('.pdf-scroll').hover();await page.mouse.wheel(0,Math.ceil(paper.height+20));
@@ -165,6 +170,7 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     // A source detour on the same physical page restores the reading offset,
     // rather than leaving the PDF centered on the cited rectangle.
     await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    await closeReaderDisplay(page);
     await page.getByRole('combobox',{name:'阅读缩放',exact:true}).selectOption('1.5');
     await pageInput.fill('2');await pageInput.press('Enter');await expectPage(2);
     await expect(page.locator('.reader-status')).toHaveCount(0);
