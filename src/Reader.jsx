@@ -64,7 +64,8 @@ export default function Reader({ document, page, onPage, annotations, selection,
     // Old branches and replaced scroll positions have no lasting storage.
     if (historyViewports.current.size > 100) historyViewports.current.delete(historyViewports.current.keys().next().value);
   }, []);
-  const busy = !pdf || loadedId !== document.id || !readyPages.has(page);
+  const pdfLoaded = Boolean(pdf) && loadedId === document.id;
+  const busy = !pdfLoaded || !readyPages.has(page);
 
   useEffect(() => { saveDisplayPreferences(preferences); }, [preferences]);
   useEffect(()=>{setDisplayOpen(false);},[document.id]);
@@ -332,7 +333,8 @@ export default function Reader({ document, page, onPage, annotations, selection,
   const closeToc = () => { if (externalSelectionLocked||bookmarkState.busy) return; onToggleToc(false);(navigationTab==='bookmarks'?bookmarkButtonRef:tocButtonRef).current?.focus(); };
   const toggleNavigation=tab=>{if(externalSelectionLocked||bookmarkState.busy)return;const alreadyOpen=tocOpen&&navigationTab===tab;setNavigationTab(tab);onToggleToc(!alreadyOpen);};
   const jumpFromToc = next => { navigate(next); if (readerRef.current.clientWidth <= 700) closeToc(); };
-  const toggleRegion = () => { if (!busy && !selectionLocked) { clearSelection(); setRegionMode(value => !value); } };
+  // Choosing a mode is safe during tile relayout; capture layers still require ready tiles.
+  const toggleRegion = () => { if (pdfLoaded && !selectionLocked) { clearSelection(); setRegionMode(value => !value); } };
   const pinnedIndex = selection?.documentId === document.id ? Math.floor((selection.page - 1) / count) : null;
   const mounted = mode === 'paged' ? [currentIndex] : groups.map((_, index) => index).filter(index => (index >= visibleWindow.first && index <= visibleWindow.last) || index === pinnedIndex || index === currentIndex);
   const mountedSet = new Set(mounted);
@@ -343,7 +345,7 @@ export default function Reader({ document, page, onPage, annotations, selection,
       <span className="reader-hint">{regionMode ? <><ScanLine size={14}/> 拖动框选区域 · Esc 取消</> : <><Highlighter size={14}/> 选中文字，留下想法</>}</span>
       <div className="reader-tools"><button ref={displayButton} className="contents-toggle display-settings-toggle" aria-label="显示设置" aria-expanded={displayOpen} aria-controls="reader-display-settings" onKeyDown={event=>{if(event.key==='Escape'&&displayOpen){event.preventDefault();event.stopPropagation();setDisplayOpen(false);}}} onClick={()=>setDisplayOpen(value=>!value)}>显示设置</button><div id="reader-display-settings" className="reader-display-settings" hidden={!displayOpen} role="group" aria-label="阅读显示设置" onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();setDisplayOpen(false);displayButton.current?.focus();}}}><label>阅读方式<select aria-label="翻页方式" value={mode} disabled={selectionLocked} onChange={event => changeDisplay({ mode: event.target.value })}><option value="paged">左右翻页</option><option value="continuous">上下连续</option></select></label><label>每屏页数<select aria-label="页面布局" value={count} disabled={selectionLocked} onChange={event => { const next = Number(event.target.value); changeDisplay({ count: next, zoom: next > 1 ? 'page' : 'fit' }); }}>
         {PAGE_LAYOUTS.map(value => <option key={value} value={value}>{value} 页</option>)}
-      </select></label><button className="text-button" aria-label="关闭显示设置" onClick={()=>{setDisplayOpen(false);displayButton.current?.focus();}}>完成</button></div><button className="region-toggle" aria-label="区域批注" aria-pressed={regionMode} disabled={busy || selectionLocked} onClick={toggleRegion}><ScanLine size={16}/><span>区域批注</span></button><select aria-label="阅读缩放" value={zoom} disabled={selectionLocked} onChange={event => changeDisplay({ zoom: event.target.value })}><option value="fit">适合宽度</option><option value="page">适合整屏</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
+      </select></label><button className="text-button" aria-label="关闭显示设置" onClick={()=>{setDisplayOpen(false);displayButton.current?.focus();}}>完成</button></div><button className="region-toggle" aria-label="区域批注" aria-pressed={regionMode} disabled={!pdfLoaded || selectionLocked} onClick={toggleRegion}><ScanLine size={16}/><span>区域批注</span></button><select aria-label="阅读缩放" value={zoom} disabled={selectionLocked} onChange={event => changeDisplay({ zoom: event.target.value })}><option value="fit">适合宽度</option><option value="page">适合整屏</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
     </div>
     {(sourceFocus||focusedAnnotation||find)&&<div className="source-return-status" role="status"><span>{sourceFocus?'已定位来源选区':focusedAnnotation?'已定位来源批注':'已定位搜索结果'} · PDF 第 {page} 页</span><div className="source-return-actions">{historyState?.back&&<button className="return-reading-button" disabled={selectionLocked} onClick={()=>{rememberViewport();onHistory(-1);}} title="返回跳转前的阅读位置"><ArrowLeft size={14}/>返回阅读</button>}<button className="icon-button small" aria-label="关闭来源定位" title="移除定位标记，留在本页" disabled={selectionLocked} onClick={onDismissSource}><X size={14}/></button></div></div>}
     <div className="reader-body">

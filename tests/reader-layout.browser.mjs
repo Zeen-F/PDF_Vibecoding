@@ -203,8 +203,28 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     const regionToggle = page.getByRole('button', { name: '区域批注', exact: true });
     await expect(regionToggle).toBeEnabled();
     await expect(regionToggle).toHaveAttribute('aria-pressed', 'false');
+    // Mode intent remains available across relayout; unready tiles must never
+    // expose a capture layer. Observe the rerender, not a fixed sleep.
+    await page.evaluate(() => {
+      const reader = document.querySelector('.reader');
+      const toggle = reader.querySelector('[aria-label="区域批注"]');
+      window.__regionRelayout = { disabled: false, unsafeOverlay: false, loading: false };
+      window.__regionObserver = new MutationObserver(records => {
+        const state = window.__regionRelayout;
+        state.disabled ||= toggle.disabled || records.some(record => record.target === toggle && record.attributeName === 'disabled' && record.oldValue !== null);
+        state.loading ||= Boolean(reader.querySelector('.pdf-paper.is-loading'));
+        state.unsafeOverlay ||= Boolean(reader.querySelector('.pdf-paper.is-loading [data-region-selection]'));
+      });
+      window.__regionObserver.observe(reader, { subtree: true, childList: true, attributes: true, attributeOldValue: true });
+    });
+    await page.setViewportSize({ width: 2500, height: 1400 });
     await regionToggle.focus(); await regionToggle.press('Space');
     await expect(regionToggle).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => page.evaluate(() => window.__regionRelayout.loading)).toBe(true);
+    await expect(tile(5).getByLabel('拖动框选批注区域', { exact: true })).toBeVisible();
+    const relayout = await page.evaluate(() => { window.__regionObserver.disconnect(); return window.__regionRelayout; });
+    assert.deepEqual(relayout, { disabled: false, unsafeOverlay: false, loading: true });
+    assert.equal((await readBook()).annotations.length, beforeCrossPage.length + 1, 'Choosing mode must not save a region');
     const expected = await dragRegion(5);
     const region = await saveAnnotation(5, 'region', '布局验收：第五页图形区域。');
     assert.equal(region.quote, ''); assert.equal(region.rects.length, 1); assertRect(region.rects[0], expected);
