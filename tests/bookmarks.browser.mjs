@@ -1,3 +1,4 @@
+import { openReaderDisplay } from './reader-display-controls.mjs';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -80,10 +81,10 @@ async function runBookmarkMode({context,root,onPreview,mode}) {
     for(const at of [2,4]){await rename(at).click();await editor(at).fill('回看条件');await page.getByRole('button',{name:'保存书签名称',exact:true}).click();await expect(jump(at)).toHaveAccessibleName(`书签：回看条件，PDF 第 ${at} 页`);}
     await page.evaluate(id=>localStorage.setItem(`paperdesk-toc-offset-${id}`,'3'),first.id);
     await goto(1);await openBooks();await jump(2).click();await expect(currentPage()).toHaveValue('2');
-    await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('4');await openBooks();await jump(4).click();await expect(currentPage()).toHaveValue('4');await expect(page.getByLabel('PDF 第 4 页',{exact:true})).toBeVisible();
-    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('2');await openBooks();await jump(2).click();await expect(currentPage()).toHaveValue('2');
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('4');await openBooks();await jump(4).click();await expect(currentPage()).toHaveValue('4');await expect(page.getByLabel('PDF 第 4 页',{exact:true})).toBeVisible();
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');await openReaderDisplay(page); await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('2');await openBooks();await jump(2).click();await expect(currentPage()).toHaveValue('2');
     await page.setViewportSize({width:640,height:720});await openBooks();await capture(`${mode}-bookmarks-narrow`);await jump(4).click();await expect(currentPage()).toHaveValue('4');await expect(books()).not.toBeVisible();
-    await page.setViewportSize({width:1440,height:1000});await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('1');await goto(2);await openBooks();
+    await page.setViewportSize({width:1440,height:1000});await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');await openReaderDisplay(page); await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('1');await goto(2);await openBooks();
     await capture(`${mode}-bookmarks-wide`);
     await page.route(`${base}/api/documents/${first.id}/bookmarks/${pageTwo.id}`,async route=>{if(route.request().method()==='PATCH')await route.fulfill({status:500,json:{error:'隔离验证：保存失败'}});else await route.continue();});
     await rename(2).click();await editor(2).fill('保存失败仍保留的名称');await page.getByRole('button',{name:'保存书签名称',exact:true}).click();

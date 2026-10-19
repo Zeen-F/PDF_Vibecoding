@@ -77,7 +77,7 @@ function readSidecar(lib, work) {
 test('unconfigured, invalid settings, missing credentials and foreign origins cannot send or expose secrets', async t => {
   const lib = await fixture(t);
   const first = await lib.json(configUrl);
-  assert.deepEqual(first.settings, { provider: 'baidu', activeProvider: 'baidu', configured: false, appIdHint: null, tier: 'standard', monthlyLimit: 50_000, month: '2026-10', usedCharacters: 0, remainingCharacters: 50_000, maxCharacters: 1000, maxBytes: 6000, endpoint: 'https://fanyi-api.baidu.com/api/trans/vip/translate', region: null, model: null });
+  assert.deepEqual(first.settings, { provider: 'baidu', activeProvider: 'baidu', configured: false, revision: first.settings.revision, appIdHint: null, tier: 'standard', monthlyLimit: 50_000, month: '2026-10', usedCharacters: 0, remainingCharacters: 50_000, maxCharacters: 1000, maxBytes: 6000, endpoint: 'https://fanyi-api.baidu.com/api/trans/vip/translate', region: null, model: null });
   assert.ok(!(await readdir(lib.dataDir)).includes('translation.sqlite'), 'Reading unconfigured defaults must not create a secret store');
   await rejected(await lib.request(translateUrl, 'POST', { text: 'Original text' }), 409);
   for (const body of [
@@ -728,4 +728,23 @@ test('test and translation queues share their capacity and close cancels only un
   await lib.runtime.close(); await rejected(await first, 503);
   for (const response of await Promise.all(pending)) await rejectedTest(response, 503, 'stopped');
   assert.equal(lib.calls.length, 1); assert.equal(readSidecar(lib, db => db.prepare('SELECT sum(characters) AS n FROM usage').get().n), 6);
+});
+
+
+test('selection preview revision guard rejects changed providers/configuration before sending, including cached text', async t => {
+  const lib = await fixture(t);
+  const first = await lib.configure();
+  assert.match(first.settings.revision, /^[a-f0-9]{64}$/);
+  await lib.translate('Synthetic paragraph one', { expectedRevision: first.settings.revision });
+  const second = await lib.configure({ monthlyLimit: 49999 });
+  assert.notEqual(second.settings.revision, first.settings.revision);
+  await lib.json(translateUrl, 'POST', { text: 'Synthetic paragraph one', expectedRevision: first.settings.revision }, 409);
+  await lib.json(translateUrl, 'POST', { text: 'Synthetic paragraph two', expectedRevision: first.settings.revision }, 409);
+  assert.equal(lib.calls.length, 1);
+  const resumed = await lib.translate('Synthetic paragraph one', { expectedRevision: second.settings.revision });
+  assert.equal(resumed.translation.cached, true);
+  assert.equal(lib.calls.length, 1);
+  await lib.configure({ provider: 'azure', apiKey: 'synthetic-selection-azure-key', appId: undefined, tier: undefined, monthlyLimit: 50000 });
+  await lib.json(translateUrl, 'POST', { text: 'Synthetic paragraph three', expectedRevision: second.settings.revision }, 409);
+  assert.equal(lib.calls.length, 1, 'Switching providers never sends a selection to the unconfirmed destination');
 });

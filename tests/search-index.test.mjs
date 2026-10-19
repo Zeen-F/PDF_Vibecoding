@@ -133,3 +133,23 @@ test('a high-cardinality query with no recent-prefix hits still searches the ent
     assert.deepEqual(results.map(r=>r.page),Array.from({length:100},(_,i)=>i+1));
   }
 });
+
+test('scoped FTS paginates beyond UI cap without private hits starving or leaking into results', t => {
+  const { document, page, annotation, db } = fixture(t);
+  document('a', 'needle PRIVATE', 'needle'); document('b', 'needle SECRET', 'other');
+  for (let i = 1; i <= 130; i++) page('a', i, 'needle');
+  page('b', 1, 'needle'); annotation('note', 'a', 1, 'needle', 'PRIVATE');
+  const index = createSearchIndex(db);
+  assert.deepEqual(index.searchScoped('needle').results.map(row => row.source), ['title']);
+  const all = [];
+  for (let offset = 0; offset < 130; offset += 17) {
+    const result = index.searchScoped('needle', { sources: ['text'], documentIds: ['a'], offset, limit: 17 });
+    all.push(...result.results);
+    assert.equal(result.hasMore, offset + 17 < 130);
+  }
+  assert.deepEqual(all.map(row => row.page), Array.from({ length: 130 }, (_, i) => i + 1));
+  assert.ok(all.every(row => row.source === 'text' && row.documentId === 'a'));
+  assert.doesNotMatch(JSON.stringify(all), /PRIVATE|SECRET/);
+  assert.equal(index.searchScoped('needle', { sources: ['annotation'], documentIds: ['a'] }).results[0].annotationId, 'note');
+  assert.throws(() => index.searchScoped('needle', { sources: ['all'] }));
+});

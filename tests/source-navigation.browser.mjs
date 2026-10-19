@@ -1,3 +1,4 @@
+import { openReaderDisplay } from './reader-display-controls.mjs';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +12,7 @@ import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { sourceLinkSearch } from '../shared/source-navigation.mjs';
 
 /** Original fixtures and an owned temporary vault only; never a personal library. */
-export async function sourceNavigationWorkflow({context}) {
+export async function sourceNavigationWorkflow({context,onPreview}) {
   const root=await mkdtemp(join(tmpdir(),'paperdesk-source-browser-')),vaultDir=join(root,'vault');
   let runtime,server,page,release;
   const errors=[];
@@ -50,9 +51,9 @@ export async function sourceNavigationWorkflow({context}) {
       for(const [actual,expected]of [[box.x,paper.x+paper.width*rect.x],[box.y,paper.y+paper.height*rect.y],[box.width,paper.width*rect.width],[box.height,paper.height*rect.height]])assert.ok(Math.abs(actual-expected)<1.5,`${actual} != ${expected}`);
     };
     await page.goto(url(first));await expectPage(2);
-    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
-    await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('1');
-    await geometry(first,{x:.1,y:.68,width:.5,height:.2});await expect(back).toBeDisabled();
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'页面布局',exact:true}).selectOption('1');
+    await geometry(first,{x:.1,y:.68,width:.5,height:.2});await expect(back).toBeDisabled();await expect(page.getByRole('button',{name:'返回阅读',exact:true})).toHaveCount(0);
     // Same target repeats should refocus but must not create a second history entry.
     await jump(first);await expectPage(2);await geometry(first,{x:.1,y:.68,width:.5,height:.2});await expect(back).toBeDisabled();
     await page.getByRole('button',{name:'下一页',exact:true}).click();await expectPage(3);await expect(marker(first)).toHaveCount(0);
@@ -60,8 +61,17 @@ export async function sourceNavigationWorkflow({context}) {
     await forward.click();await expectPage(3);await expect(marker(first)).toHaveCount(0);
     await back.click();await expectPage(2);
     const pageInput=page.getByRole('spinbutton',{name:'页码',exact:true});await pageInput.fill('4');await pageInput.press('Enter');await expectPage(4);await expect(forward).toBeDisabled();
+    await page.getByRole('combobox',{name:'阅读缩放',exact:true}).selectOption('1.5');
+    await expect(page.locator('.reader-status')).toHaveCount(0);
+    const offset=()=>page.evaluate(()=>{const root=document.querySelector('.pdf-scroll'),paper=document.querySelector('.pdf-paper[data-page="'+document.querySelector('input[aria-label="页码"]').value+'"]');const rect=paper.getBoundingClientRect(),bounds=root.getBoundingClientRect();return (bounds.top-rect.top)/rect.height;});
+    await page.locator('.pdf-scroll').evaluate(root=>{root.scrollTop=260;root.dispatchEvent(new Event('scroll'));});
+    await expect.poll(offset).toBeGreaterThan(.1);
+    const previousOffset=await offset();
     await jump(third);await expectPage(5);await expect(page.locator('.header-title h1')).toHaveText(b.title);
-    await back.click();await expectPage(4);await expect(page.locator('.header-title h1')).toHaveText(a.title);
+    await onPreview?.(page,'source-return-banner');
+    await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);await expect(page.locator('.header-title h1')).toHaveText(a.title);
+    await expect.poll(async()=>Math.abs(await offset()-previousOffset)).toBeLessThan(.01);
+    await onPreview?.(page,'restored-reading-viewport');
     await forward.click();await expectPage(5);await expect(marker(third)).toBeVisible();
     // A modal or unsaved bookmark blocks a source URL without leaving the URL
     // pointing at a destination the visible reader refused.
@@ -105,7 +115,7 @@ export async function sourceNavigationWorkflow({context}) {
     await page.locator('.search-result').filter({hasText:'批注'}).click();await expectPage(4);
     await expect(page.locator(`[data-annotation="${annotation.id}"].focused`)).toBeVisible();
     await back.click();await expectPage(3);await expect(marker(second)).toBeVisible();
-    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
     await page.getByRole('combobox',{name:'阅读缩放',exact:true}).selectOption('1.5');
     await geometry(second,{x:.2,y:.25,width:.6,height:.3});
     await page.getByRole('button',{name:'关闭来源定位',exact:true}).click();await expect(marker(second)).toHaveCount(0);
@@ -114,7 +124,7 @@ export async function sourceNavigationWorkflow({context}) {
 
     // A successful local deletion removes its focus identity from the current
     // URL and every history entry, without blocking refresh or back/forward.
-    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
     const annotationTarget={documentId:a.id,page:4,pdfSha256:a.pdfSha256,annotationId:annotation.id};
     await jump(annotationTarget);await expectPage(4);
     await page.getByRole('button',{name:'下一页',exact:true}).click();await expectPage(5);
@@ -141,18 +151,34 @@ export async function sourceNavigationWorkflow({context}) {
     // Back; unchanged scroll samples must not invalidate a usable Forward.
     for(const number of [1,3,5]){await pageInput.fill(String(number));await pageInput.press('Enter');await expectPage(number);}
     await back.click();await expectPage(3);await expect(forward).toBeEnabled();
-    await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('continuous');
     await expectPage(3);await expect(forward).toBeEnabled();
     const paper=await page.locator('.pdf-paper[data-page="3"]').boundingBox();
     await page.locator('.pdf-scroll').hover();await page.mouse.wheel(0,Math.ceil(paper.height+20));
     await expectPage(4);await expect(forward).toBeDisabled();
+    const continuousOffset=await offset();
     await back.click();await expectPage(1);
     await expect(page.locator('.pdf-paper[data-page="1"]')).toBeInViewport();
     await forward.click();await expectPage(4);
     await expect(page.locator('.pdf-paper[data-page="4"]')).toBeInViewport();
+    await expect.poll(async()=>Math.abs(await offset()-continuousOffset)).toBeLessThan(.01);
+    // A source detour on the same physical page restores the reading offset,
+    // rather than leaving the PDF centered on the cited rectangle.
+    await openReaderDisplay(page); await page.getByRole('combobox',{name:'翻页方式',exact:true}).selectOption('paged');
+    await page.getByRole('combobox',{name:'阅读缩放',exact:true}).selectOption('1.5');
+    await pageInput.fill('2');await pageInput.press('Enter');await expectPage(2);
+    await expect(page.locator('.reader-status')).toHaveCount(0);
+    await page.locator('.pdf-scroll').evaluate(root=>{root.scrollTop=180;root.dispatchEvent(new Event('scroll'));});
+    await expect.poll(offset).toBeGreaterThan(.05);const samePageOffset=await offset();
+    await jump(first);await expect(marker(first)).toBeVisible();
+    await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(2);
+    await expect(marker(first)).toHaveCount(0);
+    await expect.poll(async()=>Math.abs(await offset()-samePageOffset)).toBeLessThan(.01);
+    await forward.click();await expect(marker(first)).toBeVisible();
     assert.deepEqual(await readFile(join(vaultDir,'来源甲.pdf')),Buffer.concat([bookmarkedPdf(),Buffer.from('\n% 来源甲')]));
     assert.deepEqual(errors,[]);
     console.log('PASS: precise capture/annotation focus, repeat deduplication, cross-document history, branching, invalid identity rejection, cancelled and superseded jumps, zoom and dismissal');
+    console.log('PASS: source return action and normalized same-page, cross-document and continuous-reading viewport restoration');
     console.log('PASS: acknowledged annotation deletion clears focus/history/URL, failed deletion preserves them, refresh/stale-link guards and continuous-scroll history branching');
   } finally {
     release?.();await page?.close();
@@ -163,6 +189,6 @@ export async function sourceNavigationWorkflow({context}) {
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   let browser;
-  try{browser=await chromium.launch();const context=await browser.newContext({viewport:{width:1440,height:1000}});context.setDefaultTimeout(15000);await sourceNavigationWorkflow({context});}
+  try{browser=await chromium.launch(process.env.PAPERDESK_CHROMIUM_EXECUTABLE?{executablePath:process.env.PAPERDESK_CHROMIUM_EXECUTABLE}:{});const context=await browser.newContext({viewport:{width:1440,height:1000}});context.setDefaultTimeout(15000);await sourceNavigationWorkflow({context});}
   finally{await browser?.close();}
 }

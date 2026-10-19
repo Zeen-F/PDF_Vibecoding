@@ -137,3 +137,9 @@ schema 3 增加文件夹、可空文献归属和皮肤偏好，包含旧版批�
 ## 搜索性能回归
 
 `node scripts/benchmark-search.mjs` 使用可重复的临时合成库比较索引前后搜索，并断言结果一致；详见 [本机索引搜索](search.md)。不读取正式资料，不需要浏览器。
+
+## Reader-inspired workflow regression
+
+`npm run check` includes bounded MCP search/grant tests, selection translation confirmation/revision tests, and browser flows for source-return viewport restoration and explicit selected-text preview/retry confirmation. Use only synthetic fixtures and injected translation responses. `PAPERDESK_CHROMIUM_EXECUTABLE` optionally selects an already installed Chromium executable for the browser runner; the default remains the Playwright-managed browser. Set `PAPERDESK_ACCEPTANCE_DIR=.local/reader-upgrade-evidence` only when screenshots need to be retained. Browser and native desktop results must be reported separately; a successful build does not establish visual acceptance.
+
+UI refinement coverage adds `reader-ui-state.test.mjs` for transient panel visibility and `reader-ui-refinement.browser.mjs` for display disclosure, keyboard dismissal, draft/preference preservation and narrow-window bounds. Existing display tests now explicitly open the disclosure instead of forcing hidden selects. Translation browser coverage includes card focus, hidden duplicate actions and Escape focus return. Browser scripts remain unverified until they execute in an eligible environment.

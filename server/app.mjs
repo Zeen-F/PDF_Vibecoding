@@ -718,6 +718,17 @@ export function createApp({ dataDir, vaultDir = process.env.PAPERDESK_VAULT_DIR,
 
   app.get('/api/search', (req, res) => {
     const query = stringValue(req.query.q ?? '', '搜索内容', 500);
+    if (req.query.scoped === '1') {
+      const sources = typeof req.query.sources === 'string' ? req.query.sources.split(',') : ['title'];
+      const documentIds = typeof req.query.documentIds === 'string' ? req.query.documentIds.split(',') : [];
+      const offset = Number(req.query.offset ?? 0), limit = Number(req.query.limit ?? 20);
+      if (Object.keys(req.query).some(key => !['q', 'scoped', 'sources', 'documentIds', 'offset', 'limit'].includes(key))
+          || !sources.length || sources.length > 4 || !sources.every(source => ['title', 'text', 'notes', 'annotation'].includes(source))
+          || documentIds.length > 20 || !documentIds.every(id => /^[0-9a-f-]{36}$/i.test(id))
+          || !Number.isSafeInteger(offset) || offset < 0 || offset > 100000
+          || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new HttpError(400, '搜索范围或分页参数无效。');
+      return res.json(searchIndex.searchScoped(query, { sources, documentIds, offset, limit }));
+    }
     res.json({ results: searchIndex.search(query) });
   });
   app.post('/api/search/rebuild', (req, res) => {

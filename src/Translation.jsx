@@ -2,6 +2,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { Languages, X, LoaderCircle, Copy, ExternalLink } from 'lucide-react';
 import { api } from './api.js';
 import './translation.css';
+import { hasConfirmedTranslationProfile } from './translation-profile.mjs';
 
 const ALLOWANCE = { standard: 50000, advanced: 1000000 };
 const keyOf = selection => selection?.kind !== 'region' && selection?.quote ? JSON.stringify([selection.documentId, selection.page, selection.quote]) : selection?.kind === 'region' ? 'region' : '';
@@ -11,7 +12,7 @@ const formFrom = settings => ({ ...defaults(settings.provider), tier: settings.t
 const limitFor = form => form.provider === 'baidu' ? ALLOWANCE[form.tier] : 10000000;
 const blankForm = defaults();
 
-const Translation = forwardRef(function Translation({ documentId, page, selection, onModalChange }, ref) {
+const Translation = forwardRef(function Translation({ documentId, page, selection, onModalChange, onResultChange }, ref) {
   const [activeProvider, setActiveProvider] = useState('baidu');
   const [settings, setSettings] = useState(null), [settingsOpen, setSettingsOpen] = useState(false);
   const [form, setForm] = useState(blankForm), [settingsBusy, setSettingsBusy] = useState(false), [settingsError, setSettingsError] = useState(''), [settingsStatus, setSettingsStatus] = useState(''), [confirmClear, setConfirmClear] = useState(false);
@@ -19,11 +20,11 @@ const Translation = forwardRef(function Translation({ documentId, page, selectio
   const testVersion = useRef(0), testController = useRef(null);
   const testing = testResult?.state === 'loading';
   const [result, setResult] = useState(null), [target, setTarget] = useState('zh'), [copyStatus, setCopyStatus] = useState(''), [copyBusy, setCopyBusy] = useState(false);
-  const opener = useRef(null);
+  const opener = useRef(null), sending = useRef(false), resultCard = useRef(null);
   const dialog = useRef(null), resultField = useRef(null), settingsVersion = useRef(0), requestVersion = useRef(0), controller = useRef(null), active = useRef(null), mounted = useRef(true), copying = useRef(false);
   const selectionKey = keyOf(selection), context = useRef({ documentId, page, selectionKey });
   context.current = { documentId, page, selectionKey };
-  const closeResult = () => { ++requestVersion.current; controller.current?.abort(); active.current = null; setResult(null); setCopyStatus(''); };
+  const closeResult = (restoreFocus = false) => { if(restoreFocus) requestAnimationFrame(()=>(window.document.querySelector('.translation-action')||window.document.querySelector('.reader'))?.focus({preventScroll:true})); sending.current = false; ++requestVersion.current; controller.current?.abort(); active.current = null; setResult(null); setCopyStatus(''); };
   const clearTest = () => { ++testVersion.current; testController.current?.abort(); testController.current = null; setTestResult(null); };
   const updateForm = update => { clearTest(); setForm(update); };
   const closeSettings = () => { clearTest(); ++settingsVersion.current; setSettingsOpen(false); setForm(value => ({ ...value, appId: '', apiKey: '' })); setConfirmClear(false); setSettingsBusy(false); onModalChange(false); };
@@ -43,21 +44,36 @@ const Translation = forwardRef(function Translation({ documentId, page, selectio
     setSettingsOpen(true); onModalChange(true); void loadProfile();
   };
   const stillCurrent = (version, snapshot) => mounted.current && version === requestVersion.current && context.current.documentId === snapshot.documentId && context.current.page === snapshot.page && (!context.current.selectionKey || context.current.selectionKey === keyOf(snapshot));
-  const translate = async (snapshot, to = target) => {
+  const performTranslation = async (snapshot, to = target) => {
+    if (sending.current) return;
+    if (!hasConfirmedTranslationProfile(result?.profile) || result?.needsPreview) { void translate(snapshot); return; }
     if (!snapshot?.quote || snapshot.kind === 'region' || snapshot.documentId !== context.current.documentId || snapshot.page !== context.current.page) return;
+    sending.current = true;
     const frozen = { documentId: snapshot.documentId, page: snapshot.page, quote: snapshot.quote };
     const version = ++requestVersion.current;
     controller.current?.abort(); controller.current = new AbortController(); active.current = frozen;
-    setResult({ snapshot: frozen, state: 'loading', to }); setCopyStatus('');
+    setResult(previous => ({ snapshot: frozen, state: 'loading', to, profile: previous?.profile, translation: keyOf(previous?.snapshot) === keyOf(frozen) ? previous.translation : undefined })); setCopyStatus('');
     try {
-      const data = await api('/translation', { method: 'POST', body: JSON.stringify({ text: frozen.quote, from: 'auto', to }), signal: controller.current.signal });
+      const data = await api('/translation', { method: 'POST', body: JSON.stringify({ text: frozen.quote, from: 'auto', to, expectedRevision: result.profile.revision }), signal: controller.current.signal });
       if (!stillCurrent(version, frozen)) return;
-      setSettings(previous => previous?.provider === data.settings.provider ? data.settings : previous); setActiveProvider(data.settings.activeProvider); setResult({ snapshot: frozen, state: 'ready', to, translation: data.translation });
+      setSettings(previous => previous?.provider === data.settings.provider ? data.settings : previous); setActiveProvider(data.settings.activeProvider); setResult({ snapshot: frozen, state: 'ready', to, profile: result?.profile, translation: data.translation });
     } catch (error) {
-      if (error.name !== 'AbortError' && stillCurrent(version, frozen)) setResult({ snapshot: frozen, state: 'error', to, error: error.message });
-    }
+      if (error.name !== 'AbortError' && stillCurrent(version, frozen)) setResult(previous => ({ snapshot: frozen, state: 'error', to, error: error.message, needsPreview: error.status === 409, profile: previous?.profile, translation: previous?.translation }));
+    } finally { if (version === requestVersion.current) sending.current = false; }
+  };
+  const translate = async snapshot => {
+    if (!snapshot?.quote || snapshot.kind === 'region' || snapshot.documentId !== context.current.documentId || snapshot.page !== context.current.page) return;
+    const frozen = { documentId: snapshot.documentId, page: snapshot.page, quote: snapshot.quote };
+    const version = ++requestVersion.current; controller.current?.abort(); controller.current = new AbortController(); active.current = frozen;
+    sending.current = false; setResult(previous => ({ snapshot: frozen, state: 'preview', to: target, translation: keyOf(previous?.snapshot) === keyOf(frozen) ? previous.translation : undefined }));
+    try {
+      const data = await api('/translation/settings', { signal: controller.current.signal });
+      if (stillCurrent(version, frozen)) setResult(previous => ({ snapshot: frozen, state: 'preview', to: target, profile: data.settings, translation: previous?.translation }));
+    } catch (error) { if (error.name !== 'AbortError' && stillCurrent(version, frozen)) setResult(previous => ({ snapshot: frozen, state: 'error', to: target, error: error.message, translation: previous?.translation })); }
   };
   useImperativeHandle(ref, () => ({ openSettings, translate, closeResult }));
+  const resultVisible = Boolean(result);
+  useEffect(()=>{onResultChange?.(resultVisible);if(resultVisible)resultCard.current?.focus({preventScroll:true});},[resultVisible,onResultChange]);
   useEffect(() => {
     const snapshot = active.current;
     // Controls in this card may clear the browser's DOM selection. A new PDF
@@ -132,7 +148,7 @@ const Translation = forwardRef(function Translation({ documentId, page, selectio
     {settingsOpen && <dialog ref={dialog} className="translation-dialog" aria-label="翻译设置" aria-modal="true" onKeyDown={event => { if (event.key !== 'Tab') return; const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')]; const first = controls[0], last = controls.at(-1); if (event.shiftKey && window.document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && window.document.activeElement === last) { event.preventDefault(); first?.focus(); } }} onCancel={event => { event.preventDefault(); closeSettings(); }}>
       <form onSubmit={saveSettings}>
         <div className="translation-heading"><h2><Languages size={19}/> 翻译设置</h2><button type="button" className="icon-button" aria-label="关闭翻译设置" onClick={closeSettings}><X size={19}/></button></div>
-        <p className="translation-intro">使用你自己的翻译 API。只有点击“翻译”时，选中的文字才发送给当前启用的服务，无需 Codex，也不会自动写入笔记。</p>
+        <p className="translation-intro">使用你自己的翻译 API。只有确认发送选文时，预览中的文字才发送给当前启用的服务，无需 Codex，也不会自动写入笔记。</p>
         <label>翻译服务<select autoFocus aria-label="翻译服务" value={form.provider} disabled={settingsBusy} onChange={event => void loadProfile(event.target.value)}>{Object.entries(PROVIDERS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
         <p className="translation-help">当前启用：{PROVIDERS[activeProvider] || '尚未配置'}。保存设置后启用所选服务；查看其他服务不会切换正在使用的配置。</p>
         {form.provider === 'baidu' && <a className="translation-provider-link" href="https://fanyi-api.baidu.com/access/0/1" target="_blank" rel="noopener noreferrer">百度翻译开放平台 <ExternalLink size={13}/></a>}
@@ -156,12 +172,14 @@ const Translation = forwardRef(function Translation({ documentId, page, selectio
         <div className="translation-actions translation-settings-actions"><button type="button" className="text-button danger" disabled={!settings?.configured || settingsBusy || testing} onClick={() => setConfirmClear(true)}>清除已存密钥</button><div className="translation-settings-submit"><button type="button" className="secondary-button" disabled={settingsBusy || testing} onClick={testTranslation}>{testing ? <LoaderCircle size={15} className="spin"/> : null} 测试翻译</button><button className="primary-button" disabled={settingsBusy || testing}>{settingsBusy ? <LoaderCircle size={15} className="spin"/> : null} 保存翻译设置</button></div></div>
       </form>
     </dialog>}
-    {result && <section className="translation-card" role="region" aria-label="选文翻译">
-      <div className="translation-heading"><h2><Languages size={17}/> 选文翻译 <small>第 {result.snapshot.page} 页</small></h2><button className="icon-button" aria-label="关闭翻译结果" onClick={closeResult}><X size={18}/></button></div>
-      <p className="translation-help">{PROVIDERS[result.translation?.provider] || '翻译服务'} · 仅发送本次选文，不写入笔记。</p>
-      <label className="translation-target">翻译为<select aria-label="翻译目标语言" value={target} onChange={event => { setTarget(event.target.value); void translate(result.snapshot, event.target.value); }}><option value="zh">中文</option><option value="en">English</option></select></label>
+    {result && result.snapshot.documentId === documentId && result.snapshot.page === page && <section ref={resultCard} tabIndex={-1} className="translation-card" role="region" aria-label="选文翻译" aria-describedby="translation-scope-help" onKeyDown={event=>{if(event.key==='Escape'&&!settingsOpen){event.preventDefault();event.stopPropagation();closeResult(true);}}}>
+      <div className="translation-heading"><h2><Languages size={17}/> 选文翻译 <small>第 {result.snapshot.page} 页</small></h2><button className="icon-button" aria-label="关闭翻译结果" title="关闭翻译结果（Esc）" onClick={()=>closeResult(true)}><X size={18}/></button></div>
+      <p id="translation-scope-help" className="translation-help">{PROVIDERS[result.profile?.provider || result.translation?.provider] || '正在读取翻译服务'}{result.profile?.endpoint ? `（${result.profile.endpoint}）` : ''} · 可划选词句或手动选中一段。确认后仅发送下方选文，不自动发送相邻段落或笔记；真实调用可能计费。</p>
+      <label className="translation-target">翻译为<select aria-label="翻译目标语言" disabled={result.state === 'loading'} value={target} onChange={event => setTarget(event.target.value)}><option value="zh">中文</option><option value="en">English</option></select></label>
+      {result.state !== 'preview' && result.to !== target && <button className="primary-button" disabled={result.state === 'loading'} onClick={() => performTranslation(result.snapshot, target)}>确认重新翻译选文</button>}
+      {result.state !== 'ready' && result.translation && <label>上一版译文（新译文完成前保留）<textarea aria-label="上一版译文" readOnly value={result.translation.translatedText}/></label>}
       <label>原文<textarea aria-label="翻译原文" readOnly value={result.snapshot.quote}/></label>
-      {result.state === 'loading' ? <p className="translation-status" role="status"><LoaderCircle size={15} className="spin"/> 正在翻译…</p> : result.state === 'error' ? <div><p className="translation-error" role="alert">{result.error}</p><div className="translation-actions"><button className="text-button" onClick={openSettings}>检查翻译设置</button><button className="primary-button" onClick={() => translate(result.snapshot, target)}>重试翻译</button></div></div> : <><label>译文<textarea ref={resultField} aria-label="译文" readOnly value={result.translation.translatedText}/></label><div className="translation-actions"><span className="translation-help">{result.translation.cached ? '使用本机缓存' : `本次 ${result.translation.characters.toLocaleString()} 字符`}</span><button className="text-button" disabled={copyBusy} onClick={copyResult}><Copy size={13}/> 复制译文</button></div>{copyStatus && <p className="translation-status" role="status">{copyStatus}</p>}</>}
+      {result.state === 'preview' ? <><button className="primary-button" disabled={!hasConfirmedTranslationProfile(result.profile)} onClick={() => performTranslation(result.snapshot, target)}>确认发送选文</button>{result.profile && !result.profile.configured && <><p role="alert" className="translation-error">请先配置翻译服务，再重新打开选文预览。</p><button className="text-button" onClick={openSettings}>检查翻译设置</button></>}</> : result.state === 'loading' ? <p className="translation-status" role="status"><LoaderCircle size={15} className="spin"/> 正在翻译…</p> : result.state === 'error' ? <div><p className="translation-error" role="alert">{result.error}</p><div className="translation-actions"><button className="text-button" onClick={openSettings}>检查翻译设置</button><button className="primary-button" onClick={() => translate(result.snapshot)}>重试翻译</button></div></div> : <><label>译文（{result.to === 'zh' ? '中文' : 'English'}）<textarea ref={resultField} aria-label="译文" readOnly value={result.translation.translatedText}/></label><div className="translation-actions"><span className="translation-help">{result.translation.cached ? '使用本机缓存' : `本次 ${result.translation.characters.toLocaleString()} 字符`}</span><button className="text-button" disabled={copyBusy} onClick={copyResult}><Copy size={13}/> 复制译文</button></div>{copyStatus && <p className="translation-status" role="status">{copyStatus}</p>}</>}
     </section>}
   </>;
 });

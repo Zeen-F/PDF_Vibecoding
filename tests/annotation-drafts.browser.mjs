@@ -1,3 +1,4 @@
+import { openReaderDisplay } from './reader-display-controls.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { expect } from '@playwright/test';
@@ -76,8 +77,8 @@ export async function annotationDraftWorkflow({ page: suppliedPage, context, bas
     await expect(target.locator('.header-title h1')).toHaveText(book.title);
   };
   const openRegionModal = async target => {
-    await target.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('1');
-    await target.getByRole('combobox', { name: '翻页方式', exact: true }).selectOption('paged');
+    await openReaderDisplay(target); await target.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('1');
+    await openReaderDisplay(target); await target.getByRole('combobox', { name: '翻页方式', exact: true }).selectOption('paged');
     await target.getByRole('combobox', { name: '阅读缩放', exact: true }).selectOption('fit');
     await expect(target.locator('.pdf-paper canvas')).toBeVisible();
     const toggle = target.getByRole('button', { name: '区域批注', exact: true });

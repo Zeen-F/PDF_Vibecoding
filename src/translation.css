@@ -2,3 +2,12 @@
 @media(max-width:780px){.translation-settings-button{padding:7px;font-size:10px;gap:4px}.translation-settings-button svg{width:13px}.translation-dialog{padding:21px;max-height:calc(100dvh - 28px)}.translation-card{right:14px;bottom:135px;max-height:calc(100dvh - 235px);padding:17px}.translation-form-grid{grid-template-columns:1fr;gap:12px}.translation-heading h2{font-size:19px}.translation-region-hint{max-width:150px}.selection-bar .translation-action{white-space:nowrap;flex-shrink:0}}
 
 .translation-settings-actions{flex-wrap:wrap;gap:12px}.translation-settings-submit{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;margin-left:auto}.translation-settings-submit button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.translation-test-help{margin-top:18px}.translation-test-result{padding:12px;border:1px solid var(--line);border-radius:4px;background:var(--soft);margin-top:10px}.translation-test-result .translation-status,.translation-test-result .translation-error{margin-top:0}.translation-test-result textarea{display:block;width:100%;min-width:0;resize:vertical;min-height:56px;max-height:160px;margin-top:7px;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:var(--field);color:var(--ink);font-size:12px;line-height:1.8;font-family:inherit}.translation-test-result label{margin-top:10px}
+
+/* A compact, keyboard-reachable reading tool, separate from account settings. */
+.translation-card{bottom:24px;max-height:min(76dvh,720px);padding:18px;overscroll-behavior:contain;scrollbar-gutter:stable}
+.translation-card:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.translation-card .translation-heading{position:sticky;top:-18px;margin:-1px -1px 8px;padding:8px 0;background:var(--paper);z-index:1}
+.translation-card .translation-help{overflow-wrap:anywhere}
+.translation-card .translation-actions{flex-wrap:wrap}
+.translation-card textarea:focus-visible,.reader-display-settings select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:600px){.translation-card{left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));width:auto;max-height:72dvh;padding:14px}.translation-card .translation-heading{top:-14px}.translation-card textarea{max-height:150px}.focus-reading-button{padding:7px;font-size:11px}}

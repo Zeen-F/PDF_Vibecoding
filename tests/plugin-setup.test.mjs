@@ -55,3 +55,40 @@ test('setup preserves a matching Windows path binding and refuses a different li
   assert.equal(refused.code, 1); assert.match(refused.output, /另一份工作区或文献库/);
   assert.deepEqual(await readFile(profilePath), before);
 });
+
+test('setup grants only explicit verified document/source windows and can revoke without replacing library identity', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'paperdesk-search-grant-'));
+  const profilePath = path.join(root, 'plugin.json');
+  const documentId = '03096871-6d0e-42e0-9d63-ed0c7330ea11';
+  const libraryId = 'b'.repeat(64);
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(request.url === '/api/documents' ? { documents: [{ id: documentId }] } : { service: 'paperdesk', apiVersion: 1, libraryId }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  async function setup(args = []) {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../scripts/setup-plugin.mjs', import.meta.url)), '--base-url', `http://127.0.0.1:${server.address().port}`, '--config', profilePath, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.resume(); child.stderr.resume(); return (await once(child, 'close'))[0];
+  }
+  assert.equal(await setup(), 0);
+  assert.equal(JSON.parse(await readFile(profilePath)).searchGrant, undefined);
+  const args = ['--search-document', documentId, '--search-source', 'text', '--search-minutes', '15'];
+  assert.equal(await setup(args), 0);
+  const granted = JSON.parse(await readFile(profilePath));
+  assert.deepEqual(granted.searchGrant.documentIds, [documentId]);
+  assert.deepEqual(granted.searchGrant.sources, ['text']);
+  assert.ok(Date.parse(granted.searchGrant.expiresAt) > Date.now());
+  assert.ok(Date.parse(granted.searchGrant.expiresAt) <= Date.now() + 15 * 60000);
+  assert.equal(await setup(), 0);
+  assert.deepEqual(JSON.parse(await readFile(profilePath)).searchGrant, granted.searchGrant);
+  for (const invalid of [args.slice(0, 4), [...args, '--revoke-search'], ['--search-document', 'ffffffff-ffff-4fff-8fff-ffffffffffff', '--search-source', 'text', '--search-minutes', '15'], ['--search-document', documentId, '--search-source', 'all', '--search-minutes', '15'], ['--search-document', documentId, '--search-source', 'text', '--search-minutes', '61']]) {
+    const before = await readFile(profilePath, 'utf8');
+    assert.equal(await setup(invalid), 1);
+    assert.equal(await readFile(profilePath, 'utf8'), before);
+  }
+  assert.equal(await setup(['--revoke-search']), 0);
+  const revoked = JSON.parse(await readFile(profilePath));
+  assert.equal(revoked.searchGrant, undefined);
+  assert.equal(revoked.libraryId, libraryId);
+});

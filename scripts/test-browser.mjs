@@ -19,6 +19,7 @@ import { readingPositionWorkflow } from '../tests/reading-position.browser.mjs';
 import { vaultWorkflow } from '../tests/vault.browser.mjs';
 import { bookmarkWorkflow } from '../tests/bookmarks.browser.mjs';
 import { sourceNavigationWorkflow } from '../tests/source-navigation.browser.mjs';
+import { readerUiRefinementWorkflow } from '../tests/reader-ui-refinement.browser.mjs';
 import { waitForImportReady } from '../tests/browser-import.mjs';
 import { testEvidenceDirectory } from './desktop-test-support.mjs';
 
@@ -600,7 +601,7 @@ try {
     server: { host: '127.0.0.1', port: 0, strictPort: true },
   });
   await harnessServer.listen();
-  try { browser = await chromium.launch(); }
+  try { browser = await chromium.launch(process.env.PAPERDESK_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PAPERDESK_CHROMIUM_EXECUTABLE } : {}); }
   catch (error) { throw new Error(`Chromium could not start. Run npx playwright install chromium (Linux CI: add --with-deps).\n${error.message}`); }
   const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 1000 } });
   context.setDefaultTimeout(15000);
@@ -637,7 +638,10 @@ try {
   const vaultVisualDir=join(evidence,'obsidian-vault');
   await mkdir(vaultVisualDir,{recursive:true,mode:0o700});
   await vaultWorkflow({context,root,onPreview:(page,label)=>page.screenshot({path:join(vaultVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
-  await sourceNavigationWorkflow({context});
+  const sourceVisualDir=join(evidence,'source-navigation');
+  await mkdir(sourceVisualDir,{recursive:true,mode:0o700});
+  await sourceNavigationWorkflow({context,onPreview:(page,label)=>page.screenshot({path:join(sourceVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
+  await readerUiRefinementWorkflow({context,base:`http://127.0.0.1:${appServer.address().port}`,onPreview:(page,label)=>page.screenshot({path:join(sourceVisualDir,`${label}.png`),fullPage:true,animations:'disabled'})});
   assert.deepEqual(pageErrors, [], 'Browser pages must not raise uncaught exceptions');
   console.log('Browser checks passed; temporary library removed on exit.');
 } catch (error) {
