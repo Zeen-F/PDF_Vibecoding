@@ -2,6 +2,8 @@
 
 Windows 工作区的使用、开发和清理说明见 [Windows 指南](docs/windows.md)。已安装依赖并构建后，可以双击根目录 `启动纸间.cmd` 打开本机浏览器版；Windows 桌面目录包使用 `release/win-unpacked/Paperdesk.exe`。
 
+知识库与本机缓存在不同磁盘时的保存保护，以及物理依赖和内嵌面板打包检查见 [跨盘保存与成品验证](docs/vault-cross-volume-recovery.md)。
+
 我是软件开发小白，这个软件是通过和 AI 对话、反复试用和修改，**vibe coding** 出来的。最初只是想给自己做一个方便读 PDF、划重点和记笔记的工具，于是有了「纸间」。
 
 现在把它开源，也欢迎大家反馈问题、提建议或提交改进。项目还在持续完善，目前发布的是预览版。

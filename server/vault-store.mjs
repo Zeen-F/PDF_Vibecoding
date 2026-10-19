@@ -493,8 +493,35 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       const saved = path.join(recoveryRoot, `${path.basename(file, '.md')}-${Date.now()}-${randomUUID()}.md`);
       try { linkSync(file, saved); }
       catch (error) {
-        const failure = new VaultError('无法创建可恢复的 Markdown 原文件副本，本次保存已停止，请检查恢复目录权限与所在磁盘。');
-        failure.cause = error; throw failure;
+        try {
+          if (error.code !== 'EXDEV') throw error;
+          // A copy alone cannot observe writes through an editor's old handle
+          // after the atomic rename. Retain that inode on its original volume;
+          // the non-.md suffix keeps this internal link out of the note index.
+          const retained = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.paperdesk-recovery`);
+          checkedPath(canonical, retained, { missing: true });
+          linkSync(file, retained);
+          const partial = `${saved}.partial`;
+          let copyReady = false, copyFd;
+          try {
+            copyFileSync(retained, partial, constants.COPYFILE_EXCL); copyReady = true;
+            copyFd = openSync(partial, constants.O_RDWR | (constants.O_NOFOLLOW || 0));
+            fsyncSync(copyFd); closeSync(copyFd); copyFd = undefined;
+            if (digest(readFileSync(partial)) !== digest(readFileSync(retained))) fileConflict('Obsidian 正在编辑原文件，请重新读取后合并保存。');
+            // Publish the flushed snapshot exclusively on the recovery volume.
+            linkSync(partial, saved);
+          } finally {
+            if (copyFd !== undefined) closeSync(copyFd);
+            if (copyReady) unlinkSync(partial);
+          }
+          // Keep this link even after success: an already-open external handle
+          // may finish writing later. Conflict checks/restoration use this inode.
+          return retained;
+        } catch (cause) {
+          if (cause instanceof VaultError) throw cause;
+          const failure = new VaultError('无法创建可恢复的 Markdown 原文件副本，本次保存已停止，请检查恢复目录权限与所在磁盘。');
+          failure.cause = cause; throw failure;
+        }
       }
       return saved;
     }

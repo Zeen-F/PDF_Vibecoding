@@ -5,12 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
+import { verifyDesktopInputs } from './verify-desktop-package.mjs';
 
 if (!['darwin', 'win32'].includes(process.platform)) throw new Error('Desktop packaging currently supports macOS and Windows.');
 // Electron 44 downloads its pinned runtime lazily when this package is loaded.
 createRequire(import.meta.url)('electron');
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+verifyDesktopInputs(root);
 const assets = path.join(root, '.local/desktop-assets');
 await mkdir(assets, { recursive: true });
 

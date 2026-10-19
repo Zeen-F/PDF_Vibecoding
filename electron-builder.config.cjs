@@ -8,6 +8,14 @@ module.exports = {
   npmRebuild: false,
   electronDist: 'node_modules/electron/dist',
   publish: null,
+  afterPack: async context => {
+    const path = require('node:path');
+    const { verifyDesktopPackage } = await import('./scripts/verify-desktop-package.mjs');
+    const resources = context.electronPlatformName === 'darwin'
+      ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
+      : path.join(context.appOutDir, 'resources');
+    verifyDesktopPackage(path.join(resources, 'app'));
+  },
   files: [
     'package.json',
     'LICENSE',
@@ -15,6 +23,7 @@ module.exports = {
     'server/**/*',
     'shared/**/*',
     'dist/**/*',
+    'plugins/paperdesk/**/*',
     'public/examples/reading-demo.pdf',
     '!tests{,/**/*}',
     '!**/{test,tests,__tests__}/**/*',
