@@ -331,25 +331,34 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       return file;
     }
     function inspectPdf(file) {
-      const fd = openFile(file);
-      try {
-        const stat = fstatSync(fd), key = signature(stat);
-        integer(stat.size, 1, Number.MAX_SAFE_INTEGER, 'PDF 大小');
-        const cached = pdfCache.get(file);
-        let sha = cached?.signature === key ? cached.sha256 : null;
-        if (!sha) {
-          const buffer = Buffer.alloc(64 * 1024), hasher = createHash('sha256');
-          let position = 0, count;
-          do {
-            count = readSync(fd, buffer, 0, buffer.length, position);
-            if (!position && (count < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-')) invalid('原始文献不是有效的 PDF 文件。');
-            if (count) { hasher.update(buffer.subarray(0, count)); position += count; }
-          } while (count);
-          if (signature(fstatSync(fd)) !== key) invalid('PDF 正在被其他程序修改，请稍后重新读取。');
-          sha = hasher.digest('hex'); pdfCache.set(file, { signature: key, sha256: sha });
-        }
-        return { pdfPath: file, sha256: sha, byteSize: stat.size };
-      } finally { closeSync(fd); }
+      // Cloud hydration may change metadata while otherwise unchanged bytes are
+      // read. Discard that attempt and reopen, as for Markdown; never reuse a
+      // hash from an unstable read or relax the persisted size/hash checks.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const fd = openFile(file);
+        try {
+          const stat = fstatSync(fd), key = signature(stat);
+          integer(stat.size, 1, Number.MAX_SAFE_INTEGER, 'PDF 大小');
+          const cached = pdfCache.get(file);
+          let sha = cached?.signature === key ? cached.sha256 : null;
+          if (!sha) {
+            const buffer = Buffer.alloc(64 * 1024), hasher = createHash('sha256');
+            let position = 0, count;
+            do {
+              count = readSync(fd, buffer, 0, buffer.length, position);
+              if (!position && (count < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-')) invalid('原始文献不是有效的 PDF 文件。');
+              if (count) { hasher.update(buffer.subarray(0, count)); position += count; }
+            } while (count);
+            sha = hasher.digest('hex');
+          }
+          if (signature(fstatSync(fd)) !== key || signature(checkedPath(canonical, file)) !== key) {
+            pdfCache.delete(file); continue;
+          }
+          pdfCache.set(file, { signature: key, sha256: sha });
+          return { pdfPath: file, sha256: sha, byteSize: stat.size };
+        } finally { closeSync(fd); }
+      }
+      fileConflict('PDF 在连续读取中仍发生变化，请等待同步或编辑完成后重新读取。');
     }
     function verifyPdf(doc, pdfSource) {
       const file = pdfSource ? sourcePath(pdfSource) : pdfPath(doc.id);

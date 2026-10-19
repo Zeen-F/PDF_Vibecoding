@@ -299,6 +299,84 @@ test('externally corrupted metadata IDs or bounds never become indexed records',
   }
 });
 
+test('a transient PDF metadata change is discarded and rehashed without rewriting either source', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const note = readFileSync(saved.notePath), pdf = readFileSync(saved.pdfPath), identity = fs.statSync(saved.pdfPath);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  const originalStat = fs.fstatSync; let reads = 0;
+  const hook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev && ++reads <= 2) stat.ctimeMs -= 1;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.equal(reopened.readDocument(payload.document.id).document.sha256, payload.document.sha256); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(reads >= 6, 'The unstable PDF must be reopened and fully checked');
+  assert.deepEqual(readFileSync(saved.notePath), note); assert.deepEqual(readFileSync(saved.pdfPath), pdf);
+});
+
+test('continuously changing PDF metadata remains a bounded conflict', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const note = readFileSync(saved.notePath), identity = fs.statSync(saved.pdfPath);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  const originalStat = fs.fstatSync; let reads = 0;
+  const hook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev) stat.ctimeMs += ++reads;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => reopened.readDocument(payload.document.id), error => error.code === 'VAULT_FILE_CONFLICT'); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(reads <= 12, 'Retries must stop after three attempts');
+  assert.deepEqual(readFileSync(saved.notePath), note); assert.deepEqual(readFileSync(saved.pdfPath), sample);
+});
+
+test('a PDF changed during an unstable attempt cannot reuse the old hash when retrying', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const note = readFileSync(saved.notePath), identity = fs.statSync(saved.pdfPath);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  const originalStat = fs.fstatSync, originalRead = fs.readSync;
+  const changed = Buffer.from(sample); changed[changed.length - 1] ^= 1;
+  let stats = 0, modified = false;
+  const statHook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev && ++stats <= 2) stat.ctimeMs -= 1;
+    return stat;
+  });
+  const readHook = t.mock.method(fs, 'readSync', (...args) => {
+    const count = originalRead(...args), stat = originalStat(args[0]);
+    if (!modified && count && stat.ino === identity.ino && stat.dev === identity.dev) { modified = true; writeFileSync(saved.pdfPath, changed); }
+    return count;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => reopened.readDocument(payload.document.id), error => error.status === 409 && /校验和/.test(error.message)); }
+  finally { statHook.mock.restore(); readHook.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(modified, true); assert.deepEqual(readFileSync(saved.notePath), note);
+  assert.deepEqual(readFileSync(saved.pdfPath), changed, 'The external edit must not be rolled back');
+});
+
+test('a PDF path replaced after hashing is not accepted as the verified open inode', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir }), identity = fs.statSync(saved.pdfPath);
+  const originalRead = fs.readSync, originalStat = fs.fstatSync, originalLstat = fs.lstatSync; let ended = false;
+  const readHook = t.mock.method(fs, 'readSync', (...args) => {
+    const count = originalRead(...args), stat = originalStat(args[0]);
+    if (!count && stat.ino === identity.ino && stat.dev === identity.dev) ended = true;
+    return count;
+  });
+  const pathHook = t.mock.method(fs, 'lstatSync', (...args) => {
+    const stat = originalLstat(...args);
+    if (ended && path.resolve(args[0]) === saved.pdfPath) stat.ino += 1;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => reopened.readDocument(payload.document.id), error => error.code === 'VAULT_FILE_CONFLICT'); }
+  finally { readHook.mock.restore(); pathHook.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(ended, true); assert.deepEqual(readFileSync(saved.pdfPath), sample);
+});
+
 test('PDF existence, size and hash integrity are verified, including changes after cached reads', t => {
   const { store, payload, base } = setup(t);
   const saved = store.writeDocument(payload, null), file = saved.pdfPath;
