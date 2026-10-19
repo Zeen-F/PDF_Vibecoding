@@ -63,8 +63,10 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     const line = tile(number).locator('.textLayer span').filter({ hasText: readerLayoutText(number) });
     await expect(line).toBeVisible(); await line.scrollIntoViewIfNeeded();
     const bounds = await line.boundingBox(); assert.ok(bounds);
-    await page.mouse.move(bounds.x + 1, bounds.y + bounds.height / 2); await page.mouse.down();
-    await page.mouse.move(bounds.x + bounds.width - 1, bounds.y + bounds.height / 2, { steps: 8 }); await page.mouse.up();
+    // Tiny grid glyphs (especially the final period) can be narrower than 2px.
+    // Drag just beyond both text edges to select the complete line on every OS.
+    await page.mouse.move(bounds.x - 2, bounds.y + bounds.height / 2); await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width + 2, bounds.y + bounds.height / 2, { steps: 8 }); await page.mouse.up();
     await expect(selectionBar.locator('.selection-summary p')).toHaveText(readerLayoutText(number));
   }
   async function dragRegion(number, from = [.15, .30], to = [.60, .45]) {
