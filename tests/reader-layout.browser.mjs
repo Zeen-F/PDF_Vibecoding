@@ -48,6 +48,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   async function ready(number) {
     await expect(tile(number).getByLabel(`PDF 第 ${number} 页`, { exact: true })).toBeVisible();
     await expect(tile(number).locator('.textLayer')).toContainText(readerLayoutText(number));
+    await expect(tile(number)).not.toHaveClass(/is-loading/);
   }
   async function goto(number) {
     await pageInput.fill(String(number)); await pageInput.press('Enter');
@@ -61,21 +62,34 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   }
   async function selectText(number) {
     const line = tile(number).locator('.textLayer span').filter({ hasText: readerLayoutText(number) });
+    await ready(number);
     await expect(line).toBeVisible(); await line.scrollIntoViewIfNeeded();
+    await line.hover(); // Wait for actionable, stable text geometry before sampling.
     // Measure actual edge glyphs, not a fixed inset: a grid-scale period can
     // be narrower than a CSS pixel, while starting outside a span is invalid.
-    const edge = await line.evaluate(span => {
+    const snapshot = span => {
       const node = span.firstChild;
       const range = document.createRange();
       range.setStart(node, 0); range.setEnd(node, 1);
       const first = range.getBoundingClientRect();
       range.setStart(node, node.textContent.length - 1); range.setEnd(node, node.textContent.length);
       const last = range.getBoundingClientRect();
-      return { start: first.left + first.width * .1, end: last.right - last.width * .1, y: first.top + first.height / 2 };
-    });
+      const selection = window.getSelection();
+      const endpoint = node => ({ text: node?.textContent, parent: node?.parentElement?.className, page: node?.parentElement?.closest('.pdf-paper')?.dataset.page });
+      return { native: selection?.toString(), anchorOffset: selection?.anchorOffset, focusOffset: selection?.focusOffset, anchor: endpoint(selection?.anchorNode), focus: endpoint(selection?.focusNode), currentPage: document.querySelector('[aria-label="页码"]').value, loading: span.closest('.pdf-paper').classList.contains('is-loading'), font: getComputedStyle(span).font, start: first.left + first.width * .1, end: last.right - last.width * .1, y: first.top + first.height / 2, first: first.toJSON(), last: last.toJSON(), span: span.getBoundingClientRect().toJSON(), transform: getComputedStyle(span).transform };
+    };
+    const edge = await line.evaluate(snapshot);
     await page.mouse.move(edge.start, edge.y); await page.mouse.down();
     await page.mouse.move(edge.end, edge.y, { steps: 8 }); await page.mouse.up();
-    await expect(selectionBar.locator('.selection-summary p')).toHaveText(readerLayoutText(number));
+    const immediate = await line.evaluate(snapshot);
+    try { await expect(selectionBar.locator('.selection-summary p')).toHaveText(readerLayoutText(number)); }
+    catch (error) {
+      try {
+        console.error('Synthetic selection geometry diagnostic', JSON.stringify({ number, before: edge, immediate, after: await line.evaluate(snapshot) }));
+        await onLayoutPreview?.(page, `browser-selection-failure-page-${number}`);
+      } catch (diagnosticError) { console.error('Selection diagnostic unavailable:', diagnosticError.message); }
+      throw error;
+    }
   }
   async function dragRegion(number, from = [.15, .30], to = [.60, .45]) {
     const layer = tile(number).getByLabel('拖动框选批注区域', { exact: true });
