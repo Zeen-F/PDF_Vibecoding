@@ -1,130 +1,115 @@
 # 纸间 Paperdesk
 
-Windows 工作区的使用、开发和清理说明见 [Windows 指南](docs/windows.md)。已安装依赖并构建后，可以双击根目录 `启动纸间.cmd` 打开本机浏览器版；Windows 桌面目录包使用 `release/win-unpacked/Paperdesk.exe`。
+在本机阅读 PDF、划重点、记笔记，并把选中的证据带回写作。支持 Windows 桌面、Apple Silicon Mac 桌面和本机浏览器；可以使用独立文献库，也可以连接已有 Obsidian 知识库。
 
-知识库与本机缓存在不同磁盘时的保存保护，以及物理依赖和内嵌面板打包检查见 [跨盘保存与成品验证](docs/vault-cross-volume-recovery.md)。
+我是软件开发小白，这个软件是通过和 AI 对话、反复试用和修改，**vibecoding（vibe coding）** 出来的。最初只是想给自己做一个方便读 PDF、划重点和记笔记的工具，于是有了「纸间」。目前仍是预览版，欢迎反馈问题、提建议或提交改进。
 
-我是软件开发小白，这个软件是通过和 AI 对话、反复试用和修改，**vibe coding** 出来的。最初只是想给自己做一个方便读 PDF、划重点和记笔记的工具，于是有了「纸间」。
+## 下载、启动与升级
 
-现在把它开源，也欢迎大家反馈问题、提建议或提交改进。项目还在持续完善，目前发布的是预览版。
+公开下载版本为 [**1.2.0-beta.2**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.2)。当前源码版本为 **1.2.0-beta.4**；源码中的新功能和修复不会自动进入旧安装包，实际发布文件以 [Releases](https://github.com/Zeen-F/PDF_Vibecoding/releases) 为准。
 
-## 下载与使用
-
-最新预览版本：[**1.2.0-beta.2 · GitHub Release**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.2)。
-
-| 版本 | 适合谁 | 使用方式 |
-| --- | --- | --- |
-| Windows 桌面版 | 使用 Windows 10/11 x64，希望直接打开软件 | 下载 [Windows ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-win-x64.zip)，完整解压后打开 Paperdesk.exe；无需安装 Node.js |
-| macOS 桌面版 | 使用 M 系列 Mac，希望直接打开软件 | 下载 [macOS DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-mac-arm64.dmg)，将 Paperdesk 拖入「应用程序」；无需安装 Node.js |
-| 本机浏览器版 | 希望通过本机端口在浏览器里使用 | 下载 [浏览器版 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-browser.zip)，安装 Node.js 24+ 后启动，打开 `http://127.0.0.1:4317` |
-
-桌面版尚未经过 Apple 签名或公证；首次打开如果被 macOS 阻止，可在「系统设置 → 隐私与安全性」中允许。Obsidian 仓库、页面书签和升级注意事项见 [本版变更记录](docs/history/1.2.0-beta.2.md)。安装及已有文献库的使用方式见 [桌面版说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/desktop-release.md)。
-
-## 可以做什么
-
-以下功能以 **1.2.0-beta.2** 为准，桌面版和本机浏览器版使用同一套阅读功能。
-
-| 功能 | 说明 |
+| 入口 | 使用方法 |
 | --- | --- |
-| 导入 PDF | 点击选择或拖入文件；相同内容自动去重，同名但内容不同的文件可以共存 |
-| Obsidian 仓库 | 侧边栏显示知识库已有 PDF，点击原位阅读；也可导入外部 PDF，笔记与批注保存在知识库 Markdown |
-| 整理文献 | 单层文件夹分类，支持拖动或选择移动；删除分类会保留里面的文献 |
-| 搜索 | 检索 PDF 中可提取的文字、笔记和批注，点击结果跳到对应页 |
-| 多种阅读布局 | 左右翻页、上下连续阅读；单页、双页、四页、六页、九页布局，以及缩放与适合宽度 |
-| 章节目录 | 使用 PDF 书签；没有书签时尝试识别文字目录页，也可以手动校正页码偏移 |
-| 个人页面书签 | 添加当前实际 PDF 页、改名、删除和跳转，退出与重开后保留；与 PDF 自带目录分别显示 |
-| 文字高亮与评论 | 选中文字、核对引文后保存高亮和评论，支持修改颜色与评论 |
-| 区域批注 | 在扫描件、图表或公式附近框选区域并写评论 |
-| 笔记 | 一个编辑区自由记录，中英文都可以写，支持 Markdown 文本、自动保存和手动保存 |
-| Markdown 导出 | 导出笔记、引文、评论和页码，方便继续在 Obsidian 等工具中使用 |
-| 四套阅读皮肤 | 森林、暖砂、雾蓝、夜读；界面换色时保留 PDF 原始颜色 |
-| 可选 API 翻译 | 配置自己的翻译接口与密钥后，主动翻译文字选区；译文显示在阅读器中 |
-| 可选 Codex 插件 | 明确共享选区后，在当前 Work／Codex 对话中提问；需要另外安装本机插件 |
+| [Windows x64 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-win-x64.zip) | 完整解压到固定应用目录，打开 `Paperdesk.exe`；无需 Node.js。整个目录是一套应用，不能只复制 EXE。 |
+| [macOS ARM64 DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-mac-arm64.dmg) | 将 Paperdesk 拖入「应用程序」；无需 Node.js。当前预览包尚未经过 Apple 签名或公证。 |
+| [本机浏览器 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-browser.zip) | 安装 Node.js 24+，在解压目录运行 `npm ci --omit=dev`、`npm start`，打开 `http://127.0.0.1:4317`；PowerShell 使用 `npm.cmd`。 |
 
-## 当前源码中的阅读升级（待发布）
+升级前保存并正常退出旧应用，备份完整文献库。将新版完整应用目录放到固定位置，再更新原桌面快捷方式的目标和工作目录；不要把临时测试包作为长期入口，也不要覆盖或搬动文献库。没有自动更新。旧插件若占用应用文件，先正常断开连接再升级。
 
-当前源码另增加：按需展开的显示设置、临时专注阅读和可用 Esc 关闭的选文翻译卡；来源／搜索定位后“返回阅读”并恢复窗口内阅读位置；先预览、再确认的划词／手动选段翻译（只发送当次选区，保留上一版译文）；以及默认只搜标题、需另行限时授权内容范围的 Codex 检索。详见 [阅读布局](docs/reader-display.md)、[选区翻译](docs/translation.md) 和 [Codex 搜索授权](docs/codex-plugin.md)。这些变化尚未进入上方 beta.2 下载包，浏览器视觉与原生桌面验收需另行完成。
+独立库沿用 schema 5；旧格式迁移、回退与 Obsidian Markdown 兼容要求见 [桌面安装与升级](docs/desktop-release.md) 和 [Obsidian 仓库模式](docs/obsidian-vault.md)。数据库自动备份不能替代 PDF、Markdown 和设置的完整备份。Windows 入口、云盘文件下载和目录安排见 [Windows 指南](docs/windows.md)。
 
-## 数据与备份
+## 阅读与记录
 
-源码另有待发布的[发送到知识工作台](docs/knowledge-workbench.md)功能：在同一 Obsidian 库内保存选中文字、区域原图、想法与实际页码，供工作台离线导入和来源回查。上方 `1.2.0-beta.2` 下载包尚不包含此功能。
+| 功能 | 当前源码中的行为 |
+| --- | --- |
+| PDF 与文献库 | 导入或拖入 PDF，按内容去重；Obsidian 中已有 PDF 原位阅读，保留源文件位置与内容。 |
+| 整理和搜索 | 单层文件夹、PDF 可提取文字／笔记／批注搜索，点击结果定位。 |
+| 阅读布局 | 左右翻页或上下连续阅读，单页至九页布局、缩放与适合宽度；次要选项集中在显示设置。 |
+| 目录与书签 | PDF 目录、文字目录识别与页码校正，以及单独保存的个人页面书签。 |
+| 高亮与区域批注 | 选中文字后核对引文并写评论；扫描页、图表和公式可以框选区域。 |
+| 笔记与导出 | 单一 Markdown 编辑区、自动／手动保存，导出引文、评论和实际 PDF 页码。 |
+| 专注与返回 | 临时收起阅读侧栏并保留笔记编辑区和草稿；来源定位后可返回原页面及窗口内阅读位置。 |
+| 弹层与窄窗 | 显示设置和翻译卡支持键盘焦点、Esc 关闭及窄窗口布局。 |
 
-可以使用独立文献库或 Obsidian 仓库。普通阅读和编辑不调用外部 AI 服务，安装包也不包含个人文献。
+显示设置、专注阅读、来源返回、翻译确认和受权限控制的 MCP 搜索属于当前源码升级，尚未包含在上方 beta.2 下载包中。详细操作见 [阅读布局与来源定位](docs/reader-display.md)。森林、暖砂、雾蓝、夜读四套皮肤不会改变 PDF 原始颜色。
 
-**Obsidian 仓库模式：** 侧边栏自动显示知识库已有 PDF，点击即可原位阅读和批注；外部文件的导入副本保存在知识库的 `Paperdesk/PDFs/`，外部原文件保留。笔记、批注和个人页面书签保存在 `Paperdesk/Notes/`，正文两边可编辑；标题、批注、书签和分类在 Paperdesk 修改。索引、翻译设置和恢复资料留在知识库之外。冲突暂停自动保存，副本实际保存成功后才确认保留。规则、冲突处理和备份方法见 [Obsidian 仓库模式](docs/obsidian-vault.md)。
+## 划词与手动选段翻译
 
-- 桌面版默认使用应用之外的独立文献库，也会记住所选位置；「文件 → 打开已有文献库…」接受完整的 schema 4／5 库；「打开 Obsidian 仓库…」选择已有知识库根目录。
-- 源码浏览器版默认使用项目内的 `data/`；开发模式使用隔离的 `.local/dev-data/`。
-- 翻译只在主动点击时，将当次选中的文字发送到你配置的接口。主动交给 Codex 的内容会进入模型请求。
-- 独立文献库：正常停止应用或服务后备份完整目录，包括数据库、`pdfs/` 及已有翻译数据库；运行中不能只复制主数据库。
-- Obsidian 仓库：正常退出后备份完整 Paperdesk 管理目录和所有关联的源 PDF，保留库外恢复资料及翻译设置；备份整个知识库更方便。已有源 PDF 的位置和内容不改写。
+1. 在带文字层的 PDF 中手动选择一个词、一句话或一段。
+2. 打开翻译预览，核对原文、服务、接口和目标语言。
+3. 点击“确认发送选文”。每次只发送这次预览中的选区，译文不自动写入笔记。
+4. 下一段重新手动选择并确认；切换语言、修改服务配置或失败后重试，也需要重新确认。上一版译文保留到新译文成功。
 
-**升级到 1.2.0-beta.2 前请正常退出并备份完整资料。** 本版沿用 **schema 5** 与个人页面书签格式；程序在修改旧数据库结构前创建并读回检查 SQLite 一致性备份，包含已提交的 WAL 内容。备份失败会停止升级，数据库迁移在事务中完成。自动数据库备份不能替代 PDF、Markdown 和翻译设置的完整备份。
+**不提供整页翻译，不自动扩展选区或连续发送相邻段落。** 扫描图片暂不做 OCR，区域截图不能直接使用文字翻译。
 
-- 默认／已记住库在启动时升级；菜单新选择完整 schema 4 库先只读校验，再在启动时备份并升级。schema 3 或更早的库须先通过本版浏览器／源码服务升级，详见 [升级步骤](docs/desktop-release.md#升级到-120-beta1)。
-- Obsidian 的旧 v1／v2 文献 Markdown 继续可读，成功保存时写入支持书签的 v3 完整状态，保留原位或导入来源。旧程序不能读取新增格式。
-- 回退时正常退出新版，恢复升级前完整备份，再运行旧版；不要手工删表或降低数据库版本号。beta.5 的 schema 4 与保存可靠性变更保留在 [历史记录](docs/history/1.1.0-beta.5.md)。
+软件内 API 翻译是可选项，支持百度、Azure、DeepL 和 OpenAI 兼容接口。填写自己的服务参数后才能使用，费用与可用额度由服务商决定；保存配置不代表凭据已验证。“测试翻译”会发送固定短句并可能使用额度，普通阅读、打开预览和切换语言不会发送选文。配置、缓存、预算和失败处理见 [翻译说明](docs/translation.md)。
 
-## 保存与恢复
+也可以通过下方 Codex 插件明确共享选区，在当前对话中要求翻译或讨论；它使用当前 Codex 会话，与软件内独立翻译 API 分开。
 
-- **评论草稿：** 切换笔记／批注、文献或刷新后，可恢复原文献的评论、页码和引文／区域；确认保存成功后才清除本次提交的草稿。各窗口独立保留草稿；保存失败或版本冲突时保留输入，恢复的评论不会自动附到后来选择的内容。
-- **批注保存：** 相关数据库写入一起成功或回滚。新增请求在响应丢失后以原请求重试，避免重复批注；有效请求记录保留 30 天，容量满时拒绝新请求，不提前丢弃有效记录。超过期限仍不确定的旧请求，应先核对文献中已保存的批注。
-- **启动检查：** 复用本机服务前核对文献库、产品版本、API 版本、启动协议与健康状态，避免打开错误的库或不兼容服务。
-- **阅读位置：** 快速翻页按文献合并并顺序保存；切文献和桌面正常关闭前等待最后一次写入。同一窗口的旧序号不能覆盖较新的页码，保存失败后可以恢复并重新确认。
+## Codex 插件
 
-草稿只保存在当前浏览器／桌面配置中，不能替代文献库备份。浏览器存储不可用或容量不足时，请保留当前窗口并处理保存问题。删除结果不确定时也保留评论草稿，应重新打开文献核对；通信失败不表示批注尚未删除。浏览器强制退出、断电或清理浏览器存储，无法保证最后一次尚未提交的内容或页码已经保存。
+插件连接本机 Paperdesk 服务。阅读器中的普通浏览不自动共享全文；核对选区后再点“交给 Codex”，需要回答时再发送问题。AI 回答留在当前对话，只有明确要求记录时才追加笔记；未保存草稿或版本冲突会阻止覆盖。
 
-## 启动浏览器版 ZIP
+源码版需要 Node.js 24+、项目依赖和支持本地插件的 Codex。下面的命令对应源码浏览器服务：先运行 `npm.cmd run build`、`npm.cmd start`，核对打开的是预期文献库；保持服务运行，在另一个终端执行：
 
-解压浏览器版 ZIP，进入解压出的目录。安装 **Node.js 24+** 后执行：
-
-```sh
-npm ci --omit=dev
-npm start
+```powershell
+npm.cmd run plugin:install
 ```
 
-ZIP 已包含构建好的界面，不需要重新构建。打开 **http://127.0.0.1:4317** 即可使用；终端保持运行，按 Control+C 停止服务。详细说明在包内的 `START-HERE.md`。浏览器 ZIP 的干净安装验收在 macOS 执行，Windows 浏览器源码入口另经完整回归；Windows 桌面使用上方的 ZIP。
+命令会准备本机绑定、注册本地 marketplace 并安装插件。安装后在 Codex 新会话启用“纸间 Paperdesk”，说“打开纸间阅读器”，核对返回的资料库身份。已有绑定不一致时先确认目标库，不要覆盖配置。移动运行时目录或升级桌面包后需要重新核对绑定；自定义端口不能照抄默认的 4317。完整安装和绑定步骤见 [Codex 插件说明](docs/codex-plugin.md)。
 
-文献库默认在解压目录的 `data/` 中，更新前请先停止服务并备份整个文献库；也可通过 `PAPERDESK_DATA_DIR` 指定固定位置。
+MCP 文献搜索默认只搜索标题。正文、笔记和批注检索需要本机显式授权，授权包含内容范围、有效期及预算；不因一句“搜索文献”自动开放整个资料库。主动共享或检索返回给 Codex 的内容可能进入模型请求。
 
-## 从源码启动本机浏览器版
+插件安装、MCP 调用成功和宿主实际显示内嵌面板是不同检查。当前 Windows 验证包含真实 MCP 调用及现有 Codex 会话的合成选文翻译；**当前宿主内嵌面板的视觉验收仍未完成**。独立翻译 API 未做真实服务账户验收，模拟测试不能替代它。
 
-使用本版源码时，请检出对应版本标签：
+## 从阅读证据到科研笔记
 
-```sh
-git clone --branch v1.2.0-beta.2 https://github.com/Zeen-F/PDF_Vibecoding.git
+与 [知识工作台](https://github.com/Zeen-F/knowledge-workbench) 连接同一个 Obsidian 库后，在纸间选中文字或区域，点击“发送到知识库”，核对实际 PDF 页并补充想法。保存的是这次选区、来源和可选原图，不会自动调用模型，也不修改原 PDF。
+
+在工作台收集箱筛选材料、预览来源并选择参考笔记，再确认共享给 Codex 或自己的模型 API。生成结果进入待审草稿，结合固定的原文快照核对后再保存；原文、个人假设、AI 推断和待验证项应分别保留。来源链接可返回原 PDF 页和选区，文件变化或丢失时会提示核对，不会静默替换来源。
+
+该交换功能属于当前源码，beta.2 下载包不包含。接口、离线导入和返回规则见 [知识工作台交换说明](docs/knowledge-workbench.md)。
+
+## 数据、保存与恢复
+
+- 普通阅读、搜索、批注与笔记在本机处理，不需要翻译密钥或 Codex 插件。
+- Obsidian 模式下，已有 PDF 保持原位；外部导入副本保存在 `Paperdesk/PDFs/`，笔记、批注和页面书签在 `Paperdesk/Notes/`。正文可在两边编辑，受管理的标题、批注和书签在纸间修改。
+- 桌面文献库与应用目录分开；源码浏览器版默认用 `data/`，开发模式用隔离的 `.local/dev-data/`。索引、翻译设置及恢复资料不作为正式笔记写进知识库。
+- 保存失败或版本冲突会保留输入并要求核对；正常桌面关闭等待待保存内容。评论草稿属于当前浏览器／桌面配置，不能替代文献库备份。
+- 跨盘保存保留可恢复的原文件，并检查副本和并发修改。云盘 PDF 短暂改变元数据时有界重读，持续变化或校验不一致仍拒绝继续。详见 [跨盘保存与成品验证](docs/vault-cross-volume-recovery.md)。
+
+备份前正常停止服务；独立库备份完整数据库及 PDF、翻译数据，不能在运行中只复制数据库主文件。Obsidian 模式应备份关联源 PDF、Paperdesk 管理文件及库外设置／恢复资料。含凭据的配置与数据库不要上传或提交 Git。强制退出、断电或清理浏览器存储不保证尚未提交的内容可恢复。
+
+## 从源码运行与检查
+
+需要 Node.js 24+。首次获取源码后在项目目录运行；已有工作区直接使用原目录。以下为 Windows PowerShell 命令，macOS 使用 `npm` / `npx`：
+
+```powershell
+git clone https://github.com/Zeen-F/PDF_Vibecoding.git
 cd PDF_Vibecoding
-npm ci
-npm run build
-npm start
+npm.cmd ci
+npm.cmd run desktop
 ```
 
-需要 **Node.js 24+**。启动后在浏览器打开 **http://127.0.0.1:4317**；终端保持运行，按 Control+C 停止服务。Mac 也可在构建完成后使用项目里的 `启动纸间.command`。启动器只在缺少构建产物时自动构建，更新源码后请重新运行 `npm run build`；端口被不同库或不兼容服务占用时会提示并停止启动，请先核对原服务。
+本机浏览器入口：`npm.cmd run build` 后运行 `npm.cmd start`，打开 `http://127.0.0.1:4317`。也可双击 `启动纸间.cmd`（macOS 为 `启动纸间.command`）。更新源码后重新构建；关掉网页不会停止服务，终端按 Ctrl+C 正常停止。服务仅监听本机地址。
 
-服务仅监听本机 `127.0.0.1`。安装依赖需要联网；准备完成后的普通阅读、搜索、笔记和 PDF 渲染在本机处理。
+```powershell
+npx.cmd playwright install chromium
+npm.cmd run check
+npm.cmd run desktop:pack:win
+npm.cmd run test:desktop -- --packaged release/win-unpacked/Paperdesk.exe
+```
 
-## 目前的限制
+Windows 目录包入口为 `release/win-unpacked/Paperdesk.exe`。打包需要本目录中的完整物理依赖，不能用 Junction／symlink 根 `node_modules`；打包检查会核对生产依赖和 MCP 面板资源。macOS 打包入口为 `npm run desktop:pack`。安装依赖需要联网；测试使用合成资料，详见 [开发指南](docs/development.md)。
 
-- 扫描件可以阅读、记笔记和框选批注；目前没有 OCR，不能直接搜索或划选图片中的文字。
-- 复杂排版的选文和目录识别可能不准确，保存引文前请核对预览。
-- 暂不支持加密／权限受限 PDF、PDF 内嵌批注编辑、云同步和多人协作。
-- 桌面发布包面向 Apple Silicon Mac 与 Windows x64；Windows 使用和开发说明见 [Windows 指南](docs/windows.md)。没有自动更新，其他桌面架构尚未验证。
-- 多个窗口之间的阅读位置没有全局排序，建议同一文献只在一个窗口编辑。Obsidian 文件联动不保证多设备同时写入一致性；真实 Codex 宿主中的完整插件流程需单独验收。
+## 限制与反馈
 
-## 开发与反馈
+- 暂无 OCR、PDF 内嵌批注编辑、内置云同步或多人协作；不支持加密／权限受限 PDF。
+- 双栏、脚注、公式及复杂文字层可能影响选文顺序，发送或保存引文前核对预览。100% 正常字号的 Windows 鼠标选文已验证；约 6px 微小字号的精确选文未验证。
+- 同一文献建议只在一个窗口编辑；没有多设备并发写入的一致性保证。Windows 桌面验收不能替代原生 macOS 验收，CI 也不等于真实模型或宿主面板验收。
 
-最新发布源码的开发、检查、插件与翻译说明：
+[反馈问题](https://github.com/Zeen-F/PDF_Vibecoding/issues) · [贡献约定](CONTRIBUTING.md) · [仓库安排](docs/repository-layout.md)
 
-- [开发指南](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/development.md)
-- [阅读布局说明](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/reader-display.md)
-- [翻译设置](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/translation.md)
-- [Codex 插件](https://github.com/Zeen-F/PDF_Vibecoding/blob/v1.2.0-beta.2/docs/codex-plugin.md)
-- [反馈问题](https://github.com/Zeen-F/PDF_Vibecoding/issues) · [贡献约定](CONTRIBUTING.md)
+作者联系方式：**微信 a1152017529 · QQ 1152017529**。
 
-## 文件安排
-
-源码放在 `src/`、`server/` 等目录；说明集中在 `docs/`，测试放在 `tests/`。本机安装包放在 `release/`，验收材料集中在忽略的 `.local/`；文献库不会进入 Git。详细目录与本机整理规则见 [仓库与工作区安排](docs/repository-layout.md)。
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE)。第三方依赖保留各自的许可证。
+本项目采用 [MIT License](LICENSE)，第三方依赖保留各自许可证。
