@@ -95,7 +95,9 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   try {
     await page.setViewportSize({ width: 2560, height: 1440 });
     await page.goto(`${base}/?document=${book.id}&page=1`); await ready(1);
-    await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('1'); await expect(zoom).toHaveValue('fit');
+    await expect(page.getByRole('button', { name: '显示设置', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await expect(flow).toHaveCount(0);
+    await openReaderDisplay(page); await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('1'); await expect(zoom).toHaveValue('fit');
     const collapseLibrary = page.getByRole('button', { name: '收起文献栏', exact: true });
     if (await collapseLibrary.isVisible()) await collapseLibrary.click();
     const collapseNotes = page.getByRole('button', { name: '收起笔记面板', exact: true });
@@ -150,7 +152,9 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     console.log('PASS: real wide-container fit and resize, 2/4/6/9 grids, whole-screen heights, exact page requests and partial final groups');
     await goto(1); await expect.poll(async () => (await readBook()).document.lastPage).toBe(1);
     await page.reload(); await ready(1);
-    await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('9'); await expect(zoom).toHaveValue('page'); await group(1, 9);
+    await expect(page.getByRole('button', { name: '显示设置', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await expect(flow).toHaveCount(0);
+    await openReaderDisplay(page); await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('9'); await expect(zoom).toHaveValue('page'); await group(1, 9);
     await goto(1); await zoom.selectOption('2');
     await expect.poll(async () => (await tile(1).boundingBox()).width).toBeCloseTo(1200, 0); await group(1, 9);
     const raster = await page.locator('.pdf-paper canvas').evaluateAll(canvases => ({ total: canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0), largest: Math.max(...canvases.map(canvas => Math.max(canvas.width, canvas.height))) }));
