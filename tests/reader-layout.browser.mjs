@@ -61,10 +61,14 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     return expected;
   }
   async function selectText(number) {
+    // Exact annotation gestures use readable 100% text, still within the same
+    // multi-page layout. Fit-grid rendering/geometry is asserted separately.
+    await zoom.selectOption('1'); await goto(number);
     const line = tile(number).locator('.textLayer span').filter({ hasText: readerLayoutText(number) });
     await ready(number);
     await expect(line).toBeVisible(); await line.scrollIntoViewIfNeeded();
     await line.hover(); // Wait for actionable, stable text geometry before sampling.
+    assert.ok(await line.evaluate(span => parseFloat(getComputedStyle(span).fontSize)) >= 12, 'Exact sentence selection requires readable glyphs');
     // Measure actual edge glyphs, not a fixed inset: a grid-scale period can
     // be narrower than a CSS pixel, while starting outside a span is invalid.
     const snapshot = span => {
@@ -241,7 +245,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
       });
       window.__regionObserver.observe(reader, { subtree: true, childList: true, attributes: true, attributeOldValue: true });
     });
-    await page.setViewportSize({ width: 2500, height: 1400 });
+    await zoom.selectOption('1.25'); // Explicit scale change rerenders fixed-zoom tiles.
     await regionToggle.focus(); await regionToggle.press('Space');
     await expect(regionToggle).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(() => page.evaluate(() => window.__regionRelayout.loading)).toBe(true);
