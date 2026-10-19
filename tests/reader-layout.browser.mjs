@@ -194,7 +194,17 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     await selectText(5);
     const text = await saveAnnotation(5, 'text', '布局验收：第五页文字引文。');
     assert.equal(text.quote, readerLayoutText(5)); text.rects.forEach(rect => assertRect(rect));
-    await page.getByRole('button', { name: '区域批注', exact: true }).click();
+    // Saving reveals notes and rerenders the grid at its new width. Wait for
+    // that saved annotation's ready tile before activating region mode.
+    await expect(pageInput).toHaveValue('5');
+    await expect(tile(5).locator(`[data-annotation="${text.id}"]`)).toBeVisible();
+    await expect(tile(5)).not.toHaveClass(/is-loading/);
+    await expect(page.locator('.reader-status')).toHaveCount(0);
+    const regionToggle = page.getByRole('button', { name: '区域批注', exact: true });
+    await expect(regionToggle).toBeEnabled();
+    await expect(regionToggle).toHaveAttribute('aria-pressed', 'false');
+    await regionToggle.focus(); await regionToggle.press('Space');
+    await expect(regionToggle).toHaveAttribute('aria-pressed', 'true');
     const expected = await dragRegion(5);
     const region = await saveAnnotation(5, 'region', '布局验收：第五页图形区域。');
     assert.equal(region.quote, ''); assert.equal(region.rects.length, 1); assertRect(region.rects[0], expected);
