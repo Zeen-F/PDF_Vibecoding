@@ -19,7 +19,9 @@ const instant = '2026-10-08T00:00:00.000Z';
 const status409 = error => error.status === 409 && Boolean(error.message);
 
 function setup(t, options = {}) {
-  const base = mkdtempSync(path.join(tmpdir(), 'paperdesk-vault-store-'));
+  // Windows runners may expose TEMP through a short-name or junction alias.
+  // Match the canonical paths used by the store so fault hooks really fire.
+  const base = fs.realpathSync.native(mkdtempSync(path.join(tmpdir(), 'paperdesk-vault-store-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const vault = path.join(base, 'vault'), recoveryDir = path.join(base, 'recovery');
   mkdirSync(vault); mkdirSync(path.join(vault, '.obsidian'));
@@ -368,7 +370,8 @@ test('a PDF path replaced after hashing is not accepted as the verified open ino
   });
   const pathHook = t.mock.method(fs, 'lstatSync', (...args) => {
     const stat = originalLstat(...args);
-    if (ended && path.resolve(args[0]) === saved.pdfPath) stat.ino += 1;
+    // Large Windows file IDs can round ino + 1 back to the same Number.
+    if (ended && path.resolve(args[0]) === saved.pdfPath) stat.ino = -1;
     return stat;
   });
   syncBuiltinESMExports();
