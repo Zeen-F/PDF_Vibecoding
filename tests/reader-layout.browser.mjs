@@ -62,11 +62,19 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   async function selectText(number) {
     const line = tile(number).locator('.textLayer span').filter({ hasText: readerLayoutText(number) });
     await expect(line).toBeVisible(); await line.scrollIntoViewIfNeeded();
-    const bounds = await line.boundingBox(); assert.ok(bounds);
-    // Tiny grid glyphs (especially the final period) can be narrower than 2px.
-    // Drag just beyond both text edges to select the complete line on every OS.
-    await page.mouse.move(bounds.x - 2, bounds.y + bounds.height / 2); await page.mouse.down();
-    await page.mouse.move(bounds.x + bounds.width + 2, bounds.y + bounds.height / 2, { steps: 8 }); await page.mouse.up();
+    // Measure actual edge glyphs, not a fixed inset: a grid-scale period can
+    // be narrower than a CSS pixel, while starting outside a span is invalid.
+    const edge = await line.evaluate(span => {
+      const node = span.firstChild;
+      const range = document.createRange();
+      range.setStart(node, 0); range.setEnd(node, 1);
+      const first = range.getBoundingClientRect();
+      range.setStart(node, node.textContent.length - 1); range.setEnd(node, node.textContent.length);
+      const last = range.getBoundingClientRect();
+      return { start: first.left + first.width * .1, end: last.right - last.width * .1, y: first.top + first.height / 2 };
+    });
+    await page.mouse.move(edge.start, edge.y); await page.mouse.down();
+    await page.mouse.move(edge.end, edge.y, { steps: 8 }); await page.mouse.up();
     await expect(selectionBar.locator('.selection-summary p')).toHaveText(readerLayoutText(number));
   }
   async function dragRegion(number, from = [.15, .30], to = [.60, .45]) {
