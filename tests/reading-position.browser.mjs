@@ -1,3 +1,4 @@
+import { openReaderDisplay } from './reader-display-controls.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -26,8 +27,8 @@ export async function readingPositionWorkflow({ context, base, dataDir }) {
   try {
     await page.goto(`${base}/?document=${a.id}&page=1`);
     await expect(current(1)).toBeVisible();
-    await page.getByRole('combobox', { name: '翻页方式', exact: true }).selectOption('paged');
-    await page.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('1');
+    await openReaderDisplay(page); await page.getByRole('combobox', { name: '翻页方式', exact: true }).selectOption('paged');
+    await openReaderDisplay(page); await page.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('1');
     const expandLibrary = page.getByRole('button', { name: '展开文献栏', exact: true });
     if (await expandLibrary.count()) await expandLibrary.click();
     let entered;

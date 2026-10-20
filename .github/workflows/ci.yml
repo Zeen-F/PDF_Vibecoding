@@ -40,6 +40,17 @@ jobs:
             | sudo tee /etc/apt/apt.conf.d/99-paperdesk-network >/dev/null
       - run: npx playwright install --with-deps chromium
       - run: npm run check
+        env:
+          PAPERDESK_READER_LAYOUT_VISUAL_DIR: .local/ci-reader-layout
+      - name: Preserve synthetic reader layout evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: reader-layout-${{ matrix.os }}
+          path: .local/ci-reader-layout/*.png
+          include-hidden-files: true # Only this synthetic PNG glob, never the rest of .local
+          retention-days: 3
+          if-no-files-found: ignore
 
   # Keep the existing protected-branch status name. A cancelled, failed, or
   # skipped platform must never allow this aggregate gate to pass.

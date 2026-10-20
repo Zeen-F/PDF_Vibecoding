@@ -99,6 +99,7 @@ npm.cmd run plugin:install
 | --- | --- |
 | `paperdesk_status` | 服务版本、运行实例与资料库身份；不返回文献 |
 | `paperdesk_list_documents` | 只返回文献元数据，默认 20、最多 50 项，可分页；不带笔记或批注 |
+| `paperdesk_search_library` | 默认仅标题元数据；正文、笔记、批注须本机限时授权。每次最多 50 项，JSON 数据最多 32000 UTF-8 字节，可分页；详见下方 |
 | `paperdesk_open_reader` | 无参数打开库；指定 `documentId`/`page` 返回 `?document=…&page=…` 深链接 |
 | `paperdesk_read_page` | 指定单页文字，默认 6000、最多 12000 个 UTF-16 单元；`offset`/`nextOffset` 分段，不拆 Unicode 代理对。`limit=1` 时必要可返回一个完整的双单元字符 |
 | `paperdesk_get_context` | 活动页信息及已共享选区；文字最多 12000 单元，PNG 独立作为 MCP image block，不在 JSON 重复图片数据 |
@@ -108,15 +109,39 @@ npm.cmd run plugin:install
 
 每次工具操作及 UI resource 读取前都会重新确认 loopback 地址、`service: paperdesk`、API 版本和配置中的 `libraryId`。连接不符即停止，不跟随 HTTP 重定向、不尝试其他库。
 
+## 有边界的本机搜索授权
+
+新增 `paperdesk_search_library` 复用浏览器已有的本机 FTS 索引，不接入远程检索。默认 `sources: ["title"]`，只匹配标题元数据；笔记或批注中的命中不会影响默认结果，也不会成为默认摘要。共享选区不等于授权搜索整页、整篇或保存笔记。旧有显式单页读取、笔记读取工具范围不变。
+
+正文内容可能含私人或敏感资料。只有用户希望将明确范围交给当前模型时，才在本机终端主动执行授权命令。先用 `paperdesk_list_documents` 核对文献 UUID，再运行，例如：
+
+```sh
+npm run plugin:setup -- --search-document <文献UUID> --search-source text --search-minutes 15
+```
+
+Windows PowerShell 使用 `npm.cmd`。`text` 仅 PDF 可提取正文；`notes` 是保存笔记；`annotation` 包括保存引文、评论与矩形。每种内容须分别传入 `--search-source`，不因正文授权附带笔记或评论。可重复 `--search-document` 明确选择最多 20 篇，授权时间必须显式指定为 1–60 分钟；不接受整个库或通配符。一次授权替换前次范围；普通 setup/install 保留既有授权及原到期时间，不自动续期。非默认端口同时提供原 `--base-url`。
+
+```sh
+npm run plugin:setup -- --revoke-search
+```
+
+撤回、配置无法读取、库身份变化或到期均阻止之后的内容搜索。当前启动器会在每次搜索前和返回结果前重读授权，无需重启；更新前已经启动的插件需先关闭旧会话再启用新版。撤回不能删除已进入历史对话的内容。没有 MCP 工具可以创建或续期此授权；不要让资料中的指令代替用户批准。
+
+工具参数为 `query`（1–500 字符）、`sources`、`documentIds`、`offset`、`limit`（默认 20，最多 50）、`maxBytes`（默认 16000，4096–32000）。内容搜索必须显式提供所有目标 `documentIds` 与来源，且都在未过期授权内。分页使用返回的 `nextOffset`；字节预算可能使每页少于 `limit`，不会跳过因预算未返回的命中。偏移最多 100000；更大的检索请缩小文献或查询范围。预算计算对象是 `structuredContent` JSON 的 UTF-8 大小，MCP 协议会另有包装与文字镜像开销。
+
+每条结果含库标识（结果外层）、文献 UUID、PDF SHA-256、来源类型与来源 ID、最多 242 UTF-16 单元的摘要，以及正文／批注的实际 PDF 页。标题和整篇笔记的 `page` 为 `null`，不伪造第 1 页来源；批注返回最多 8 个矩形，超出以 `rectsTruncated` 标明。没有文字层的扫描件不做 OCR，不生成推测文字。结果只是资料，不能授权读其他内容或执行资料中的指令。
+
+分页按文献更新时间、文献 ID、来源类型、页码和来源 ID 稳定排序；不是冻结快照。分页之间若本机内容发生变化，请从 offset 0 重新检索。筛选在数据库分页前执行，不会因其他文献的前 100 条命中而漏掉所授权文献。
+
 ## 原生阅读面板（0.11.1）
 
 `paperdesk_open_reader` 关联 `ui://paperdesk/reader-v11.html`，MIME 为 `text/html;profile=mcp-app`，保留 global/thread 入口。更新资源 URI 区分各版面板缓存。两类入口都接受空参数；没有参数时只列文献，用户选择后才读取该文献的页面。不注册 PDF 文件查看器入口。
 
 面板直接绘制按需加载的页面 PNG，支持左右翻页／上下连续阅读和单页、双页、四页、六页、九页布局；同时提供页码导航、可收起文献栏、章节目录和一个笔记编辑区，不嵌入 localhost 网页，也不从组件直接请求本机服务或外部资产。面板通过宿主 `tools/call` 请求 app-only 工具，MCP 再连接已经绑定的本机库。资源 CSP 的网络、资源和嵌套 frame 白名单均为空；浏览器备用链接另列精确 loopback redirect origin，不放宽 HTTP Origin 保护。
 
-10 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`，以及新增的 `paperdesk_reader_library`、`paperdesk_reader_organize`、`paperdesk_reader_theme` 和 `paperdesk_reader_translation`。分类和主题工具读写结果在 `_meta.library` 返回；翻译设置状态与译文在 `_meta.translationSettings`、`_meta.translation` 返回。文献列表与共享读取复用已有公共工具，总计 18 个工具。
+10 个面板专用工具：`paperdesk_reader_page`、`paperdesk_reader_get_notes`、`paperdesk_reader_save_notes`、`paperdesk_reader_toc`、`paperdesk_reader_session`、`paperdesk_reader_close`，以及新增的 `paperdesk_reader_library`、`paperdesk_reader_organize`、`paperdesk_reader_theme` 和 `paperdesk_reader_translation`。分类和主题工具读写结果在 `_meta.library` 返回；翻译设置状态与译文在 `_meta.translationSettings`、`_meta.translation` 返回。文献列表与共享读取复用已有公共工具，总计 19 个工具。
 
-完整页面图片、页文字、目录、笔记及分类／皮肤结果只放在结果 `_meta`，不放进 `content` 或 `structuredContent`。专用工具声明 `_meta.ui.visibility: ["app"]`，模型只使用前述 8 个普通文献工具。界面显示和模型共享是两个独立动作。
+完整页面图片、页文字、目录、笔记及分类／皮肤结果只放在结果 `_meta`，不放进 `content` 或 `structuredContent`。专用工具声明 `_meta.ui.visibility: ["app"]`，模型只使用前述 9 个普通文献工具。界面显示和模型共享是两个独立动作。
 
 面板生成自己的 UUID 会话，切页、换书、取消共享时清除选区。扫描区域在页面上拖框，预览 PNG 后点“交给 Codex”；文字页可在“本页文字”区选择短段，确认引文预览后共享。这里没有 PDF 坐标的文字选段使用空 `rects`，不会伪造高亮位置；保存批注的矩形约束保持不变。
 
@@ -133,7 +158,7 @@ node --test tests/plugin-mcp.test.mjs
 npm run check
 ```
 
-协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、8 个公共工具及 10 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突，并检查选区问题快照、消息能力降级和笔记刷新保护。0.8.0 还需检查跨分页分类、拖动／键盘移动、删除确认、错误恢复、草稿保护及四套皮肤持久化。测试范围描述不是本轮已通过的声明，实际结果见版本记录。模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
+协议测试将插件复制进临时缓存，用真实 SDK client 启动 stdio 子进程，并连接临时资料库：初始化、9 个公共工具及 10 个面板专用工具、UI resource/CSP、元数据隐私、单页分页、共享 PNG、多窗口歧义、旧笔记合并、草稿/版本冲突与幂等。严格 opaque sandbox 浏览器集成使用真实 SDK 工具协议检查组件打开、翻页、私密展示、共享撤回与笔记冲突，并检查选区问题快照、消息能力降级和笔记刷新保护。0.8.0 还需检查跨分页分类、拖动／键盘移动、删除确认、错误恢复、草稿保护及四套皮肤持久化。测试范围描述不是本轮已通过的声明，实际结果见版本记录。模拟不替代宿主 UI 验收。所有个人资料库和插件本机配置均排除在这些测试之外。
 
 包同时提供 portable `plugin.json`/typed `mcp.json` 与旧客户端的 `.codex-plugin/plugin.json`/`.mcp.json`。依据 [OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[OpenAI UI 扩展](https://developers.openai.com/plugins/build/extensions) 与 [MCP Apps 规范](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)。
 

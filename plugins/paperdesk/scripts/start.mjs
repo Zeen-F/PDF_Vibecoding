@@ -13,7 +13,7 @@ try {
   const { startStdio } = await import(pathToFileURL(join(workspaceRoot, 'server', 'mcp.mjs')).href);
   const { ensureReaderRuntime } = await import(pathToFileURL(join(workspaceRoot, 'server', 'plugin-runtime.mjs')).href);
   await ensureReaderRuntime({ ...profile, workspaceRoot });
-  await startStdio(profile);
+  await startStdio(profile, { readProfile: async () => JSON.parse(await readFile(configPath, 'utf8')) });
 } catch (error) {
   console.error(`Paperdesk 插件启动失败：${error.code === 'ENOENT' ? '找不到本机配置或工作区。请先启动阅读器并运行插件设置。' : error.message}`);
   process.exitCode = 1;

@@ -1,3 +1,4 @@
+import { openReaderDisplay } from './reader-display-controls.mjs';
 import assert from 'node:assert/strict';
 import { expect } from '@playwright/test';
 import { READER_LAYOUT_PAGE_COUNT, readerLayoutPdf, readerLayoutSize, readerLayoutText } from './fixtures/reader-layout.mjs';
@@ -47,6 +48,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   async function ready(number) {
     await expect(tile(number).getByLabel(`PDF 第 ${number} 页`, { exact: true })).toBeVisible();
     await expect(tile(number).locator('.textLayer')).toContainText(readerLayoutText(number));
+    await expect(tile(number)).not.toHaveClass(/is-loading/);
   }
   async function goto(number) {
     await pageInput.fill(String(number)); await pageInput.press('Enter');
@@ -59,12 +61,39 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     return expected;
   }
   async function selectText(number) {
+    // Exact annotation gestures use readable 100% text, still within the same
+    // multi-page layout. Fit-grid rendering/geometry is asserted separately.
+    await zoom.selectOption('1'); await goto(number);
     const line = tile(number).locator('.textLayer span').filter({ hasText: readerLayoutText(number) });
+    await ready(number);
     await expect(line).toBeVisible(); await line.scrollIntoViewIfNeeded();
-    const bounds = await line.boundingBox(); assert.ok(bounds);
-    await page.mouse.move(bounds.x + 1, bounds.y + bounds.height / 2); await page.mouse.down();
-    await page.mouse.move(bounds.x + bounds.width - 1, bounds.y + bounds.height / 2, { steps: 8 }); await page.mouse.up();
-    await expect(selectionBar.locator('.selection-summary p')).toHaveText(readerLayoutText(number));
+    await line.hover(); // Wait for actionable, stable text geometry before sampling.
+    assert.ok(await line.evaluate(span => parseFloat(getComputedStyle(span).fontSize)) >= 12, 'Exact sentence selection requires readable glyphs');
+    // Measure actual edge glyphs, not a fixed inset: a grid-scale period can
+    // be narrower than a CSS pixel, while starting outside a span is invalid.
+    const snapshot = span => {
+      const node = span.firstChild;
+      const range = document.createRange();
+      range.setStart(node, 0); range.setEnd(node, 1);
+      const first = range.getBoundingClientRect();
+      range.setStart(node, node.textContent.length - 1); range.setEnd(node, node.textContent.length);
+      const last = range.getBoundingClientRect();
+      const selection = window.getSelection();
+      const endpoint = node => ({ text: node?.textContent, parent: node?.parentElement?.className, page: node?.parentElement?.closest('.pdf-paper')?.dataset.page });
+      return { native: selection?.toString(), anchorOffset: selection?.anchorOffset, focusOffset: selection?.focusOffset, anchor: endpoint(selection?.anchorNode), focus: endpoint(selection?.focusNode), currentPage: document.querySelector('[aria-label="页码"]').value, loading: span.closest('.pdf-paper').classList.contains('is-loading'), font: getComputedStyle(span).font, start: first.left + first.width * .1, end: last.right - last.width * .1, y: first.top + first.height / 2, first: first.toJSON(), last: last.toJSON(), span: span.getBoundingClientRect().toJSON(), transform: getComputedStyle(span).transform };
+    };
+    const edge = await line.evaluate(snapshot);
+    await page.mouse.move(edge.start, edge.y); await page.mouse.down();
+    await page.mouse.move(edge.end, edge.y, { steps: 8 }); await page.mouse.up();
+    const immediate = await line.evaluate(snapshot);
+    try { await expect(selectionBar.locator('.selection-summary p')).toHaveText(readerLayoutText(number)); }
+    catch (error) {
+      try {
+        console.error('Synthetic selection geometry diagnostic', JSON.stringify({ number, before: edge, immediate, after: await line.evaluate(snapshot) }));
+        await onLayoutPreview?.(page, `browser-selection-failure-page-${number}`);
+      } catch (diagnosticError) { console.error('Selection diagnostic unavailable:', diagnosticError.message); }
+      throw error;
+    }
   }
   async function dragRegion(number, from = [.15, .30], to = [.60, .45]) {
     const layer = tile(number).getByLabel('拖动框选批注区域', { exact: true });
@@ -94,7 +123,9 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
   try {
     await page.setViewportSize({ width: 2560, height: 1440 });
     await page.goto(`${base}/?document=${book.id}&page=1`); await ready(1);
-    await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('1'); await expect(zoom).toHaveValue('fit');
+    await expect(page.getByRole('button', { name: '显示设置', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await expect(flow).toHaveCount(0);
+    await openReaderDisplay(page); await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('1'); await expect(zoom).toHaveValue('fit');
     const collapseLibrary = page.getByRole('button', { name: '收起文献栏', exact: true });
     if (await collapseLibrary.isVisible()) await collapseLibrary.click();
     const collapseNotes = page.getByRole('button', { name: '收起笔记面板', exact: true });
@@ -112,7 +143,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     assert.ok((await tile(1).boundingBox()).width < wide - 500, 'Fit width must respond to viewport resize');
     await page.setViewportSize({ width: 2560, height: 1440 });
 
-    await layout.selectOption('2'); await goto(1); await group(1, 2);
+    await openReaderDisplay(page); await layout.selectOption('2'); await goto(1); await group(1, 2);
     const beforeCrossPage = (await readBook()).annotations;
     await page.evaluate(texts => {
       const node = (number, text) => [...document.querySelectorAll(`.pdf-paper[data-page="${number}"] .textLayer span`)].find(span => !span.children.length && span.textContent === text)?.firstChild;
@@ -127,7 +158,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     console.log('PASS: a native DOM range across two visible PDF text layers is rejected with a same-page hint and unchanged annotations');
 
     for (const count of [2, 4, 6, 9]) {
-      await layout.selectOption(String(count)); await expect(zoom).toHaveValue('page'); await goto(1); await group(1, count);
+      await openReaderDisplay(page); await layout.selectOption(String(count)); await expect(zoom).toHaveValue('page'); await goto(1); await group(1, count);
       const boxes = await Promise.all(pagesInGroup(1, count).map(number => tile(number).boundingBox()));
       const columns = count === 2 || count === 4 ? 2 : 3;
       assert.ok(boxes[1].x > boxes[0].x + boxes[0].width - 2, `${count}-page grid must show separate columns`);
@@ -149,7 +180,9 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     console.log('PASS: real wide-container fit and resize, 2/4/6/9 grids, whole-screen heights, exact page requests and partial final groups');
     await goto(1); await expect.poll(async () => (await readBook()).document.lastPage).toBe(1);
     await page.reload(); await ready(1);
-    await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('9'); await expect(zoom).toHaveValue('page'); await group(1, 9);
+    await expect(page.getByRole('button', { name: '显示设置', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await expect(flow).toHaveCount(0);
+    await openReaderDisplay(page); await expect(flow).toHaveValue('paged'); await expect(layout).toHaveValue('9'); await expect(zoom).toHaveValue('page'); await group(1, 9);
     await goto(1); await zoom.selectOption('2');
     await expect.poll(async () => (await tile(1).boundingBox()).width).toBeCloseTo(1200, 0); await group(1, 9);
     const raster = await page.locator('.pdf-paper canvas').evaluateAll(canvases => ({ total: canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0), largest: Math.max(...canvases.map(canvas => Math.max(canvas.width, canvas.height))) }));
@@ -159,7 +192,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     await page.getByRole('button', { name: '展开文献栏', exact: true }).click();
     await page.locator(`[data-document-id="${mixed.id}"] .document-item`).click();
     await page.getByRole('button', { name: '收起文献栏', exact: true }).click();
-    await layout.selectOption('4'); await goto(1); await group(1, 4);
+    await openReaderDisplay(page); await layout.selectOption('4'); await goto(1); await group(1, 4);
     const mixedScroll = await page.locator('.pdf-scroll').boundingBox();
     for (const number of [1, 2, 3, 4]) {
       const bounds = await tile(number).boundingBox(), size = readerLayoutSize(number, true);
@@ -172,7 +205,7 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     await page.getByRole('button', { name: '收起文献栏', exact: true }).click();
     console.log('PASS: a whole-screen grid preserves mixed landscape/tall page proportions and fits all pages inside the viewport');
 
-    await layout.selectOption('1'); await zoom.selectOption('page'); await goto(1); await flow.selectOption('continuous'); await ready(1);
+    await openReaderDisplay(page); await layout.selectOption('1'); await zoom.selectOption('page'); await goto(1); await openReaderDisplay(page); await flow.selectOption('continuous'); await ready(1);
     const scrollBox = await page.locator('.pdf-scroll').boundingBox();
     await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2); await page.mouse.wheel(0, scrollBox.height * 3);
     await expect.poll(async () => Number(await pageInput.inputValue())).toBeGreaterThan(1);
@@ -185,24 +218,54 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     await onLayoutPreview?.(page, 'browser-continuous-page-15');
     console.log('PASS: real continuous wheel/scroll navigation reaches later pages, updates active page and bounds rendered canvas/text resources');
 
-    await flow.selectOption('paged'); await layout.selectOption('9'); await goto(1); await group(1, 9);
+    await openReaderDisplay(page); await flow.selectOption('paged'); await openReaderDisplay(page); await layout.selectOption('9'); await goto(1); await group(1, 9);
     await selectText(5);
     const text = await saveAnnotation(5, 'text', '布局验收：第五页文字引文。');
     assert.equal(text.quote, readerLayoutText(5)); text.rects.forEach(rect => assertRect(rect));
-    await page.getByRole('button', { name: '区域批注', exact: true }).click();
+    // Saving reveals notes and rerenders the grid at its new width. Wait for
+    // that saved annotation's ready tile before activating region mode.
+    await expect(pageInput).toHaveValue('5');
+    await expect(tile(5).locator(`[data-annotation="${text.id}"]`)).toBeVisible();
+    await expect(tile(5)).not.toHaveClass(/is-loading/);
+    await expect(page.locator('.reader-status')).toHaveCount(0);
+    const regionToggle = page.getByRole('button', { name: '区域批注', exact: true });
+    await expect(regionToggle).toBeEnabled();
+    await expect(regionToggle).toHaveAttribute('aria-pressed', 'false');
+    // Mode intent remains available across relayout; unready tiles must never
+    // expose a capture layer. Observe the rerender, not a fixed sleep.
+    await page.evaluate(() => {
+      const reader = document.querySelector('.reader');
+      const toggle = reader.querySelector('[aria-label="区域批注"]');
+      window.__regionRelayout = { disabled: false, unsafeOverlay: false, loading: false };
+      window.__regionObserver = new MutationObserver(records => {
+        const state = window.__regionRelayout;
+        state.disabled ||= toggle.disabled || records.some(record => record.target === toggle && record.attributeName === 'disabled' && record.oldValue !== null);
+        state.loading ||= Boolean(reader.querySelector('.pdf-paper.is-loading'));
+        state.unsafeOverlay ||= Boolean(reader.querySelector('.pdf-paper.is-loading [data-region-selection]'));
+      });
+      window.__regionObserver.observe(reader, { subtree: true, childList: true, attributes: true, attributeOldValue: true });
+    });
+    await zoom.selectOption('1.25'); // Explicit scale change rerenders fixed-zoom tiles.
+    await regionToggle.focus(); await regionToggle.press('Space');
+    await expect(regionToggle).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => page.evaluate(() => window.__regionRelayout.loading)).toBe(true);
+    await expect(tile(5).getByLabel('拖动框选批注区域', { exact: true })).toBeVisible();
+    const relayout = await page.evaluate(() => { window.__regionObserver.disconnect(); return window.__regionRelayout; });
+    assert.deepEqual(relayout, { disabled: false, unsafeOverlay: false, loading: true });
+    assert.equal((await readBook()).annotations.length, beforeCrossPage.length + 1, 'Choosing mode must not save a region');
     const expected = await dragRegion(5);
     const region = await saveAnnotation(5, 'region', '布局验收：第五页图形区域。');
     assert.equal(region.quote, ''); assert.equal(region.rects.length, 1); assertRect(region.rects[0], expected);
     await expect(tile(5).locator(`[data-annotation="${region.id}"]`)).toBeVisible();
     const saved = (await readBook()).annotations;
     assert.equal(saved.find(item => item.id === text.id).page, 5); assert.equal(saved.find(item => item.id === region.id).page, 5);
-    await dragRegion(5); await layout.selectOption('4'); await expect(selectionBar).toHaveCount(0);
-    await goto(5); await dragRegion(5); await flow.selectOption('continuous'); await expect(selectionBar).toHaveCount(0);
-    await flow.selectOption('paged'); await layout.selectOption('9'); await goto(1); await group(1, 9);
+    await dragRegion(5); await openReaderDisplay(page); await layout.selectOption('4'); await expect(selectionBar).toHaveCount(0);
+    await goto(5); await dragRegion(5); await openReaderDisplay(page); await flow.selectOption('continuous'); await expect(selectionBar).toHaveCount(0);
+    await openReaderDisplay(page); await flow.selectOption('paged'); await openReaderDisplay(page); await layout.selectOption('9'); await goto(1); await group(1, 9);
     await page.getByRole('button', { name: '区域批注', exact: true }).click(); await selectText(5);
-    await layout.selectOption('4'); await expect(selectionBar).toHaveCount(0);
-    await goto(5); await selectText(5); await flow.selectOption('continuous'); await expect(selectionBar).toHaveCount(0);
-    await flow.selectOption('paged'); await layout.selectOption('4'); await goto(5); await selectText(5);
+    await openReaderDisplay(page); await layout.selectOption('4'); await expect(selectionBar).toHaveCount(0);
+    await goto(5); await selectText(5); await openReaderDisplay(page); await flow.selectOption('continuous'); await expect(selectionBar).toHaveCount(0);
+    await openReaderDisplay(page); await flow.selectOption('paged'); await openReaderDisplay(page); await layout.selectOption('4'); await goto(5); await selectText(5);
     const expandLibrary = page.getByRole('button', { name: '展开文献栏', exact: true }); if (await expandLibrary.isVisible()) await expandLibrary.click();
     await page.locator(`[data-document-id="${other.id}"] .document-item`).click();
     await expect(page.locator('.header-title h1')).toHaveText(other.title); await expect(selectionBar).toHaveCount(0);
@@ -213,8 +276,8 @@ export async function readerLayoutWorkflow({ context, base, onLayoutPreview }) {
     console.log('PASS: real text/region selection on the fifth grid tile saves true page and normalized coordinates; document/mode/layout changes cancel drafts without note/API writes');
   } finally {
     if (!page.isClosed()) {
-      if (await flow.isVisible()) await flow.selectOption('paged');
-      if (await layout.isVisible()) await layout.selectOption('1');
+      if (await flow.isVisible()) { await openReaderDisplay(page); await flow.selectOption('paged'); }
+      if (await layout.isVisible()) { await openReaderDisplay(page); await layout.selectOption('1'); }
       if (await zoom.isVisible()) await zoom.selectOption('fit');
       await page.close();
     }

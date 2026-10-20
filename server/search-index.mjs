@@ -188,5 +188,33 @@ export function createSearchIndex(db) {
       ...(row.source === 'annotation' ? { annotationId: row.source_id, rects: JSON.parse(row.rects) } : {}),
     }));
   }
-  return { search, sync, rebuild };
+  // Scope predicates run before LIMIT/OFFSET: excluded private hits cannot
+  // starve permitted results or leak counts through pagination.
+  function searchScoped(query, { sources = ['title'], documentIds = [], offset = 0, limit = 20 } = {}) {
+    if (!Array.isArray(sources) || !sources.length || !sources.every(source => ['title', 'text', 'notes', 'annotation'].includes(source))
+      || !Array.isArray(documentIds) || documentIds.length > 20 || !documentIds.every(id => typeof id === 'string')
+      || !Number.isSafeInteger(offset) || offset < 0 || offset > 100000
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('Invalid bounded search scope');
+    const needle = searchText(query).toLowerCase();
+    if (!needle) return { results: [], hasMore: false };
+    sync();
+    const useFts = [...needle].length >= 3;
+    const params = useFts ? [`"${needle.replaceAll('"', '""')}"`, needle] : [needle];
+    params.push(...sources);
+    let scope = ` AND e.source IN (${sources.map(() => '?').join(',')})`;
+    if (documentIds.length) {
+      scope += ` AND e.document_id IN (${documentIds.map(() => '?').join(',')})`;
+      params.push(...documentIds);
+    }
+    const from = useFts ? 'search_fts JOIN search_entries e ON e.id=search_fts.rowid' : 'search_entries e';
+    const rows = db.prepare(`SELECT ${columns} FROM ${from} ${joins}
+      WHERE ${useFts ? 'search_fts MATCH ? AND ' : ''}instr(e.folded,?)>0 ${scope}
+      ORDER BY d.updated_at DESC,d.id,e.source_order,e.page,e.created_at,e.source_id LIMIT ? OFFSET ?`).all(...params, limit + 1, offset);
+    return { hasMore: rows.length > limit, results: rows.slice(0, limit).map(row => ({
+      documentId: row.document_id, title: row.title, pdfSha256: row.sha256,
+      page: row.page, snippet: searchSnippet(row.body, needle), source: row.source,
+      ...(row.source === 'annotation' ? { annotationId: row.source_id, rects: JSON.parse(row.rects) } : {}),
+    })) };
+  }
+  return { search, searchScoped, sync, rebuild };
 }

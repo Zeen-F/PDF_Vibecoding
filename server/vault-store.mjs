@@ -331,25 +331,34 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       return file;
     }
     function inspectPdf(file) {
-      const fd = openFile(file);
-      try {
-        const stat = fstatSync(fd), key = signature(stat);
-        integer(stat.size, 1, Number.MAX_SAFE_INTEGER, 'PDF 大小');
-        const cached = pdfCache.get(file);
-        let sha = cached?.signature === key ? cached.sha256 : null;
-        if (!sha) {
-          const buffer = Buffer.alloc(64 * 1024), hasher = createHash('sha256');
-          let position = 0, count;
-          do {
-            count = readSync(fd, buffer, 0, buffer.length, position);
-            if (!position && (count < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-')) invalid('原始文献不是有效的 PDF 文件。');
-            if (count) { hasher.update(buffer.subarray(0, count)); position += count; }
-          } while (count);
-          if (signature(fstatSync(fd)) !== key) invalid('PDF 正在被其他程序修改，请稍后重新读取。');
-          sha = hasher.digest('hex'); pdfCache.set(file, { signature: key, sha256: sha });
-        }
-        return { pdfPath: file, sha256: sha, byteSize: stat.size };
-      } finally { closeSync(fd); }
+      // Cloud hydration may change metadata while otherwise unchanged bytes are
+      // read. Discard that attempt and reopen, as for Markdown; never reuse a
+      // hash from an unstable read or relax the persisted size/hash checks.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const fd = openFile(file);
+        try {
+          const stat = fstatSync(fd), key = signature(stat);
+          integer(stat.size, 1, Number.MAX_SAFE_INTEGER, 'PDF 大小');
+          const cached = pdfCache.get(file);
+          let sha = cached?.signature === key ? cached.sha256 : null;
+          if (!sha) {
+            const buffer = Buffer.alloc(64 * 1024), hasher = createHash('sha256');
+            let position = 0, count;
+            do {
+              count = readSync(fd, buffer, 0, buffer.length, position);
+              if (!position && (count < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-')) invalid('原始文献不是有效的 PDF 文件。');
+              if (count) { hasher.update(buffer.subarray(0, count)); position += count; }
+            } while (count);
+            sha = hasher.digest('hex');
+          }
+          if (signature(fstatSync(fd)) !== key || signature(checkedPath(canonical, file)) !== key) {
+            pdfCache.delete(file); continue;
+          }
+          pdfCache.set(file, { signature: key, sha256: sha });
+          return { pdfPath: file, sha256: sha, byteSize: stat.size };
+        } finally { closeSync(fd); }
+      }
+      fileConflict('PDF 在连续读取中仍发生变化，请等待同步或编辑完成后重新读取。');
     }
     function verifyPdf(doc, pdfSource) {
       const file = pdfSource ? sourcePath(pdfSource) : pdfPath(doc.id);
@@ -493,8 +502,35 @@ export function createVaultStore({ vaultDir, subdir = 'Paperdesk', recoveryDir }
       const saved = path.join(recoveryRoot, `${path.basename(file, '.md')}-${Date.now()}-${randomUUID()}.md`);
       try { linkSync(file, saved); }
       catch (error) {
-        const failure = new VaultError('无法创建可恢复的 Markdown 原文件副本，本次保存已停止，请检查恢复目录权限与所在磁盘。');
-        failure.cause = error; throw failure;
+        try {
+          if (error.code !== 'EXDEV') throw error;
+          // A copy alone cannot observe writes through an editor's old handle
+          // after the atomic rename. Retain that inode on its original volume;
+          // the non-.md suffix keeps this internal link out of the note index.
+          const retained = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.paperdesk-recovery`);
+          checkedPath(canonical, retained, { missing: true });
+          linkSync(file, retained);
+          const partial = `${saved}.partial`;
+          let copyReady = false, copyFd;
+          try {
+            copyFileSync(retained, partial, constants.COPYFILE_EXCL); copyReady = true;
+            copyFd = openSync(partial, constants.O_RDWR | (constants.O_NOFOLLOW || 0));
+            fsyncSync(copyFd); closeSync(copyFd); copyFd = undefined;
+            if (digest(readFileSync(partial)) !== digest(readFileSync(retained))) fileConflict('Obsidian 正在编辑原文件，请重新读取后合并保存。');
+            // Publish the flushed snapshot exclusively on the recovery volume.
+            linkSync(partial, saved);
+          } finally {
+            if (copyFd !== undefined) closeSync(copyFd);
+            if (copyReady) unlinkSync(partial);
+          }
+          // Keep this link even after success: an already-open external handle
+          // may finish writing later. Conflict checks/restoration use this inode.
+          return retained;
+        } catch (cause) {
+          if (cause instanceof VaultError) throw cause;
+          const failure = new VaultError('无法创建可恢复的 Markdown 原文件副本，本次保存已停止，请检查恢复目录权限与所在磁盘。');
+          failure.cause = cause; throw failure;
+        }
       }
       return saved;
     }

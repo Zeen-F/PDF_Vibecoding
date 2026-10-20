@@ -1,0 +1,360 @@
+/* Original cinematic study: stone, indigo cloth, jade light and warm paper. */
+:root[data-preview="shanlan"] {
+  --shelf-top: #283e45;
+  --shelf-bottom: #182c35;
+  --shelf-text: #e3e9e6;
+  --shelf-soft: #b5c9c9;
+  --shelf-jade: #9dbdb2;
+  --shelf-hairline: #a7b8b82b;
+}
+:root[data-preview="shanlan"][data-shelf-scene="moon"] {
+  --shelf-top: #202d45;
+  --shelf-bottom: #131f33;
+  --shelf-jade: #a2b5d6;
+  --shelf-soft: #bac7dd;
+}
+:root[data-preview="shanlan"] .sidebar {
+  position: relative;
+  isolation: isolate;
+  padding: 8px 12px 0;
+  color: var(--shelf-text);
+  background: linear-gradient(160deg, var(--shelf-top), var(--shelf-bottom));
+  box-shadow: inset -1px 0 #9fb8bc20;
+  border-right: 1px solid #8aa3a64a;
+}
+:root[data-preview="shanlan"] .sidebar::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 190px;
+  z-index: -1;
+  background: url("./shanlan-landscape.svg") 66% bottom / auto 220px no-repeat;
+  opacity: 0.12;
+  pointer-events: none;
+  mask-image: linear-gradient(transparent, #000);
+}
+:root[data-preview="shanlan"] :is(.brand, .shelf-brand-row) {
+  min-height: 44px;
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+:root[data-preview="shanlan"] .shelf-brand-row .brand {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+}
+:root[data-preview="shanlan"] .brand-mark {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: 1px solid #b4c6ba85;
+  border-radius: 4px 1px 4px 1px;
+  color: #dbe6db;
+  background: linear-gradient(135deg, #597c73, #334e4c);
+  box-shadow: inset 0 0 0 2px #132c334f;
+}
+:root[data-preview="shanlan"] .brand-mark svg {
+  width: 18px;
+  height: 18px;
+}
+:root[data-preview="shanlan"] .brand,
+:root[data-preview="shanlan"] .brand strong {
+  font:
+    17px "SimSun",
+    serif;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  color: #edf0e7;
+}
+:root[data-preview="shanlan"] .brand-english,
+:root[data-preview="shanlan"] .brand > div > span,
+:root[data-preview="shanlan"] .sidebar-caption {
+  display: none;
+}
+:root[data-preview="shanlan"] .shelf-jump-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: auto;
+  border-radius: 4px;
+  border: 1px solid var(--shelf-hairline);
+  background: #12273240;
+  color: var(--shelf-soft);
+  cursor: pointer;
+}
+:root[data-preview="shanlan"]
+  :is(.shelf-jump-trigger:hover, .shelf-jump-trigger:focus-visible) {
+  background: #58747766;
+  color: #fff7df;
+}
+:root[data-preview="shanlan"] .shelf-preferences {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  padding: 7px 2px 0;
+  border-top: 1px solid var(--shelf-hairline);
+}
+:root[data-preview="shanlan"] .shelf-preferences button {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 1;
+  font:
+    11px "Microsoft YaHei",
+    sans-serif;
+  color: var(--shelf-soft);
+  background: #182d362e;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+:root[data-preview="shanlan"] .shelf-preferences button[aria-pressed="true"] {
+  color: #e7e8d6;
+  border-color: #a5bcb434;
+  background: #a1beb412;
+}
+:root[data-preview="shanlan"] .shelf-preferences button:hover {
+  background: #7999952b;
+  border-color: #a2b7ae66;
+}
+:root[data-preview="shanlan"]
+  :is(
+    .shelf-jump-trigger,
+    .shelf-preferences button,
+    .shelf-move-toggle
+  ):focus-visible {
+  outline: 2px solid #dcc58f;
+  outline-offset: 2px;
+}
+:root[data-preview="shanlan"] .shelf-jump {
+  width: min(550px, calc(100vw - 32px));
+  max-height: min(600px, calc(100dvh - 48px));
+  padding: 24px;
+  border: 1px solid #8c9f9a;
+  border-radius: 8px;
+  background: linear-gradient(140deg, #f7f5ed, #edf1ed);
+  color: #293e42;
+  font:
+    13px/1.5 "Microsoft YaHei",
+    sans-serif;
+  letter-spacing: normal;
+  white-space: normal;
+  box-shadow:
+    0 25px 90px #0e243f66,
+    inset 0 3px #728f85;
+}
+:root[data-preview="shanlan"] .shelf-jump span {
+  color: inherit;
+  letter-spacing: normal;
+}
+:root[data-preview="shanlan"] .shelf-jump::backdrop {
+  background: #10202c9c;
+  backdrop-filter: blur(4px);
+}
+:root[data-preview="shanlan"] .shelf-jump-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+:root[data-preview="shanlan"] .shelf-jump-heading small {
+  color: #7b735c;
+  letter-spacing: 3px;
+  font-size: 10px;
+}
+:root[data-preview="shanlan"] .shelf-jump-heading h2 {
+  margin: 8px 0 20px;
+  font:
+    23px "SimSun",
+    serif;
+  letter-spacing: 2px;
+}
+:root[data-preview="shanlan"] .shelf-jump-heading > button {
+  display: grid;
+  place-items: center;
+  padding: 7px;
+  background: transparent;
+  color: #4d6668;
+  border: 0;
+  border-radius: 3px;
+}
+:root[data-preview="shanlan"] .shelf-jump-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid #99afa7;
+  border-radius: 4px;
+  background: #fffef9;
+  color: #566e70;
+}
+:root[data-preview="shanlan"] .shelf-jump-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 14px;
+  color: #263d3e;
+  padding: 2px;
+}
+:root[data-preview="shanlan"] .shelf-jump-search:focus-within {
+  box-shadow: 0 0 0 2px #adc3b75c;
+}
+:root[data-preview="shanlan"] .shelf-jump-results {
+  max-height: min(310px, 45dvh);
+  overflow: auto;
+  margin: 14px -4px 0;
+  padding: 2px 4px;
+}
+:root[data-preview="shanlan"] .shelf-jump-results button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  padding: 13px 10px;
+  border: 1px solid transparent;
+  border-bottom-color: #b3c4bd55;
+  border-radius: 4px;
+  background: transparent;
+  color: #3e5a5a;
+}
+:root[data-preview="shanlan"] .shelf-jump-results button[aria-selected="true"] {
+  background: #dce6dd;
+  border-color: #9fb6a7;
+  box-shadow: inset 2px 0 #6d9387;
+}
+:root[data-preview="shanlan"] .shelf-jump-results button > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+:root[data-preview="shanlan"] .shelf-jump-results strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+  color: #293e42;
+  font-family: "Microsoft YaHei", sans-serif;
+  letter-spacing: normal;
+}
+:root[data-preview="shanlan"] .shelf-jump-results small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #607574;
+  overflow-wrap: anywhere;
+}
+:root[data-preview="shanlan"] .shelf-jump-number {
+  font:
+    13px Georgia,
+    serif;
+  color: #8a7960;
+}
+:root[data-preview="shanlan"] .shelf-jump-help {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 18px 0 0;
+  font-size: 10px;
+  color: #5a7271;
+}
+:root[data-preview="shanlan"] .shelf-jump-empty {
+  padding: 25px 0;
+  text-align: center;
+  color: #607574;
+  font-size: 13px;
+}
+:root[data-preview="shanlan"] :is(.sidebar-resizer, .shelf-resizer) {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  z-index: 20;
+  cursor: col-resize;
+  touch-action: none;
+}
+:root[data-preview="shanlan"] :is(.sidebar-resizer, .shelf-resizer)::before {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 34px;
+  left: 2px;
+  top: 50%;
+  border-radius: 3px;
+  background: #98b2ad8c;
+}
+:root[data-preview="shanlan"] :is(.sidebar-resizer, .shelf-resizer)::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+}
+:root[data-preview="shanlan"]
+  :is(.sidebar-resizer, .shelf-resizer):is(:hover, :focus-visible)::after,
+:root[data-preview="shanlan"] .shelf-resizer.dragging::after {
+  background: #b2c4ae;
+}
+:root[data-preview="shanlan"] :is(.document-list, .note-list, .folder-list) {
+  scrollbar-width: thin;
+  scrollbar-color: #68817e #172d3420;
+}
+:root[data-preview="shanlan"] :is(.document-item, .note-row) {
+  position: relative;
+}
+:root[data-preview="shanlan"] :is(.document-item.active, .note-row.active) {
+  background: linear-gradient(100deg, #6d968344, #4562671c);
+  box-shadow: inset 2px 0 #a8c4b2;
+}
+:root[data-preview="shanlan"] :is(.document-item, .note-row):hover {
+  background: #8ba9a221;
+}
+:root[data-preview="shanlan"] .note-row.active::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  top: 7px;
+  width: 4px;
+  height: 9px;
+  background: #a56e5d;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%);
+}
+:root[data-preview="shanlan"] :is(.welcome, .start-page)::before {
+  opacity: 0.8;
+  background-image: url("./shanlan-landscape.svg");
+}
+:root[data-preview="shanlan"][data-shelf-scene="moon"]
+  :is(.welcome, .start-page) {
+  background: linear-gradient(110deg, #f1f3f4, #e7edf0);
+}
+:root[data-preview="shanlan"][data-shelf-scene="moon"]
+  :is(.welcome, .start-page)::before {
+  filter: saturate(0.65) hue-rotate(15deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-preview="shanlan"]
+    :is(
+      .shelf-preferences button,
+      .shelf-jump-trigger,
+      .document-item,
+      .note-row,
+      .start-actions > button
+    ) {
+    transition:
+      background-color 0.16s ease-out,
+      border-color 0.16s ease-out,
+      box-shadow 0.16s ease-out;
+  }
+  :root[data-preview="shanlan"] :is(.document-item, .note-row):active {
+    box-shadow: inset 2px 0 #e4d6ac;
+  }
+}

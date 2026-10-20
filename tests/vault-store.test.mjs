@@ -19,7 +19,9 @@ const instant = '2026-10-08T00:00:00.000Z';
 const status409 = error => error.status === 409 && Boolean(error.message);
 
 function setup(t, options = {}) {
-  const base = mkdtempSync(path.join(tmpdir(), 'paperdesk-vault-store-'));
+  // Windows runners may expose TEMP through a short-name or junction alias.
+  // Match the canonical paths used by the store so fault hooks really fire.
+  const base = fs.realpathSync.native(mkdtempSync(path.join(tmpdir(), 'paperdesk-vault-store-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const vault = path.join(base, 'vault'), recoveryDir = path.join(base, 'recovery');
   mkdirSync(vault); mkdirSync(path.join(vault, '.obsidian'));
@@ -49,6 +51,84 @@ function rewriteState(file, change) {
   assert.notEqual(next, source); writeFileSync(file, next);
   return next;
 }
+
+function crossVolumeRecovery(t, recoveryDir, change = () => {}) {
+  const link = fs.linkSync;
+  const hook = t.mock.method(fs, 'linkSync', (from, to) => {
+    if (path.dirname(to) === recoveryDir && path.dirname(from) !== recoveryDir) {
+      change(from, to);
+      throw Object.assign(new Error('different volume'), { code: 'EXDEV' });
+    }
+    return link(from, to);
+  });
+  syncBuiltinESMExports();
+  return () => { hook.mock.restore(); syncBuiltinESMExports(); };
+}
+
+test('cross-volume recovery saves and reopens positions, while retaining late writes through the old inode', t => {
+  const { store, payload, recoveryDir, vault } = setup(t), first = store.writeDocument(payload, null);
+  const original = readFileSync(first.notePath);
+  let fd = process.platform === 'win32' ? undefined : fs.openSync(first.notePath, 'r+');
+  const restore = crossVolumeRecovery(t, recoveryDir);
+  try {
+    const saved = store.writeDocument({ ...first, document: { ...first.document, last_page: 3 } }, first.token);
+    assert.equal(saved.document.last_page, 3);
+    assert.equal(createVaultStore({ vaultDir: vault, recoveryDir }).readDocument(payload.document.id).document.last_page, 3);
+    const backup = readdirSync(recoveryDir).filter(name => name.endsWith('.md'));
+    assert.equal(backup.length, 1); assert.deepEqual(readFileSync(path.join(recoveryDir, backup[0])), original);
+    const retained = readdirSync(path.dirname(first.notePath)).filter(name => name.endsWith('.paperdesk-recovery'));
+    assert.equal(retained.length, 1);
+    // Windows refuses replacement while this Node handle is open; exercise
+    // the retained inode after replacement there, and the old handle on POSIX.
+    if (fd === undefined) fd = fs.openSync(path.join(path.dirname(first.notePath), retained[0]), 'r+');
+    fs.writeSync(fd, Buffer.from('LATE'), 0, 4, 0); fs.fsyncSync(fd);
+    assert.equal(readFileSync(path.join(path.dirname(first.notePath), retained[0])).subarray(0, 4).toString(), 'LATE');
+    assert.equal(store.readDocument(payload.document.id).document.last_page, 3);
+    assert.equal(store.readAll().length, 1, 'Retained inodes are not indexed as notes');
+  } finally { if (fd !== undefined) fs.closeSync(fd); restore(); }
+});
+
+test('cross-volume recovery detects a concurrent old-handle write at rename and restores that content', t => {
+  const { store, payload, recoveryDir } = setup(t), first = store.writeDocument(payload, null);
+  const external = readFileSync(first.notePath, 'utf8').replace('# 阅读笔记', '# 外部笔记');
+  const restoreLink = crossVolumeRecovery(t, recoveryDir), rename = fs.renameSync;
+  let changed = false;
+  const hook = t.mock.method(fs, 'renameSync', (from, to) => {
+    rename(from, to);
+    if (!changed && to === first.notePath && from.endsWith('.tmp')) {
+      changed = true;
+      const retained = readdirSync(path.dirname(first.notePath)).find(name => name.endsWith('.paperdesk-recovery'));
+      writeFileSync(path.join(path.dirname(first.notePath), retained), external);
+    }
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => store.writeDocument({ ...first, document: { ...first.document, last_page: 3 } }, first.token), error => error.code === 'VAULT_FILE_CONFLICT' && fs.existsSync(error.recoveryPath));
+    assert.equal(changed, true); assert.equal(readFileSync(first.notePath, 'utf8'), external);
+  } finally { hook.mock.restore(); restoreLink(); syncBuiltinESMExports(); }
+});
+
+for (const failure of ['permission', 'copy', 'flush']) test(`recovery ${failure} failure leaves the original note unchanged`, t => {
+  const { store, payload, recoveryDir } = setup(t), first = store.writeDocument(payload, null), original = readFileSync(first.notePath);
+  const restoreLink = crossVolumeRecovery(t, recoveryDir, () => {
+    if (failure === 'permission') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+  });
+  const method = failure === 'copy' ? 'copyFileSync' : 'fsyncSync', implementation = fs[method];
+  let injected = failure === 'permission';
+  const hook = t.mock.method(fs, method, (...args) => {
+    const inRecovery = failure === 'copy' ? String(args[1]).startsWith(recoveryDir) :
+      failure === 'flush' && fs.existsSync(recoveryDir) && readdirSync(recoveryDir).some(name => name.endsWith('.partial') && fs.statSync(path.join(recoveryDir, name)).ino === fs.fstatSync(args[0]).ino);
+    if (inRecovery) { injected = true; throw Object.assign(new Error('synthetic write failure'), { code: 'ENOSPC' }); }
+    return implementation(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => store.writeDocument({ ...first, document: { ...first.document, last_page: 3 } }, first.token), status409);
+    assert.equal(injected, true); assert.deepEqual(readFileSync(first.notePath), original);
+    assert.equal(store.readDocument(payload.document.id).document.last_page, 2);
+    assert.equal(readdirSync(path.dirname(first.notePath)).some(name => name.endsWith('.tmp')), false);
+  } finally { hook.mock.restore(); restoreLink(); syncBuiltinESMExports(); }
+});
 
 test('a transient metadata change during Markdown reading is re-read without rewriting the original', t => {
   const { store, payload } = setup(t), saved = store.writeDocument(payload, null);
@@ -219,6 +299,85 @@ test('externally corrupted metadata IDs or bounds never become indexed records',
     writeFileSync(saved.notePath, original); rewriteState(saved.notePath, change);
     assert.throws(() => store.readAll(), status409);
   }
+});
+
+test('a transient PDF metadata change is discarded and rehashed without rewriting either source', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const note = readFileSync(saved.notePath), pdf = readFileSync(saved.pdfPath), identity = fs.statSync(saved.pdfPath);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  const originalStat = fs.fstatSync; let reads = 0;
+  const hook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev && ++reads <= 2) stat.ctimeMs -= 1;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.equal(reopened.readDocument(payload.document.id).document.sha256, payload.document.sha256); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(reads >= 6, 'The unstable PDF must be reopened and fully checked');
+  assert.deepEqual(readFileSync(saved.notePath), note); assert.deepEqual(readFileSync(saved.pdfPath), pdf);
+});
+
+test('continuously changing PDF metadata remains a bounded conflict', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const note = readFileSync(saved.notePath), identity = fs.statSync(saved.pdfPath);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  const originalStat = fs.fstatSync; let reads = 0;
+  const hook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev) stat.ctimeMs += ++reads;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => reopened.readDocument(payload.document.id), error => error.code === 'VAULT_FILE_CONFLICT'); }
+  finally { hook.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(reads <= 12, 'Retries must stop after three attempts');
+  assert.deepEqual(readFileSync(saved.notePath), note); assert.deepEqual(readFileSync(saved.pdfPath), sample);
+});
+
+test('a PDF changed during an unstable attempt cannot reuse the old hash when retrying', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const note = readFileSync(saved.notePath), identity = fs.statSync(saved.pdfPath);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir });
+  const originalStat = fs.fstatSync, originalRead = fs.readSync;
+  const changed = Buffer.from(sample); changed[changed.length - 1] ^= 1;
+  let stats = 0, modified = false;
+  const statHook = t.mock.method(fs, 'fstatSync', (...args) => {
+    const stat = originalStat(...args);
+    if (stat.ino === identity.ino && stat.dev === identity.dev && ++stats <= 2) stat.ctimeMs -= 1;
+    return stat;
+  });
+  const readHook = t.mock.method(fs, 'readSync', (...args) => {
+    const count = originalRead(...args), stat = originalStat(args[0]);
+    if (!modified && count && stat.ino === identity.ino && stat.dev === identity.dev) { modified = true; writeFileSync(saved.pdfPath, changed); }
+    return count;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => reopened.readDocument(payload.document.id), error => error.status === 409 && /校验和/.test(error.message)); }
+  finally { statHook.mock.restore(); readHook.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(modified, true); assert.deepEqual(readFileSync(saved.notePath), note);
+  assert.deepEqual(readFileSync(saved.pdfPath), changed, 'The external edit must not be rolled back');
+});
+
+test('a PDF path replaced after hashing is not accepted as the verified open inode', t => {
+  const { store, payload, vault, recoveryDir } = setup(t), saved = store.writeDocument(payload, null);
+  const reopened = createVaultStore({ vaultDir: vault, recoveryDir }), identity = fs.statSync(saved.pdfPath);
+  const originalRead = fs.readSync, originalStat = fs.fstatSync, originalLstat = fs.lstatSync; let ended = false;
+  const readHook = t.mock.method(fs, 'readSync', (...args) => {
+    const count = originalRead(...args), stat = originalStat(args[0]);
+    if (!count && stat.ino === identity.ino && stat.dev === identity.dev) ended = true;
+    return count;
+  });
+  const pathHook = t.mock.method(fs, 'lstatSync', (...args) => {
+    const stat = originalLstat(...args);
+    // Large Windows file IDs can round ino + 1 back to the same Number.
+    if (ended && path.resolve(args[0]) === saved.pdfPath) stat.ino = -1;
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try { assert.throws(() => reopened.readDocument(payload.document.id), error => error.code === 'VAULT_FILE_CONFLICT'); }
+  finally { readHook.mock.restore(); pathHook.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(ended, true); assert.deepEqual(readFileSync(saved.pdfPath), sample);
 });
 
 test('PDF existence, size and hash integrity are verified, including changes after cached reads', t => {

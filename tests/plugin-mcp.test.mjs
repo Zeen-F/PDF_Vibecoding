@@ -90,7 +90,7 @@ test('cached plugin uses real stdio SDK protocol with the isolated local API', a
       assert.equal(JSON.parse(await readFile(join(root, file), 'utf8')).version, '0.11.1');
     }
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme', 'paperdesk_reader_translation'].sort());
+    assert.deepEqual(tools.map(tool => tool.name).sort(), ['paperdesk_status', 'paperdesk_list_documents', 'paperdesk_search_library', 'paperdesk_open_reader', 'paperdesk_read_page', 'paperdesk_get_context', 'paperdesk_get_notes', 'paperdesk_append_note', 'paperdesk_export_notes', 'paperdesk_reader_page', 'paperdesk_reader_get_notes', 'paperdesk_reader_save_notes', 'paperdesk_reader_toc', 'paperdesk_reader_session', 'paperdesk_reader_close', 'paperdesk_reader_library', 'paperdesk_reader_organize', 'paperdesk_reader_theme', 'paperdesk_reader_translation'].sort());
     assert.equal(tools.filter(tool => tool.name.startsWith('paperdesk_reader_')).length, 10);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_append_note').annotations.readOnlyHint, false);
     assert.equal(tools.find(tool => tool.name === 'paperdesk_get_notes').annotations.readOnlyHint, true);

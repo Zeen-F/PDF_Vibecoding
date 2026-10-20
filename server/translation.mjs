@@ -95,7 +95,7 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
   function publicSettings(provider = active().provider) {
     const current = config(provider), month = monthAt(now()), ready = configured(current);
     const used = ready ? (db().prepare('SELECT characters FROM usage WHERE account = ? AND month = ?').get(accountOf(current), month)?.characters || 0) : 0;
-    return { provider, activeProvider: active().provider, configured: ready,
+    return { provider, activeProvider: active().provider, configured: ready, revision: sha(JSON.stringify([ready ? active().revision : null, current.revision])),
       appIdHint: ready && provider === 'baidu' ? '••••' + (current.app_id.length > 4 ? current.app_id.slice(-4) : '') : null,
       tier: current.tier, monthlyLimit: current.monthly_limit, month, usedCharacters: used,
       remainingCharacters: Math.max(0, current.monthly_limit - used), ...limits(current), endpoint: current.endpoint, region: current.region, model: current.model };
@@ -187,7 +187,8 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
     return { settings: publicSettings(provider) };
   }
   function validateText(body, current) {
-    strictBody(body, ['text', 'from', 'to']);
+    strictBody(body, ['text', 'from', 'to', 'expectedRevision']);
+    if (body.expectedRevision !== undefined && (typeof body.expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedRevision))) throw error(400, '翻译配置标识无效，请重新确认。');
     const { text } = body, from = body.from === undefined ? 'auto' : body.from, to = body.to === undefined ? 'zh' : body.to;
     if (!['auto', 'en', 'zh'].includes(from) || !['zh', 'en'].includes(to)) throw error(400, '请选择支持的源语言和目标语言。');
     if (typeof text !== 'string' || !text.trim() || !text.isWellFormed() || text.includes('\0')) throw error(400, '请提供有效的非空选中文字。');
@@ -320,6 +321,7 @@ export function registerTranslationApi({ app, dataDir, HttpError, options = {} }
   }
   function enqueue(body, req, res, isTest = false) {
     const current = isTest ? candidateConfig(body) : config();
+    if (!isTest && body?.expectedRevision !== undefined && body.expectedRevision !== publicSettings().revision) throw error(409, '翻译设置已改变，请重新打开预览并确认；没有发送本次选文。', 'changed');
     const input = validateText(isTest ? { text: TEST_TEXT, from: 'en', to: 'zh' } : body, current);
     if (!configured(current)) throw error(409, '请先在翻译设置中配置所选服务商的账户或密钥。');
     if (pending.size >= MAX_PENDING) throw error(429, '翻译请求正在排队，请稍后再试。');

@@ -69,6 +69,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
   try {
     await page.goto(`${base}/?document=${book.id}&page=2`);
     await expect(page.getByRole('textbox', { name: '笔记', exact: true })).toHaveValue(privateNote);
+    await expect(page.getByRole('button', { name: '对照翻译本页', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: '翻译设置', exact: true }).click();
     const settings = page.getByRole('dialog', { name: '翻译设置', exact: true });
     await expect(settings).toBeVisible();
@@ -135,25 +136,85 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     assert.equal(calls.length, 0, 'Configuring translation must not send any text');
     console.log('PASS: translation settings redact credentials, preserve failed form drafts, clear passwords and use no browser credential storage');
 
-    const quote = await selectText(); assert.equal(calls.length, 0, 'Selecting text does not translate automatically');
-    await page.getByRole('button', { name: '翻译', exact: true }).click();
     const result = page.getByRole('region', { name: '选文翻译', exact: true });
+    const quote = await selectText(); assert.equal(calls.length, 0, 'Selecting text does not translate automatically');
+    await page.route(settingsEndpoint, route => route.fulfill({ status: 503, json: { error: 'Synthetic preview unavailable' } }));
+    await page.getByRole('button', { name: '翻译', exact: true }).click();
+    await expect(result).toBeFocused();
+    await expect(page.locator('.selection-bar')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: '选文翻译', exact: true }).getByRole('alert')).toContainText('Synthetic preview unavailable');
+    await page.getByRole('button', { name: '重试翻译', exact: true }).click();
+    await expect(page.getByRole('region', { name: '选文翻译', exact: true }).getByRole('alert')).toContainText('Synthetic preview unavailable');
+    assert.equal(calls.length, 0, 'A failed provider preview retry cannot send undisclosed text');
+    await page.unroute(settingsEndpoint);
+    await page.getByRole('button', { name: '重试翻译', exact: true }).click();
+    await expect(page.getByRole('button', { name: '确认发送选文', exact: true })).toBeEnabled();
+    assert.equal(calls.length, 0, 'Recovered settings still require explicit provider confirmation');
+    await page.getByRole('button', { name: '关闭翻译结果', exact: true }).click();
+    await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(quote);
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${quote}`);
-    assert.deepEqual(calls[0], { text: quote, from: 'auto', to: 'zh' });
+    assert.deepEqual(calls[0], { text: quote, from: 'auto', to: 'zh', expectedRevision: (await json('/translation/settings')).settings.revision });
     await onTranslationPreview?.(page, 'result-forest');
     await result.getByRole('combobox', { name: '翻译目标语言', exact: true }).selectOption('en');
+    await result.getByRole('button', { name: '确认重新翻译选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`Test translation: ${quote}`);
     await result.getByRole('combobox', { name: '翻译目标语言', exact: true }).selectOption('zh');
+    await result.getByRole('button', { name: '确认重新翻译选文', exact: true }).click();
     await expect(result).toContainText('使用本机缓存');
     const used = (await json('/translation/settings')).settings.usedCharacters;
-    await result.getByRole('button', { name: '关闭翻译结果', exact: true }).click();
-    await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    await result.getByRole('textbox', { name: '译文', exact: true }).focus();
+    await page.evaluate(()=>window.getSelection()?.removeAllRanges());
+    await page.keyboard.press('ArrowRight');
+    await page.evaluate(()=>new Promise(requestAnimationFrame));
+    await page.keyboard.press('Escape');
+    await expect(result).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'PDF 阅读器', exact: true })).toBeFocused();
+    await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result).toContainText('使用本机缓存');
     assert.equal((await json('/translation/settings')).settings.usedCharacters, used);
     assert.equal((await json(`/documents/${book.id}`)).document.notesRevision, before.notesRevision);
-    assert.ok(calls.every(body => !JSON.stringify(body).includes(privateNote) && Object.keys(body).sort().join(',') === 'from,text,to'));
+    assert.ok(calls.every(body => !JSON.stringify(body).includes(privateNote) && Object.keys(body).sort().join(',') === 'expectedRevision,from,text,to'));
     console.log('PASS: actual PDF mouse selection becomes an exact source snapshot, targets and cache work, and notes remain untouched');
+
+    // A manually selected paragraph is exactly the highlighted text. No other
+    // paragraph is inferred or queued; a word-sized selection follows the same flow.
+    await result.getByRole('button', { name: '关闭翻译结果', exact: true }).click();
+    const beforeWord = calls.length;
+    const word = await page.locator('.textLayer span').filter({ hasText: /^A short introduction for navigation checks\.$/ }).evaluate(span => {
+      const node = span.firstChild, start = node.textContent.indexOf('introduction');
+      const range = document.createRange(); range.setStart(node, start); range.setEnd(node, start + 'introduction'.length);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+      document.dispatchEvent(new Event('pointerup'));
+      return selection.toString();
+    });
+    await expect(page.locator('.selection-summary p')).toHaveText(word);
+    assert.equal(word, 'introduction'); assert.equal(calls.length, beforeWord);
+    await page.getByRole('button', { name: '翻译', exact: true }).click();
+    await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(word);
+    await expect(result.getByRole('button', { name: '确认发送选文', exact: true })).toBeEnabled();
+    assert.equal(calls.length, beforeWord, 'A word preview never sends the word or adjacent paragraph automatically');
+    await result.getByRole('button', { name: '确认发送选文', exact: true }).click();
+    await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${word}`);
+    assert.equal(calls.length, beforeWord + 1); assert.equal(calls.at(-1).text, word);
+    const beforeLanguage = calls.length;
+    await result.getByRole('combobox', { name: '翻译目标语言', exact: true }).selectOption('en');
+    assert.equal(calls.length, beforeLanguage, 'Changing the target needs explicit confirmation');
+    await page.route(translationEndpoint, route => route.fulfill({ status: 409, json: { error: 'Synthetic configuration changed' } }));
+    await result.getByRole('button', { name: '确认重新翻译选文', exact: true }).click();
+    await expect(result.getByRole('alert')).toContainText('Synthetic configuration changed');
+    await expect(result.getByRole('textbox', { name: '上一版译文', exact: true })).toHaveValue(`测试译文：${word}`);
+    const afterConflict = calls.length;
+    await page.unroute(translationEndpoint);
+    await result.getByRole('button', { name: '重试翻译', exact: true }).click();
+    await expect(result.getByRole('button', { name: '确认发送选文', exact: true })).toBeEnabled();
+    await expect(result.getByRole('textbox', { name: '上一版译文', exact: true })).toHaveValue(`测试译文：${word}`);
+    assert.equal(calls.length, afterConflict, 'A configuration conflict requires fresh preview and confirmation');
+    await result.getByRole('button', { name: '确认发送选文', exact: true }).click();
+    await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`Test translation: ${word}`);
+    await result.getByRole('combobox', { name: '翻译目标语言', exact: true }).selectOption('zh');
+    console.log('PASS: manual word/paragraph boundaries, explicit sends, old-result preservation and revision conflict preview');
 
     // Hold the old result after the mock provider has completed. Changing pages
     // must discard it even if the transport acknowledgement arrives later.
@@ -161,21 +222,21 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     let release, entered;
     const held = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
     await page.route(translationEndpoint, async route => { const response = await route.fetch(); entered(); await gate; await route.fulfill({ response }).catch(() => {}); });
-    await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await held;
+    await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click(); await held;
     await expect(result).toContainText('正在翻译');
     await page.getByRole('button', { name: '下一页', exact: true }).click();
     await expect(result).toHaveCount(0); release(); await page.unroute(translationEndpoint);
     await expect(page.getByLabel('PDF 第 3 页', { exact: true })).toBeVisible(); await expect(result).toHaveCount(0);
     await page.getByRole('button', { name: '上一页', exact: true }).click();
-    await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${quote}`);
     await selectText(/^1 Introduction$/); await expect(result).toHaveCount(0);
     await page.route(translationEndpoint, route => route.fulfill({ status: 413, contentType: 'application/json', body: JSON.stringify({ error: '选文超过本次翻译上限，请重新选择；不会截断。' }) }));
     const shortQuote = await page.locator('.selection-summary p').textContent();
-    await page.getByRole('button', { name: '翻译', exact: true }).click();
+    await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('alert')).toContainText('不会截断');
     await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(shortQuote);
-    await page.unroute(translationEndpoint); await result.getByRole('button', { name: '重试翻译', exact: true }).click();
+    await page.unroute(translationEndpoint); await result.getByRole('button', { name: '重试翻译', exact: true }).click(); await result.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${shortQuote}`);
     console.log('PASS: late translation cannot land on another page/selection; limit failures retain complete source and explicit retry');
 
@@ -197,6 +258,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     await settings.getByRole('button', { name: '关闭翻译设置', exact: true }).click();
     await page.setViewportSize({ width: 1440, height: 1000 });
     await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    await expect(result.getByRole('button', { name: '确认发送选文', exact: true })).toBeDisabled();
     await expect(result.getByRole('alert')).toBeVisible(); await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveCount(0);
     assert.equal((await json(`/documents/${book.id}`)).document.notesZh, privateNote);
     await result.getByRole('button', { name: '关闭翻译结果', exact: true }).click();
@@ -235,7 +297,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     let activeSettings = (await json('/translation/settings')).settings;
     assert.equal(activeSettings.provider, 'azure'); assert.equal(activeSettings.activeProvider, 'azure'); assert.equal(activeSettings.region, 'eastasia');
     await settings.getByRole('button', { name: '关闭翻译设置', exact: true }).click();
-    const azureQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    const azureQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(azureQuote);
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${azureQuote}`);
     await expect(result).toContainText('Azure Translator');
@@ -268,13 +330,15 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     await saveProfile();
     await settings.getByRole('button', { name: '关闭翻译设置', exact: true }).click();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const customQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    const customQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(customQuote);
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${customQuote}`);
     await expect(result).toContainText('自定义（OpenAI 兼容）');
     await result.getByRole('combobox', { name: '翻译目标语言', exact: true }).selectOption('en');
+    await result.getByRole('button', { name: '确认重新翻译选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`Test translation: ${customQuote}`);
     await result.getByRole('combobox', { name: '翻译目标语言', exact: true }).selectOption('zh');
+    await result.getByRole('button', { name: '确认重新翻译选文', exact: true }).click();
     await expect(result).toContainText('使用本机缓存');
     await result.getByRole('button', { name: '关闭翻译结果', exact: true }).click();
 
@@ -286,7 +350,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     await saveProfile();
     await expect(settings.getByLabel('DeepL 接口', { exact: true })).toHaveValue('https://api-free.deepl.com/v2/translate');
     await settings.getByRole('button', { name: '关闭翻译设置', exact: true }).click();
-    const deeplQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    const deeplQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(deeplQuote);
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${deeplQuote}`);
     await expect(result).toContainText('DeepL');
@@ -306,7 +370,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     assert.equal((await json('/translation/settings?provider=deepl')).settings.configured, true);
     assert.equal((await json('/translation/settings')).settings.provider, 'azure');
     await settings.getByRole('button', { name: '关闭翻译设置', exact: true }).click();
-    const restoredQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click();
+    const restoredQuote = await selectText(); await page.getByRole('button', { name: '翻译', exact: true }).click(); await page.getByRole('button', { name: '确认发送选文', exact: true }).click();
     await expect(result.getByRole('textbox', { name: '翻译原文', exact: true })).toHaveValue(restoredQuote);
     await expect(result.getByRole('textbox', { name: '译文', exact: true })).toHaveValue(`测试译文：${restoredQuote}`);
     await expect(result).toContainText('Azure Translator');
@@ -316,7 +380,7 @@ export async function translationWorkflow({ context, base, onTranslationPreview 
     }
     assert.equal(await page.evaluate(values => values.some(value => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }).includes(value)), [secret, azureKey, customKey, deeplKey]), false);
     assert.equal((await json(`/documents/${book.id}`)).document.notesRevision, before.notesRevision);
-    assert.ok(calls.every(body => !JSON.stringify(body).includes(privateNote) && Object.keys(body).sort().join(',') === 'from,text,to'));
+    assert.ok(calls.every(body => !JSON.stringify(body).includes(privateNote) && Object.keys(body).sort().join(',') === 'expectedRevision,from,text,to'));
     assert.deepEqual(errors, []);
     console.log('PASS: four translation adapters, saved independent profiles, arbitrary compatible model/endpoint, host-change key guard and targeted key removal');
 

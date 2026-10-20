@@ -58,9 +58,8 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     const privateNotes = 'NATIVE_PRIVATE_NOTE：这段笔记只应在阅读界面显示。';
     assert.equal((await request(`/documents/${book.id}`, { notesZh: privateNotes, notesEn: '' }, 'PATCH')).status, 200);
 
-    async function harness({ documentId = book.id, pageNumber = 1, capabilities = fullCapabilities, failOpenLink = false, libraryOnly = false, useClock = false, holdInitialNotes = false } = {}) {
+    async function harness({ documentId = book.id, pageNumber = 1, capabilities = fullCapabilities, failOpenLink = false, libraryOnly = false, holdInitialNotes = false } = {}) {
       const page = await context.newPage(); await page.setViewportSize({ width: 1500, height: 1100 });
-      if (useClock) await page.clock.install();
       const item = { page, close: () => page.close() }; harnesses.push(item);
       const calls = [], updates = [], messages = [], links = [], errors = [], network = [], holds = [];
       let initialized = false, messageResult = { isError: false }, translationFailure = false, translationTestFailure = false;
@@ -454,14 +453,19 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     assert.equal(cancelled.messages.length, 0, 'Cancelling while preparation is in flight must stop the pending message');
     await cancelled.close();
 
-    const uncertain = await harness({ pageNumber: 2, useClock: true }); await ready(uncertain, 2); await selectText(uncertain);
+    const uncertain = await harness({ pageNumber: 2 }); await ready(uncertain, 2); await selectText(uncertain);
     const acknowledgement = uncertain.holdNext(entry => entry.method === 'ui/message');
     await uncertain.frame.getByRole('button', { name: '解释选区', exact: true }).click(); await acknowledgement.entered;
     await expect(uncertain.frame.getByRole('button', { name: '解释选区', exact: true })).toBeDisabled();
     await expect(uncertain.frame.getByRole('button', { name: '提炼要点', exact: true })).toBeDisabled();
     assert.equal(uncertain.messages.length, 1);
-    await uncertain.page.clock.fastForward(15001);
-    await expect(uncertain.frame.locator('#question-status')).toContainText(/未能确认.*查看当前对话/);
+    // The opaque srcdoc frame can keep a separate clock: advancing the host
+    // page clock did not advance this frame's timers. Exercise the production
+    // 15-second deadline with real time and retain a bounded elapsed-time check.
+    const sentAt=uncertain.calls.find(entry=>entry.method==='ui/message').startedAt;
+    await expect(uncertain.frame.locator('#question-status')).toContainText(/未能确认.*查看当前对话/,{timeout:20000});
+    const elapsed=Date.now()-sentAt;
+    assert.ok(elapsed>=14000&&elapsed<20000,`Message uncertainty must follow the 15-second deadline (observed ${elapsed}ms)`);
     await expect(uncertain.frame.getByRole('button', { name: '解释选区', exact: true })).toBeDisabled();
     acknowledgement.release(); await acknowledgement.finished;
     await expect(uncertain.frame.locator('#question-status')).toContainText('未能确认');
