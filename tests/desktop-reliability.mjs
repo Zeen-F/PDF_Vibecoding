@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { _electron as electron, expect as playwrightExpect } from '@playwright/test';
 import { bookmarkedPdf } from './fixtures/toc-browser.mjs';
 import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
+import { openReaderDisplay, closeReaderDisplay } from './reader-display-controls.mjs';
 import { LAUNCHER_PROTOCOL, PRODUCT_VERSION } from '../shared/service-identity.mjs';
 import { clearInheritedTestStorage } from '../scripts/test-isolated.mjs';
 import { desktopTestTarget, testEvidenceDirectory, temporaryTestDirectory, removeTestDirectory, closeTestApplication, testShutdownHandlers } from '../scripts/desktop-test-support.mjs';
@@ -163,8 +164,10 @@ async function importPdf(filename) {
   return book;
 }
 async function regionModal() {
+  await openReaderDisplay(page);
   await page.getByRole('combobox', { name: '翻页方式', exact: true }).selectOption('paged');
   await page.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('1');
+  await closeReaderDisplay(page);
   await page.getByRole('combobox', { name: '阅读缩放', exact: true }).selectOption('fit');
   await expect(page.locator('.pdf-paper canvas')).toBeVisible();
   const toggle = page.getByRole('button', { name: '区域批注', exact: true });
@@ -300,8 +303,10 @@ try {
   });
 
   await group('5: rapid page changes serialize/coalesce in Electron and persist after reload', async () => {
+    await openReaderDisplay(page);
     await page.getByRole('combobox', { name: '翻页方式', exact: true }).selectOption('paged');
     await page.getByRole('combobox', { name: '页面布局', exact: true }).selectOption('1');
+    await closeReaderDisplay(page);
     const endpoint = `${base}/api/documents/${a.id}`, hold = gate(), order = [];
     await page.route(endpoint, async route => {
       const body = route.request().method() === 'PATCH' ? route.request().postDataJSON() : null;

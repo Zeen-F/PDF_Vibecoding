@@ -40,6 +40,30 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     const third=await makeCapture(b,5,[{x:.1,y:.3,width:.4,height:.2}]);
     const {annotation}=await post(`/documents/${a.id}/annotations`,{requestId:randomUUID(),page:4,kind:'region',rects:[{x:.2,y:.3,width:.5,height:.2}],comment:'focused-citation-browser',color:'green'});
     page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
+    // Failure-only, bounded viewport metadata from this synthetic fixture.
+    // Never collect document text, paths, URLs, request bodies or identifiers.
+    await page.addInitScript(()=>{
+      const trace={phase:'startup',expected:null,events:[]};let previous='';
+      window.sourceViewportTrace=trace;
+      window.sampleSourceViewport=kind=>{
+        const root=document.querySelector('.pdf-scroll'),input=document.querySelector('input[aria-label="页码"]');
+        const number=Number(input?.value),paper=Number.isInteger(number)?root?.querySelector(`.pdf-paper[data-page="${number}"]`):null;
+        const bounds=root?.getBoundingClientRect(),rect=paper?.getBoundingClientRect();
+        const sample={kind,phase:trace.phase,page:number||null,scrollTop:root?.scrollTop??null,scrollLeft:root?.scrollLeft??null,
+          rootHeight:bounds?.height??null,rootWidth:bounds?.width??null,paperHeight:rect?.height??null,paperWidth:rect?.width??null,
+          offset:rect?.height?(bounds.top-rect.top)/rect.height:null,
+          loading:Boolean(document.querySelector('.reader-status')),opening:Boolean(document.querySelector('.opening-mask')),
+          source:Boolean(document.querySelector('.source-return-status')),inputDisabled:input?.disabled??null,fieldFocused:document.activeElement===input};
+        const signature=JSON.stringify(sample);if(signature===previous)return;previous=signature;
+        trace.events.push({ms:Math.round(performance.now()),...sample});
+        if(trace.events.length>64)trace.events.shift();
+      };
+      for(const event of ['scroll','focusin','focusout','change','popstate'])
+        window.addEventListener(event,()=>window.sampleSourceViewport(event),true);
+    });
+    const phase=(name,expected=null)=>page.evaluate(({name,expected})=>{
+      Object.assign(window.sourceViewportTrace,{phase:name,expected});window.sampleSourceViewport('phase');
+    },{name,expected});
     const url=target=>`${base}/?${sourceLinkSearch(target)}`;
     const jump=target=>page.evaluate(href=>{history.pushState(null,'',href);dispatchEvent(new PopStateEvent('popstate'));},url(target));
     const marker=target=>page.locator(`[data-source-capture="${target.captureId}"]`);
@@ -69,6 +93,12 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     await page.locator('.pdf-scroll').evaluate(root=>{root.scrollTop=260;root.dispatchEvent(new Event('scroll'));});
     await expect.poll(offset).toBeGreaterThan(.1);
     const previousOffset=await offset();
+    await phase('cross-document-blur-and-return',previousOffset);
+    // An unchanged page field may lose focus before or during a source jump.
+    // Its blur must preserve the current reading offset and history entry.
+    await pageInput.press('Tab');
+    await expect.poll(async()=>Math.abs(await offset()-previousOffset)).toBeLessThan(.01);
+    await pageInput.focus();
     await jump(third);await expectPage(5);await expect(page.locator('.header-title h1')).toHaveText(b.title);
     await onPreview?.(page,'source-return-banner');
     await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);await expect(page.locator('.header-title h1')).toHaveText(a.title);
@@ -92,12 +122,43 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
       root.scrollTop=360;root.dispatchEvent(new Event('scroll'));
       return (root.getBoundingClientRect().top-paper.getBoundingClientRect().top)/paper.getBoundingClientRect().height;
     });
+    await phase('cross-document-before-scroll-frame',immediateOffset);
     try{
       await jump(third);await expect(page.locator('.header-title h1')).toHaveText(b.title);
     }finally{await page.evaluate(()=>window.resumeSourceNavigationFrames?.());}
     await expectPage(5);
     await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);
     await expect.poll(async()=>Math.abs(await offset()-immediateOffset)).toBeLessThan(.01);
+    // Re-entering the active, rendered page finishes positioning synchronously,
+    // but keeps the continuous-page guard until the next frame. A source jump
+    // before that frame must still retain the intervening scroll position.
+    await pageInput.focus();
+    await page.evaluate(()=>{
+      const request=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
+      const pending=new Map();let next=1_000_000_000;
+      window.requestAnimationFrame=callback=>{const id=next++;pending.set(id,callback);return id;};
+      window.cancelAnimationFrame=id=>{if(!pending.delete(id))cancel(id);};
+      window.resumeSourceNavigationFrames=()=>{
+        window.requestAnimationFrame=request;window.cancelAnimationFrame=cancel;
+        for(const callback of pending.values())request(callback);
+        delete window.resumeSourceNavigationFrames;
+      };
+    });
+    let readyOffset;
+    try{
+      await pageInput.press('Enter');
+      readyOffset=await page.locator('.pdf-scroll').evaluate(root=>{
+        const paper=root.querySelector('.pdf-paper[data-page="4"]');
+        root.scrollTop=300;root.dispatchEvent(new Event('scroll'));
+        return (root.getBoundingClientRect().top-paper.getBoundingClientRect().top)/paper.getBoundingClientRect().height;
+      });
+      assert.ok(readyOffset>.1);
+      await phase('positioned-page-before-guard-frame',readyOffset);
+      await jump(third);await expect(page.locator('.header-title h1')).toHaveText(b.title);
+    }finally{await page.evaluate(()=>window.resumeSourceNavigationFrames?.());}
+    await expectPage(5);
+    await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);
+    await expect.poll(async()=>Math.abs(await offset()-readyOffset)).toBeLessThan(.01);
     await forward.click();await expectPage(5);await expect(marker(third)).toBeVisible();
     // A modal or unsaved bookmark blocks a source URL without leaving the URL
     // pointing at a destination the visible reader refused.
@@ -186,6 +247,7 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     await page.locator('.pdf-scroll').hover();await page.mouse.wheel(0,Math.ceil(paper.height+20));
     await expectPage(4);await expect(forward).toBeDisabled();
     const continuousOffset=await offset();
+    await phase('continuous-history-return',continuousOffset);
     await back.click();await expectPage(1);
     await expect(page.locator('.pdf-paper[data-page="1"]')).toBeInViewport();
     await forward.click();await expectPage(4);
@@ -200,6 +262,10 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     await expect(page.locator('.reader-status')).toHaveCount(0);
     await page.locator('.pdf-scroll').evaluate(root=>{root.scrollTop=180;root.dispatchEvent(new Event('scroll'));});
     await expect.poll(offset).toBeGreaterThan(.05);const samePageOffset=await offset();
+    await phase('same-page-blur-and-return',samePageOffset);
+    await pageInput.press('Tab');
+    await expect.poll(async()=>Math.abs(await offset()-samePageOffset)).toBeLessThan(.01);
+    await pageInput.focus();
     await jump(first);await expect(marker(first)).toBeVisible();
     await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(2);
     await expect(marker(first)).toHaveCount(0);
@@ -209,7 +275,15 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     assert.deepEqual(errors,[]);
     console.log('PASS: precise capture/annotation focus, repeat deduplication, cross-document history, branching, invalid identity rejection, cancelled and superseded jumps, zoom and dismissal');
     console.log('PASS: source return action and normalized same-page, cross-document and continuous-reading viewport restoration');
+    console.log('PASS: a positioned ready page records a scroll before the next frame releases its navigation guard');
+    console.log('PASS: unchanged page-field blur preserves reading anchors before same-page and cross-document source jumps');
     console.log('PASS: acknowledged annotation deletion clears focus/history/URL, failed deletion preserves them, refresh/stale-link guards and continuous-scroll history branching');
+  } catch(error) {
+    try {
+      const trace=await page?.evaluate(()=>{window.sampleSourceViewport?.('failure');return window.sourceViewportTrace;});
+      if(trace)console.error('SOURCE_VIEWPORT_DIAGNOSTIC',JSON.stringify(trace));
+    } catch {/* Preserve the original assertion if the renderer is unavailable. */}
+    throw error;
   } finally {
     release?.();await page?.close();
     server?.closeAllConnections();if(server)await new Promise(resolve=>server.close(resolve));
