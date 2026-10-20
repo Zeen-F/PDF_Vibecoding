@@ -62,7 +62,9 @@ export function useCodexContext({ document, page, selection, notesDirty, onDocum
         const state = latest.current, atGeneration = generation;
         if (!state.document) continue;
         try {
-          const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          // A stalled request must release the serialized sender so a pending
+          // heartbeat can publish the latest state and refresh external notes.
+          const response = await fetch(endpoint, { method: 'POST', signal: AbortSignal.timeout(10_000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
             documentId: state.document.id, page: state.page, selection: state.selection,
             notesDirty: state.notesDirty, visible: window.document.visibilityState === 'visible',
           }) });

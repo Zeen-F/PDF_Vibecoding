@@ -206,18 +206,38 @@ export async function pluginWorkflow({ context, base }) {
     // A late recovery GET must not replace a newer heartbeat document and then
     // leave the editor permanently stale (its prop revision already changed).
     await page.route(endpoint, rejectNotes);
-    await editor.fill('恢复竞态中的原草稿'); await page.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(page.locator('.save-row [role="status"]')).toHaveText('保存失败，草稿已保留');
-    stored = await getDoc(book.id);
-    const recoveryBase = await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
-    assert.equal(recoveryBase.status, 200);
-    // An external write reaches this editor through its periodic heartbeat.
-    // Wait for that version before applying the shorter UI assertion timeout.
-    recordHeartbeat({ event: 'wait', phase: 'recovery-base', sessionId: reader.sessionId(), notesRevision: recoveryBase.document.notesRevision });
-    await page.waitForResponse(async response => response.request().method() === 'POST'
-      && response.url() === `${base}/api/reader-sessions/${reader.sessionId()}`
-      && (await response.json()).document?.notesRevision === recoveryBase.document.notesRevision, { timeout: 15000 });
-    await expect(page.locator('.notes-conflict')).toBeVisible();
+    // One stalled request must not occupy the serialized heartbeat sender
+    // forever. Keep it pending until a later heartbeat observes the revision.
+    const heartbeatEndpoint = `${base}/api/reader-sessions/${reader.sessionId()}`;
+    let heldHeartbeat = false, releaseHeartbeat;
+    const heartbeatGate = new Promise(resolve => { releaseHeartbeat = resolve; });
+    const holdHeartbeat = async route => {
+      if (route.request().method() === 'POST' && !heldHeartbeat) {
+        heldHeartbeat = true;
+        await heartbeatGate;
+      }
+      await route.continue();
+    };
+    await page.route(heartbeatEndpoint, holdHeartbeat);
+    try {
+      await editor.fill('恢复竞态中的原草稿'); await page.getByRole('button', { name: '保存', exact: true }).click();
+      await expect(page.locator('.save-row [role="status"]')).toHaveText('保存失败，草稿已保留');
+      await expect.poll(() => heldHeartbeat, { timeout: 15000 }).toBe(true);
+      stored = await getDoc(book.id);
+      const recoveryBase = await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+      assert.equal(recoveryBase.status, 200);
+      // An external write reaches this editor through its periodic heartbeat.
+      // Wait for that version before applying the shorter UI assertion timeout.
+      recordHeartbeat({ event: 'wait', phase: 'recovery-base', sessionId: reader.sessionId(), notesRevision: recoveryBase.document.notesRevision });
+      await page.waitForResponse(async response => response.request().method() === 'POST'
+        && response.url() === `${base}/api/reader-sessions/${reader.sessionId()}`
+        && (await response.json()).document?.notesRevision === recoveryBase.document.notesRevision, { timeout: 15000 });
+      await expect(page.locator('.notes-conflict')).toBeVisible();
+      await expect(editor).toHaveValue('恢复竞态中的原草稿');
+    } finally {
+      releaseHeartbeat();
+      await page.unroute(heartbeatEndpoint, holdHeartbeat);
+    }
     await page.unroute(endpoint);
     let releaseRecovery, enteredRecovery, heldRecovery = false;
     const recoveryGate = new Promise(resolve => { releaseRecovery = resolve; });
