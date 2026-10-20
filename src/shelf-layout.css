@@ -1,0 +1,44 @@
+:root[data-preview="shanlan"] {
+  --forest: #20363f; --sidebar-muted: #bacdcd; --sidebar-ink: #e5ece6;
+  --sidebar-line: #526f7044; --sidebar-hover: #46676650; --sidebar-active: #557d704d;
+}
+:root[data-preview="shanlan"] .library-sidebar.sidebar { padding: 8px 12px 0; }
+:root[data-preview="shanlan"] .import-button { min-height: 34px; padding: 7px 11px; border-color: #a7b9ad; background: #c9d6ca; }
+:root[data-preview="shanlan"] .library-sidebar .search-field { margin: 8px 0; min-height: 34px; padding: 7px 8px; }
+:root[data-preview="shanlan"] .search-field input { font-size: 11px; }
+:root[data-preview="shanlan"] .search-field kbd { display: block; font-size: 8px; white-space: nowrap; }
+:root[data-preview="shanlan"] .folder-heading { padding: 0 3px; min-height: 28px; }
+:root[data-preview="shanlan"] .shelf-folders-toggle { min-width: 0; align-items: center; gap: 5px; font-size: 11px; }
+:root[data-preview="shanlan"] .shelf-folders-toggle span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+:root[data-preview="shanlan"] .shelf-folders-toggle[aria-expanded="false"] > svg { transform: rotate(-90deg); }
+:root[data-preview="shanlan"] .folder-list { max-height: 120px; min-height: 0; margin-top: 4px; flex-shrink: 0; }
+:root[data-preview="shanlan"] .folder-list[hidden] { display: none; }
+:root[data-preview="shanlan"] .folder-target { padding: 6px 8px; min-height: 30px; }
+:root[data-preview="shanlan"] .library-sidebar .library-heading { margin: 8px 4px; padding-top: 10px; border-top: 1px solid var(--shelf-hairline); }
+:root[data-preview="shanlan"] .library-sidebar .document-list { min-height: 90px; margin: 0 -5px; padding: 0 5px; }
+:root[data-preview="shanlan"] .document-row { position: relative; padding-bottom: 3px; margin-bottom: 5px; border-bottom-color: #b5c3bc26; }
+:root[data-preview="shanlan"] .document-row .document-item { padding: 14px 26px 14px 9px; gap: 9px; margin: 0; cursor: pointer; }
+:root[data-preview="shanlan"] .document-details b { font-size: 12px; line-height: 1.7; font-weight: 400; }
+:root[data-preview="shanlan"] .document-details small { margin-top: 6px; font-size: 10px; color: #b9ccca; }
+:root[data-preview="shanlan"] .doc-icon { display: none; }
+:root[data-preview="shanlan"] .document-number { font-size: 10px; color: #b6bdab; }
+:root[data-preview="shanlan"][data-shelf-density="compact"] .document-row .document-item { padding: 9px 25px 9px 8px; }
+:root[data-preview="shanlan"][data-shelf-density="compact"] .document-details b { -webkit-line-clamp: 2; }
+:root[data-preview="shanlan"] .shelf-move-toggle {
+  position: absolute; right: 1px; top: 8px; display: grid; place-items: center;
+  width: 24px; height: 25px; color: #b5cac5; background: transparent;
+  border: 1px solid transparent; border-radius: 3px; opacity: .55;
+}
+:root[data-preview="shanlan"] .document-row:is(:hover, :focus-within) .shelf-move-toggle,
+:root[data-preview="shanlan"] .shelf-move-toggle[aria-expanded="true"] { opacity: 1; background: #182d3b88; border-color: #7c9c914d; }
+:root[data-preview="shanlan"] .document-move { padding: 3px 8px 7px; font-size: 10px; }
+:root[data-preview="shanlan"] .document-move select { padding: 5px; font-size: 11px; }
+:root[data-preview="shanlan"] .library-sidebar .sidebar-bottom { margin-top: 8px; }
+:root[data-preview="shanlan"] .demo-link { margin: 8px 5px 0; min-height: 24px; font-size: 11px; }
+:root[data-preview="shanlan"] .library-sidebar .local-badge { padding: 8px 0; min-height: 30px; margin-top: 4px; font-size: 9px; border-color: #a0b9b12b; }
+:root[data-preview="shanlan"] .workspace-header { box-shadow: inset 0 2px #6c84812b; }
+:root[data-preview="shanlan"] .welcome::before { inset: 0 0 0 24%; background-size: cover; background-position: 70% center; mask-image: linear-gradient(90deg, transparent, #000 60%); }
+:root[data-preview="shanlan"] .welcome::after { border: 0; }
+:root[data-preview="shanlan"] .welcome h2 span { color: #426b6d; }
+:root[data-preview="shanlan"] .welcome .primary-button { background: #365b5c; border-radius: 4px; }
+:root[data-preview="shanlan"] .reader { background: #dce3e2; }

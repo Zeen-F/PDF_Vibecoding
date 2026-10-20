@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" fill="none">
+  <!-- Original vector scenery. No animation stills or third-party assets are embedded. -->
+  <defs>
+    <linearGradient id="air" x1="660" y1="0" x2="660" y2="640" gradientUnits="userSpaceOnUse"><stop stop-color="#d5e1df"/><stop offset=".5" stop-color="#e3e8dd"/><stop offset="1" stop-color="#bdcfca"/></linearGradient>
+    <linearGradient id="rock" x1="650" y1="70" x2="940" y2="470" gradientUnits="userSpaceOnUse"><stop stop-color="#91a8a6"/><stop offset=".62" stop-color="#658b8d"/><stop offset="1" stop-color="#b3c5bb"/></linearGradient>
+    <linearGradient id="near" x1="1050" y1="130" x2="1100" y2="640" gradientUnits="userSpaceOnUse"><stop stop-color="#486c72"/><stop offset="1" stop-color="#708d89"/></linearGradient>
+    <linearGradient id="mist" x1="600" y1="250" x2="600" y2="610" gradientUnits="userSpaceOnUse"><stop stop-color="#f2f1e6" stop-opacity="0"/><stop offset=".5" stop-color="#eef1e6" stop-opacity=".9"/><stop offset="1" stop-color="#d1dfd7" stop-opacity=".15"/></linearGradient>
+    <radialGradient id="light"><stop stop-color="#efe1be" stop-opacity=".75"/><stop offset="1" stop-color="#eee7ce" stop-opacity="0"/></radialGradient>
+    <linearGradient id="veil"><stop stop-color="#f6f4ec"/><stop offset=".45" stop-color="#f6f4ec" stop-opacity="0"/></linearGradient>
+  </defs>
+  <path fill="url(#air)" d="M0 0h1200v640H0z"/>
+  <ellipse cx="725" cy="100" rx="290" ry="230" fill="url(#light)"/>
+  <g fill="#9cb6b6" opacity=".28">
+    <path d="M160 365 227 324 249 278 278 265 305 211 318 227 343 189 355 202 362 267 395 305 438 281 462 222 473 152 497 119 510 94 520 128 538 146 554 276 609 317 663 362Z"/>
+    <path d="m638 358 28-103 22-8 15-81 13-11 17-87 24 17 9 51 22 29 14 98 28 32 19-20 21-89 16-7 23-77 22 17 11 102 25 35 13 74 56 41Z"/>
+  </g>
+  <path fill="url(#rock)" opacity=".75" d="m415 440 45-53 22-5 31-98 12-23 12-91 17-31 15 9 16-63 24-10 11 51 21 10 9 56 22 39 11 70 19 5 36-103 19-11 17-73 19 3 12-79 19 16 14 81 20 17 9 92 24 49 53 32 17 56Z"/>
+  <g stroke="#d4dbc5" stroke-opacity=".55" stroke-width="3">
+    <path d="m570 149 15 99-23 21-8 77-32 47m86-310-9 115 22 21-5 72 29 65m96-196-9 111 18 23-11 54 20 27"/>
+  </g>
+  <g stroke="#557d82" stroke-opacity=".32">
+    <path d="m585 248 30-12m-53 33 40-7m-48 84 48-15m19-111 22-13m-27 84 49-10m67-8 38-12m-31 86 42-13" stroke-width="2"/>
+    <path d="m549 175-8 107 19 19-14 47m80-200 3 67 20 51-4 90m116-164 2 94 18 23-2 44"/>
+  </g>
+  <path d="M0 410c180-45 270 33 435 0s235-52 390-15 279-9 375-41v210H0Z" fill="url(#mist)"/>
+  <path d="M0 493c164-55 309-12 433-28 127-17 160-45 258-35 118 13 164 3 244-24 94-32 171-14 265-28v262H0Z" fill="#a8c1ba" opacity=".45"/>
+  <path d="M0 535c221-24 277 33 459-5s259-18 361-36 238-42 380-3v149H0Z" fill="#92b1aa" opacity=".45"/>
+  <path d="M231 572c174-36 264 7 400-16 100-17 160-35 267-16 86 15 172 14 302-10" stroke="#e0e8d9" stroke-width="15" opacity=".6"/>
+  <!-- Stone terraces and a restrained timber pavilion at the edge of the mist. -->
+  <g opacity=".75">
+    <path d="m670 453 139-10 78 18-151 15Z" fill="#a9b5a2"/>
+    <path d="m694 462 1 13 147-7 1-14m-127 15 1 13 102-5 1-10" stroke="#6f8a85" stroke-width="3"/>
+    <path d="M726 440v-44m47 41v-46m47 43v-40" stroke="#6b7665" stroke-width="4"/>
+    <path d="m702 401 26-9 44-26 49 23 29 5-17 8-63-10-54 12Z" fill="#4d7076"/>
+    <path d="m705 400 27-4 39-10 61 12 16-4" stroke="#afb8a0" stroke-width="2"/>
+    <path d="m729 392 43-19 48 18" stroke="#8b9a8e" stroke-width="2"/>
+    <path d="m726 426 92-4m-91-12 91-5" stroke="#828c73" stroke-width="2"/>
+    <path d="m741 413 1 22m18-23 1 21m20-23 1 23m18-24 1 21" stroke="#8f9e8a"/>
+    <path d="m814 403 1 14" stroke="#a96d50" stroke-width="5"/>
+    <path d="m603 474 48-12 50 4m-94 4 3 25m22-31 2 21m23-22 2 20m22-19 2 17" stroke="#8d9e8f" stroke-width="3"/>
+  </g>
+  <path fill="url(#near)" d="m1022 640-21-113 19-17-4-89 28-28 9-111 22-38 9-83 22 16 9-53 24-6 10 48 23 23 6 99 22 20v432Z"/>
+  <path d="m1084 163 9 120-24 34 8 66-24 40 12 87m61-382-3 90 18 24-4 90 25 44-4 78" stroke="#aabda7" stroke-opacity=".45" stroke-width="3"/>
+  <path d="m1093 283 32-6m-56 40 34-3m-26 69 59-11m-84 52 39-14m-27 100 58-26" stroke="#375e65" stroke-width="3" opacity=".4"/>
+  <g stroke="#375e5e" stroke-linecap="round">
+    <path d="m1024 444-4-102-24-33m25 64 23-24m-22 53-26-18m27-30-2-44" stroke-width="4"/>
+    <path d="m969 312 26-11 22 11m8 33 20-10 23 5m-91 41 20-7 18 5m-14-74 20-10 18 3" stroke-width="8"/>
+  </g>
+  <path d="M0 578c187-50 246 17 382 7 124-10 176-8 264-1 187 15 233-18 554-4v60H0Z" fill="#e4eadd" opacity=".4"/>
+  <g stroke="#607e78" opacity=".55" stroke-width="2">
+    <path d="m887 640 16-50m-3 21-16-8m16 2 11-16m-22 51-6-31m39 31 5-61m-4 33 13-15m-11-2-8-12m32 57 20-45m-13 25 17-8"/>
+  </g>
+  <g stroke="#637a75" opacity=".55" stroke-width="1.4"><path d="m814 150 8-3 8 3m22-21 5-3 6 3m16 29 7-2 6 3"/></g>
+  <path fill="url(#veil)" d="M0 0h1200v640H0z"/>
+</svg>

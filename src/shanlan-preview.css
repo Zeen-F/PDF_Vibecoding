@@ -1,0 +1,101 @@
+/* 山岚: an opt-in visual study. Only ?visual=shanlan enables these rules. */
+:root[data-preview="shanlan"] {
+  --forest: #1e3835; --green: #3e635a; --paper: #f6f4ee;
+  --workspace: #dce4df; --toolbar: #efefe8; --ink: #243c36;
+  --muted: #61736b; --muted-strong: #4e655a; --line: #d4dcd1;
+  --field: #fffef9; --soft: #e6ece3; --accent: #386454;
+  --button: #315d50; --button-hover: #234a40; --on-button: #fffaf0;
+  --focus: #946d36; --sidebar-ink: #edf0e4; --sidebar-muted: #bac9be;
+  --sidebar-line: #435c50; --sidebar-hover: #304b42; --sidebar-active: #3b584a;
+  --import-bg: #cbd7be; --import-ink: #203e35;
+  --error-bg: #fff0e7; --error-ink: #923e29; --warning-bg: #f1e9d5;
+  --warning-ink: #70542e;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  color-scheme: light;
+}
+:root[data-preview="shanlan"] .sidebar {
+  background: linear-gradient(165deg, #29483f, #1b3431 62%, #253e35);
+  border-right: 1px solid #ac996744;
+  box-shadow: inset -5px 0 0 #d2c9a208;
+}
+:root[data-preview="shanlan"] .brand { letter-spacing: 5px; font-family: "SimSun", serif; }
+:root[data-preview="shanlan"] .brand-mark {
+  border: 1px solid #d4c18b; border-radius: 11px 3px 11px 3px;
+  background: linear-gradient(140deg, #d9e4ca, #94b3a2);
+  color: #264a3d; box-shadow: inset 0 0 0 3px #e8ead655, 0 5px 15px #101f1733;
+}
+:root[data-preview="shanlan"] .sidebar-caption { letter-spacing: 1.5px; line-height: 1.8; }
+:root[data-preview="shanlan"] .brand-english { color: #c7b88d; letter-spacing: 2.5px; }
+:root[data-preview="shanlan"] .import-button {
+  border: 1px solid #d8c99a77; border-radius: 6px 2px 6px 2px;
+  padding-block: 12px; box-shadow: 0 3px 10px #102c2520;
+}
+:root[data-preview="shanlan"] .search-field { background: #102a252c; border-radius: 5px; }
+:root[data-preview="shanlan"] .folder-target[aria-pressed="true"] {
+  border-color: #ac99674d; background: #d2d9b90e;
+  box-shadow: inset 2px 0 #c0aa76;
+}
+:root[data-preview="shanlan"] .document-item.active { border-radius: 6px; }
+:root[data-preview="shanlan"] .document-item.active::before { background: #c8ad70; }
+:root[data-preview="shanlan"] .document-details b { font-size: 12px; line-height: 1.7; }
+:root[data-preview="shanlan"] .workspace-header { border-bottom: 1px solid #c6cdbd; }
+:root[data-preview="shanlan"] .header-title h1 { font-family: "SimSun", serif; letter-spacing: 1px; }
+:root[data-preview="shanlan"] .eyebrow { color: #7c704e; letter-spacing: 2px; }
+:root[data-preview="shanlan"] .local-pill { border-color: #c5c7b6; color: #5f6c56; }
+:root[data-preview="shanlan"] .welcome {
+  isolation: isolate; padding: clamp(42px, 5.5vw, 84px) clamp(30px, 5vw, 74px);
+  background: linear-gradient(115deg, #f9f6ed, #f1f3ec 68%, #e4ece5);
+}
+:root[data-preview="shanlan"] .welcome::before {
+  content: ""; position: absolute; pointer-events: none; z-index: -1;
+  inset: 1% -3% 2% 34%; background: url('./shanlan-landscape.svg') right center / contain no-repeat;
+}
+:root[data-preview="shanlan"] .welcome::after {
+  content: ""; position: absolute; left: 32px; top: 32px; bottom: 32px; right: 32px;
+  border: 1px solid #ab9c6926; pointer-events: none; z-index: -1;
+}
+:root[data-preview="shanlan"] .welcome-kicker { color: #7c714e; letter-spacing: 2.5px; font-size: 10px; }
+:root[data-preview="shanlan"] .welcome-kicker > span { background: #a98e55; width: 32px; }
+:root[data-preview="shanlan"] .welcome h2 {
+  font-family: "SimSun", "Songti SC", serif; font-weight: 400;
+  font-size: clamp(30px, 3.5vw, 48px); line-height: 1.6; letter-spacing: 3px;
+  margin: 33px 0 22px;
+}
+:root[data-preview="shanlan"] .welcome h2 span { color: #426957; }
+:root[data-preview="shanlan"] .welcome > p { color: #586d60; font-size: 13px; line-height: 2.2; max-width: 440px; }
+:root[data-preview="shanlan"] .desk-illustration { display: none; }
+:root[data-preview="shanlan"] .welcome-actions { margin-top: 34px; gap: 20px; }
+:root[data-preview="shanlan"] .primary-button { border-radius: 7px 2px 7px 2px; box-shadow: 0 6px 16px #315a4920; font-size: 12px; }
+:root[data-preview="shanlan"] .welcome-features { gap: 26px; margin-top: 62px; padding-top: 22px; border-top: 1px solid #b2bca94a; width: fit-content; }
+:root[data-preview="shanlan"] .welcome-features > span { font-size: 11px; color: #5d715d; }
+:root[data-preview="shanlan"] .reader { background: #dfe5de; }
+:root[data-preview="shanlan"] .reader-toolbar { box-shadow: 0 2px 5px #273e3105; }
+:root[data-preview="shanlan"] .pdf-paper { box-shadow: 0 6px 22px #233d3426; }
+:root[data-preview="shanlan"] :is(.notes-panel, .contents-panel) { background: #f9f7f0; }
+:root[data-preview="shanlan"] .notes-field textarea { color: #293e34; line-height: 1.95; font-size: 13px; background: #fffef9; }
+:root[data-preview="shanlan"] :is(.annotation-card, .selection-bar, .translation-card, .annotation-modal) { border-radius: 8px; }
+:root[data-preview="shanlan"] :is(button, a):focus-visible { outline: 2px solid #977331; outline-offset: 3px; }
+:root[data-preview="shanlan"] body:has(.welcome)::after {
+  content: "山岚 · 本地视觉预览"; position: fixed; right: 16px; bottom: 10px;
+  z-index: 30; padding: 5px 9px; border: 1px solid #a396684d; border-radius: 3px;
+  background: #f7f5eae8; color: #6d633e; font: 10px "Microsoft YaHei", sans-serif;
+  letter-spacing: 1px; pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-preview="shanlan"] .welcome { animation: shanlan-enter .45s ease-out; }
+}
+@keyframes shanlan-enter { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-preview="shanlan"] *, :root[data-preview="shanlan"] *::before, :root[data-preview="shanlan"] *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 1000px) {
+  :root[data-preview="shanlan"] .welcome::before { opacity: .45; left: 43%; }
+  :root[data-preview="shanlan"] .welcome::after { inset: 18px; }
+  :root[data-preview="shanlan"] .welcome-features { gap: 16px; }
+}
+@media (max-width: 700px) {
+  :root[data-preview="shanlan"] .welcome { padding: 36px 26px; }
+  :root[data-preview="shanlan"] .welcome::before { display: none; }
+  :root[data-preview="shanlan"] .welcome-actions { flex-wrap: wrap; }
+  :root[data-preview="shanlan"] .welcome-features { margin-top: 36px; }
+}

@@ -8,10 +8,15 @@ import { getVaultConfig } from '../server/vault-config.mjs';
 
 const desktopDir = path.dirname(fileURLToPath(import.meta.url));
 const isMac = process.platform === 'darwin';
-const userData = path.resolve(process.env.PAPERDESK_DESKTOP_USER_DATA || path.join(app.getPath('appData'), 'Paperdesk'));
-app.setName('Paperdesk');
+const dailyShanlan = process.argv.includes('--shanlan-daily') || app.getVersion().includes('shanlan-daily');
+const desktopPreview = !dailyShanlan && (process.argv.includes('--shanlan-preview') || app.getVersion().includes('shanlan'));
+const shanlanAppearance = dailyShanlan || desktopPreview;
+const previewProfile = desktopPreview && process.argv.find(arg => arg.startsWith('--preview-profile='))?.slice('--preview-profile='.length);
+const userData = path.resolve(previewProfile || process.env.PAPERDESK_DESKTOP_USER_DATA || path.join(app.getPath('appData'), desktopPreview ? 'Paperdesk-Shanlan-V2' : 'Paperdesk'));
+const readerUrl = baseUrl => shanlanAppearance ? `${baseUrl}/?visual=shanlan` : baseUrl;
+app.setName(desktopPreview ? 'Paperdesk Shanlan V2' : 'Paperdesk');
 app.setPath('userData', userData);
-if (process.platform === 'win32') app.setAppUserModelId('com.paperdesk.desktop');
+if (process.platform === 'win32') app.setAppUserModelId(desktopPreview ? 'com.paperdesk.shanlan.preview' : 'com.paperdesk.desktop');
 let runtime, window, ready = false, quitting = false, quitPending = false, switching = false, flushing;
 const pendingFlush = new Map();
 
@@ -108,10 +113,10 @@ async function chooseLibrary(vaultMode = false) {
     } catch (error) {
       await next?.close().catch(() => {});
       runtime = await startDesktopRuntime({ dataDir: previous.dataDir, vaultDir: previous.vaultDir, vaultSubdir: previous.vaultSubdir, preferredPort: Number(new URL(previous.baseUrl).port) });
-      await window.loadURL(runtime.baseUrl);
+      await window.loadURL(readerUrl(runtime.baseUrl));
       throw error;
     }
-    await window.loadURL(runtime.baseUrl);
+    await window.loadURL(readerUrl(runtime.baseUrl));
     updateMenu();
   } finally {
     switching = false;
@@ -135,7 +140,7 @@ function updateMenu() {
       { label: isMac ? '在 Finder 中显示文献库' : '在文件资源管理器中打开文献库', click: guard(async () => {
         const error = await shell.openPath(runtime.libraryDir || runtime.dataDir); if (error) throw new Error(error);
       }) },
-      { label: '在浏览器中打开', click: guard(() => shell.openExternal(runtime.baseUrl)) },
+      { label: '在浏览器中打开', click: guard(() => shell.openExternal(readerUrl(runtime.baseUrl))) },
       { type: 'separator' }, { role: 'close', label: '关闭窗口' },
     ] },
     { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
@@ -146,13 +151,14 @@ function updateMenu() {
 
 function createWindow() {
   window = new BrowserWindow({
-    title: '纸间 Paperdesk', width: 1440, height: 960, minWidth: 780, minHeight: 560, show: false,
+    title: desktopPreview ? '纸间 · 山岚 V2 预览' : dailyShanlan ? '纸间 · 山岚 V2' : '纸间 Paperdesk', width: 1440, height: 960, minWidth: 780, minHeight: 560, show: false,
     backgroundColor: '#f5f1e8',
     webPreferences: {
       preload: path.join(desktopDir, 'preload.cjs'), contextIsolation: true,
       sandbox: true, nodeIntegration: false, webSecurity: true,
     },
   });
+  if (shanlanAppearance) window.on('page-title-updated', event => event.preventDefault());
   const canWriteClipboard = (contents, permission, origin) => permission === 'clipboard-sanitized-write'
     && contents === window.webContents && isReaderUrl(contents.getURL()) && isReaderUrl(origin);
   window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
@@ -181,7 +187,7 @@ function createWindow() {
   window.webContents.session.on('will-download', (_event, item) => {
     item.setSaveDialogOptions({ title: '导出 Markdown', defaultPath: path.join(app.getPath('downloads'), path.basename(item.getFilename())) });
   });
-  return window.loadURL(runtime.baseUrl);
+  return window.loadURL(readerUrl(runtime.baseUrl));
 }
 
 async function quit() {
@@ -222,7 +228,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     const settings = await readDesktopSettings(userData);
     const dataDir = settings?.dataDir || path.join(userData, 'library');
-    const preferredPort = process.env.PAPERDESK_DESKTOP_PORT === undefined ? (settings?.port || 4317) : Number(process.env.PAPERDESK_DESKTOP_PORT);
+    const preferredPort = process.env.PAPERDESK_DESKTOP_PORT === undefined ? (settings?.port || (desktopPreview ? 0 : 4317)) : Number(process.env.PAPERDESK_DESKTOP_PORT);
     runtime = await startDesktopRuntime({ dataDir, preferredPort, vaultDir: settings?.vaultDir, vaultSubdir: settings?.vaultSubdir });
     await writeDesktopSettings(userData, { dataDir: runtime.dataDir, vaultDir: runtime.vaultDir, vaultSubdir: runtime.vaultSubdir, port: Number(new URL(runtime.baseUrl).port) });
     app.setAboutPanelOptions({ applicationName: '纸间 Paperdesk', applicationVersion: app.getVersion(), version: `${isMac ? 'macOS' : 'Windows'} 桌面预览版`, copyright: 'PDF、笔记与批注保存在本机。' });

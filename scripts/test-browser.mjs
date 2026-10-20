@@ -20,6 +20,7 @@ import { vaultWorkflow } from '../tests/vault.browser.mjs';
 import { bookmarkWorkflow } from '../tests/bookmarks.browser.mjs';
 import { sourceNavigationWorkflow } from '../tests/source-navigation.browser.mjs';
 import { readerUiRefinementWorkflow } from '../tests/reader-ui-refinement.browser.mjs';
+import { shanlanWorkflow } from '../tests/shanlan.browser.mjs';
 import { waitForImportReady } from '../tests/browser-import.mjs';
 import { testEvidenceDirectory } from './desktop-test-support.mjs';
 
@@ -611,6 +612,7 @@ try {
   await tableOfContentsWorkflow(context, sampleDocument);
   await largeUploadWorkflow(context);
   await scanRegionWorkflow(context);
+  await shanlanWorkflow({ browser, base: `http://127.0.0.1:${appServer.address().port}` });
   const layoutVisualDir = process.env.PAPERDESK_READER_LAYOUT_VISUAL_DIR ? resolve(root, process.env.PAPERDESK_READER_LAYOUT_VISUAL_DIR) : null;
   if (layoutVisualDir && !layoutVisualDir.startsWith(`${join(root, '.local')}${sep}`)) throw new Error('Reader layout proofs must remain under this workspace .local directory');
   if (layoutVisualDir) await mkdir(layoutVisualDir, { recursive: true, mode: 0o700 });
