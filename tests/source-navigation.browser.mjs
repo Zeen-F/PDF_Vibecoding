@@ -74,6 +74,30 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);await expect(page.locator('.header-title h1')).toHaveText(a.title);
     await expect.poll(async()=>Math.abs(await offset()-previousOffset)).toBeLessThan(.01);
     await onPreview?.(page,'restored-reading-viewport');
+    // A fast source response can replace the document before the next scroll
+    // animation frame. Hold frames across that response to exercise the race
+    // deterministically, while leaving fetches and React updates running.
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const immediateOffset=await page.evaluate(()=>{
+      const request=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
+      const pending=new Map();let next=1_000_000_000;
+      window.requestAnimationFrame=callback=>{const id=next++;pending.set(id,callback);return id;};
+      window.cancelAnimationFrame=id=>{if(!pending.delete(id))cancel(id);};
+      window.resumeSourceNavigationFrames=()=>{
+        window.requestAnimationFrame=request;window.cancelAnimationFrame=cancel;
+        for(const callback of pending.values())request(callback);
+        delete window.resumeSourceNavigationFrames;
+      };
+      const root=document.querySelector('.pdf-scroll'),paper=document.querySelector('.pdf-paper[data-page="4"]');
+      root.scrollTop=360;root.dispatchEvent(new Event('scroll'));
+      return (root.getBoundingClientRect().top-paper.getBoundingClientRect().top)/paper.getBoundingClientRect().height;
+    });
+    try{
+      await jump(third);await expect(page.locator('.header-title h1')).toHaveText(b.title);
+    }finally{await page.evaluate(()=>window.resumeSourceNavigationFrames?.());}
+    await expectPage(5);
+    await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);
+    await expect.poll(async()=>Math.abs(await offset()-immediateOffset)).toBeLessThan(.01);
     await forward.click();await expectPage(5);await expect(marker(third)).toBeVisible();
     // A modal or unsaved bookmark blocks a source URL without leaving the URL
     // pointing at a destination the visible reader refused.

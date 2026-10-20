@@ -6,13 +6,13 @@
 
 ## 下载、启动与升级
 
-公开下载版本为 [**1.2.0-beta.2**](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.2)。当前源码版本为 **1.2.0-beta.4**；源码中的新功能和修复不会自动进入旧安装包，实际发布文件以 [Releases](https://github.com/Zeen-F/PDF_Vibecoding/releases) 为准。
+本次版本为 **1.2.0-beta.5**，包含下文的阅读改进与可选山岚 V2 外观。[下载版本与校验值](https://github.com/Zeen-F/PDF_Vibecoding/releases/tag/v1.2.0-beta.5) 以 Release 页面实际提供的文件为准；源码更新不会自动升级旧安装包。
 
 | 入口 | 使用方法 |
 | --- | --- |
-| [Windows x64 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-win-x64.zip) | 完整解压到固定应用目录，打开 `Paperdesk.exe`；无需 Node.js。整个目录是一套应用，不能只复制 EXE。 |
-| [macOS ARM64 DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-mac-arm64.dmg) | 将 Paperdesk 拖入「应用程序」；无需 Node.js。当前预览包尚未经过 Apple 签名或公证。 |
-| [本机浏览器 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.2/Paperdesk-1.2.0-beta.2-browser.zip) | 安装 Node.js 24+，在解压目录运行 `npm ci --omit=dev`、`npm start`，打开 `http://127.0.0.1:4317`；PowerShell 使用 `npm.cmd`。 |
+| [Windows x64 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.5/Paperdesk-1.2.0-beta.5-win-x64.zip) | 完整解压到固定应用目录，打开 `Paperdesk.exe`；无需 Node.js。整个目录是一套应用，不能只复制 EXE。 |
+| [macOS ARM64 DMG](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.5/Paperdesk-1.2.0-beta.5-mac-arm64.dmg) | 将 Paperdesk 拖入「应用程序」；无需 Node.js。当前预览包尚未经过 Apple 签名或公证。 |
+| [本机浏览器 ZIP](https://github.com/Zeen-F/PDF_Vibecoding/releases/download/v1.2.0-beta.5/Paperdesk-1.2.0-beta.5-browser.zip) | 安装 Node.js 24+，在解压目录运行 `npm ci --omit=dev`、`npm start`，打开 `http://127.0.0.1:4317`；PowerShell 使用 `npm.cmd`。 |
 
 升级前保存并正常退出旧应用，备份完整文献库。将新版完整应用目录放到固定位置，再更新原桌面快捷方式的目标和工作目录；不要把临时测试包作为长期入口，也不要覆盖或搬动文献库。没有自动更新。旧插件若占用应用文件，先正常断开连接再升级。
 
@@ -31,7 +31,7 @@
 | 专注与返回 | 临时收起阅读侧栏并保留笔记编辑区和草稿；来源定位后可返回原页面及窗口内阅读位置。 |
 | 弹层与窄窗 | 显示设置和翻译卡支持键盘焦点、Esc 关闭及窄窗口布局。 |
 
-显示设置、专注阅读、来源返回、翻译确认和受权限控制的 MCP 搜索属于当前源码升级，尚未包含在上方 beta.2 下载包中。详细操作见 [阅读布局与来源定位](docs/reader-display.md)。森林、暖砂、雾蓝、夜读四套皮肤不会改变 PDF 原始颜色。
+显示设置、专注阅读、来源返回、翻译确认和受权限控制的 MCP 搜索属于本次升级，旧 beta.2 安装包不包含。详细操作见 [阅读布局与来源定位](docs/reader-display.md)。森林、暖砂、雾蓝、夜读四套皮肤不会改变 PDF 原始颜色。
 
 ## 山岚 V2 外观
 
@@ -41,7 +41,7 @@
 - 源码桌面：构建后运行 `npx.cmd electron . --shanlan-daily`；已有完整桌面包可运行 `Paperdesk.exe --shanlan-daily`。此模式沿用原配置及文献库，使用前正常退出已有窗口。
 - 隔离预览：使用 `--shanlan-preview`，可附加 `--preview-profile=完整目录路径` 指定独立配置目录；默认使用单独的预览配置。预览不会迁移日常文献库，测试时只导入合成资料。
 
-新外观未包含在上方 beta.2 下载包中。`npm.cmd run check` 包含合成资料的山岚界面回归；浏览器测试不代表真实模型、Codex 宿主或各平台安装器均已验收。
+新外观自 beta.5 提供，默认入口保留原外观。`npm.cmd run check` 包含合成资料的山岚界面回归；浏览器测试不代表真实模型、Codex 宿主或各平台安装器均已验收。
 
 ## 划词与手动选段翻译
 

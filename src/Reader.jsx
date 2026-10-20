@@ -230,6 +230,9 @@ export default function Reader({ document, page, onPage, annotations, selection,
     }).sort((a, b) => a.distance - b.distance || (a.page === state.page ? -1 : b.page === state.page ? 1 : a.page - b.page));
     if (candidates.length) syncPage(candidates[0].page, 'scroll');
   }, [syncPage]);
+  // Capture the current document before a fast source response can replace it.
+  // Continuous-page bookkeeping can wait for a frame; the reading anchor cannot.
+  const onScroll = () => { rememberViewport(); scheduleScroll(); };
   const scheduleScroll = useCallback(() => {
     cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => { scrollFrame.current = 0; updateScrollWindow(); rememberViewport(); });
@@ -354,7 +357,7 @@ export default function Reader({ document, page, onPage, annotations, selection,
         {tocOpen&&navigationTab==='contents'&&<Contents key={`contents:${document.id}`} document={document} page={page} onJump={jumpFromToc} onClose={closeToc} embedded disabled={selectionLocked}/>}
         <Bookmarks key={`bookmarks:${document.id}`} document={document} page={page} active={tocOpen&&navigationTab==='bookmarks'} disabled={externalSelectionLocked} onJump={jumpFromToc} onClose={closeToc} onStateChange={bookmarkChanged}/>
       </aside>
-      <div className="pdf-scroll" ref={scrollRef} onScroll={scheduleScroll} onWheel={()=>{focusAnchor.current=null;}} onTouchStart={()=>{focusAnchor.current=null;}} onPointerDown={event=>{if(event.target===scrollRef.current)focusAnchor.current=null;}} onKeyDown={event=>{if(['PageDown','PageUp','Home','End','ArrowDown','ArrowUp'].includes(event.key))focusAnchor.current=null;}}>
+      <div className="pdf-scroll" ref={scrollRef} onScroll={onScroll} onWheel={()=>{focusAnchor.current=null;}} onTouchStart={()=>{focusAnchor.current=null;}} onPointerDown={event=>{if(event.target===scrollRef.current)focusAnchor.current=null;}} onKeyDown={event=>{if(['PageDown','PageUp','Home','End','ArrowDown','ArrowUp'].includes(event.key))focusAnchor.current=null;}}>
         {busy && !error && <div className="reader-status" role="status"><LoaderCircle className="spin" size={17}/> 正在排版页面…</div>}
         {error && <div className="reader-error" role="alert"><FileWarning/><p>{error}</p><button onClick={() => window.location.reload()}>重新加载</button></div>}
         {pdf && loadedId === document.id && shownGroups.map(group => {
