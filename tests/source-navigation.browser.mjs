@@ -98,6 +98,35 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     await expectPage(5);
     await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);
     await expect.poll(async()=>Math.abs(await offset()-immediateOffset)).toBeLessThan(.01);
+    // Re-entering the active, rendered page finishes positioning synchronously,
+    // but keeps the continuous-page guard until the next frame. A source jump
+    // before that frame must still retain the intervening scroll position.
+    await pageInput.focus();
+    await page.evaluate(()=>{
+      const request=window.requestAnimationFrame.bind(window),cancel=window.cancelAnimationFrame.bind(window);
+      const pending=new Map();let next=1_000_000_000;
+      window.requestAnimationFrame=callback=>{const id=next++;pending.set(id,callback);return id;};
+      window.cancelAnimationFrame=id=>{if(!pending.delete(id))cancel(id);};
+      window.resumeSourceNavigationFrames=()=>{
+        window.requestAnimationFrame=request;window.cancelAnimationFrame=cancel;
+        for(const callback of pending.values())request(callback);
+        delete window.resumeSourceNavigationFrames;
+      };
+    });
+    let readyOffset;
+    try{
+      await pageInput.press('Enter');
+      readyOffset=await page.locator('.pdf-scroll').evaluate(root=>{
+        const paper=root.querySelector('.pdf-paper[data-page="4"]');
+        root.scrollTop=300;root.dispatchEvent(new Event('scroll'));
+        return (root.getBoundingClientRect().top-paper.getBoundingClientRect().top)/paper.getBoundingClientRect().height;
+      });
+      assert.ok(readyOffset>.1);
+      await jump(third);await expect(page.locator('.header-title h1')).toHaveText(b.title);
+    }finally{await page.evaluate(()=>window.resumeSourceNavigationFrames?.());}
+    await expectPage(5);
+    await page.getByRole('button',{name:'返回阅读',exact:true}).click();await expectPage(4);
+    await expect.poll(async()=>Math.abs(await offset()-readyOffset)).toBeLessThan(.01);
     await forward.click();await expectPage(5);await expect(marker(third)).toBeVisible();
     // A modal or unsaved bookmark blocks a source URL without leaving the URL
     // pointing at a destination the visible reader refused.
@@ -209,6 +238,7 @@ export async function sourceNavigationWorkflow({context,onPreview}) {
     assert.deepEqual(errors,[]);
     console.log('PASS: precise capture/annotation focus, repeat deduplication, cross-document history, branching, invalid identity rejection, cancelled and superseded jumps, zoom and dismissal');
     console.log('PASS: source return action and normalized same-page, cross-document and continuous-reading viewport restoration');
+    console.log('PASS: a positioned ready page records a scroll before the next frame releases its navigation guard');
     console.log('PASS: acknowledged annotation deletion clears focus/history/URL, failed deletion preserves them, refresh/stale-link guards and continuous-scroll history branching');
   } finally {
     release?.();await page?.close();

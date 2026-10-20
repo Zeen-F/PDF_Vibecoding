@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest]
+        os: [ubuntu-24.04, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -42,6 +42,9 @@ jobs:
       - run: npm run check
         env:
           PAPERDESK_READER_LAYOUT_VISUAL_DIR: .local/ci-reader-layout
+      - name: Test native desktop reliability before release
+        if: runner.os != 'Linux'
+        run: npm run test:desktop:reliability
       - name: Preserve synthetic reader layout evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -59,7 +62,7 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Require both platform checks
+      - name: Require all platform checks
         env:
           PLATFORM_RESULT: ${{ needs.platform-check.result }}
         run: test "$PLATFORM_RESULT" = success

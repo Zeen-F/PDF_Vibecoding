@@ -56,7 +56,9 @@ export default function Reader({ document, page, onPage, annotations, selection,
   }, [historyState?.index, positionKey, focusTick]);
   const rememberViewport = useCallback(() => {
     const state = latest.current, root = scrollRef.current, tile = tiles.current.get(state.page);
-    if (!root || !tile?.ready || tile.documentId !== state.documentId || pendingViewport.current || jumpInFlight.current || internalPage.current) return;
+    // Once positioning has finished, a real scroll must update its anchor even
+    // while the next animation frame still holds the continuous-page guard.
+    if (!root || !tile?.ready || tile.documentId !== state.documentId || pendingViewport.current || pendingJump.current || internalPage.current) return;
     const bounds = root.getBoundingClientRect(), rect = tile.paper.getBoundingClientRect();
     const saved = captureReaderViewport(bounds, rect, state.documentId, state.page);
     if (!saved) return;
