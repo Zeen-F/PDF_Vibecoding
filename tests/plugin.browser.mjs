@@ -8,12 +8,37 @@ import { graphicsOnlyPdf } from './fixtures/scan-browser.mjs';
 // library, external service, or preinstalled Codex host is used by this test.
 export async function pluginWorkflow({ context, base }) {
   const pages = [], errors = [];
+  // Keep only bounded metadata from this synthetic fixture. Do not log request
+  // bodies, note text, selections, headers or credentials, even when it fails.
+  const heartbeatTrace = [], startedAt = Date.now();
+  const recordHeartbeat = entry => {
+    heartbeatTrace.push({ elapsedMs: Date.now() - startedAt, ...entry });
+    if (heartbeatTrace.length > 32) heartbeatTrace.shift();
+  };
+  const heartbeatSession = request => request.url().startsWith(`${base}/api/reader-sessions/`)
+    ? request.url().split('/').at(-1) : null;
   const open = async url => {
     const page = await context.newPage(); pages.push(page);
+    const pageNumber = pages.length;
     page.on('pageerror', error => errors.push(error.message));
     let sessionId;
     page.on('request', request => {
-      if (request.method() === 'POST' && request.url().includes('/api/reader-sessions/')) sessionId = request.url().split('/').at(-1);
+      if (request.method() === 'POST' && request.url().includes('/api/reader-sessions/')) {
+        sessionId = request.url().split('/').at(-1);
+        recordHeartbeat({ event: 'request', page: pageNumber, sessionId });
+      }
+    });
+    page.on('response', response => {
+      const id = heartbeatSession(response.request());
+      if (!id || response.request().method() !== 'POST') return;
+      const entry = { event: 'response', page: pageNumber, sessionId: id, status: response.status() };
+      void response.json().then(body => {
+        recordHeartbeat({ ...entry, notesRevision: /^[0-9a-f]{64}$/.test(body.document?.notesRevision || '') ? body.document.notesRevision : null });
+      }).catch(() => recordHeartbeat({ ...entry, bodyUnavailable: true }));
+    });
+    page.on('requestfailed', request => {
+      const id = heartbeatSession(request);
+      if (id && request.method() === 'POST') recordHeartbeat({ event: 'requestfailed', page: pageNumber, sessionId: id });
     });
     await page.goto(url);
     await expect.poll(() => sessionId).toMatch(/^[0-9a-f-]{36}$/);
@@ -181,17 +206,38 @@ export async function pluginWorkflow({ context, base }) {
     // A late recovery GET must not replace a newer heartbeat document and then
     // leave the editor permanently stale (its prop revision already changed).
     await page.route(endpoint, rejectNotes);
-    await editor.fill('恢复竞态中的原草稿'); await page.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(page.locator('.save-row [role="status"]')).toHaveText('保存失败，草稿已保留');
-    stored = await getDoc(book.id);
-    const recoveryBase = await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
-    assert.equal(recoveryBase.status, 200);
-    // An external write reaches this editor through its periodic heartbeat.
-    // Wait for that version before applying the shorter UI assertion timeout.
-    await page.waitForResponse(async response => response.request().method() === 'POST'
-      && response.url() === `${base}/api/reader-sessions/${reader.sessionId()}`
-      && (await response.json()).document?.notesRevision === recoveryBase.document.notesRevision, { timeout: 15000 });
-    await expect(page.locator('.notes-conflict')).toBeVisible();
+    // One stalled request must not occupy the serialized heartbeat sender
+    // forever. Keep it pending until a later heartbeat observes the revision.
+    const heartbeatEndpoint = `${base}/api/reader-sessions/${reader.sessionId()}`;
+    let heldHeartbeat = false, releaseHeartbeat;
+    const heartbeatGate = new Promise(resolve => { releaseHeartbeat = resolve; });
+    const holdHeartbeat = async route => {
+      if (route.request().method() === 'POST' && !heldHeartbeat) {
+        heldHeartbeat = true;
+        await heartbeatGate;
+      }
+      await route.continue();
+    };
+    await page.route(heartbeatEndpoint, holdHeartbeat);
+    try {
+      await editor.fill('恢复竞态中的原草稿'); await page.getByRole('button', { name: '保存', exact: true }).click();
+      await expect(page.locator('.save-row [role="status"]')).toHaveText('保存失败，草稿已保留');
+      await expect.poll(() => heldHeartbeat, { timeout: 15000 }).toBe(true);
+      stored = await getDoc(book.id);
+      const recoveryBase = await json(`/documents/${book.id}`, { notesZh: '恢复请求的旧服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+      assert.equal(recoveryBase.status, 200);
+      // An external write reaches this editor through its periodic heartbeat.
+      // Wait for that version before applying the shorter UI assertion timeout.
+      recordHeartbeat({ event: 'wait', phase: 'recovery-base', sessionId: reader.sessionId(), notesRevision: recoveryBase.document.notesRevision });
+      await page.waitForResponse(async response => response.request().method() === 'POST'
+        && response.url() === `${base}/api/reader-sessions/${reader.sessionId()}`
+        && (await response.json()).document?.notesRevision === recoveryBase.document.notesRevision, { timeout: 15000 });
+      await expect(page.locator('.notes-conflict')).toBeVisible();
+      await expect(editor).toHaveValue('恢复竞态中的原草稿');
+    } finally {
+      releaseHeartbeat();
+      await page.unroute(heartbeatEndpoint, holdHeartbeat);
+    }
     await page.unroute(endpoint);
     let releaseRecovery, enteredRecovery, heldRecovery = false;
     const recoveryGate = new Promise(resolve => { releaseRecovery = resolve; });
@@ -203,6 +249,7 @@ export async function pluginWorkflow({ context, base }) {
     await page.getByRole('button', { name: '保留草稿并载入已保存笔记', exact: true }).click(); await recoveryEntered;
     stored = await getDoc(book.id);
     const newest = await json(`/documents/${book.id}`, { notesZh: '恢复期间收到的最新服务版本', notesEn: '', expectedNotesRevision: stored.notesRevision }, 'PATCH');
+    recordHeartbeat({ event: 'wait', phase: 'recovery-newest', sessionId: reader.sessionId(), notesRevision: newest.document?.notesRevision ?? null });
     await page.waitForResponse(async response => response.request().method() === 'POST' && response.url().includes('/api/reader-sessions/') && (await response.json()).document?.notesRevision === newest.document.notesRevision);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     releaseRecovery();
@@ -297,6 +344,9 @@ export async function pluginWorkflow({ context, base }) {
     assert.deepEqual(await rejected.evaluate(() => window.messages.filter(message => message?.type === 'paperdesk-context')), []);
     assert.deepEqual(errors, []);
     console.log('PASS: strict document/page deep links and exact-origin embedded session notifications');
+  } catch (error) {
+    console.error('Plugin heartbeat diagnostics (synthetic fixture):', JSON.stringify(heartbeatTrace));
+    throw error;
   } finally {
     await Promise.allSettled(pages.map(page => page.close()));
   }
