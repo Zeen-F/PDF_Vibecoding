@@ -1,3 +1,4 @@
+import { readAppearance } from './appearance.mjs';
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -10,9 +11,10 @@ const desktopDir = path.dirname(fileURLToPath(import.meta.url));
 const isMac = process.platform === 'darwin';
 const dailyShanlan = process.argv.includes('--shanlan-daily') || app.getVersion().includes('shanlan-daily');
 const desktopPreview = !dailyShanlan && (process.argv.includes('--shanlan-preview') || app.getVersion().includes('shanlan'));
-const shanlanAppearance = dailyShanlan || desktopPreview;
+
 const previewProfile = desktopPreview && process.argv.find(arg => arg.startsWith('--preview-profile='))?.slice('--preview-profile='.length);
 const userData = path.resolve(previewProfile || process.env.PAPERDESK_DESKTOP_USER_DATA || path.join(app.getPath('appData'), desktopPreview ? 'Paperdesk-Shanlan-V2' : 'Paperdesk'));
+const shanlanAppearance = dailyShanlan || desktopPreview || readAppearance(userData);
 const readerUrl = baseUrl => shanlanAppearance ? `${baseUrl}/?visual=shanlan` : baseUrl;
 app.setName(desktopPreview ? 'Paperdesk Shanlan V2' : 'Paperdesk');
 app.setPath('userData', userData);

@@ -263,7 +263,17 @@ export async function nativeReaderWorkflow({ context, base, onQuestionPreview, o
     console.log('PASS: opaque sandbox renders through real MCP only, keeps display data in _meta, and ignores a late page image');
 
     await notes.fill('原生面板手动保存的笔记'); await normal.frame.getByRole('button', { name: '保存笔记', exact: true }).click();
-    await expect.poll(async () => (await request(`/documents/${book.id}`)).document.notesZh).toBe('原生面板手动保存的笔记');
+    try {
+      await expect.poll(async () => (await request(`/documents/${book.id}`)).document.notesZh).toBe('原生面板手动保存的笔记');
+    } catch (error) {
+      console.error('Synthetic native save diagnostic', JSON.stringify({
+        noteError: await normal.frame.locator('#note-error').textContent(),
+        error: await normal.frame.locator('#error-text').textContent(),
+        calls: normal.calls.slice(-12).map(c => ({method:c.method,name:c.params?.name,startedAt:c.startedAt,completedAt:c.completedAt,error:c.result?.isError})),
+        pageErrors: normal.errors,
+      }));
+      throw error;
+    }
     const saved = (await request(`/documents/${book.id}`)).document;
     await notes.fill('必须保留的原生面板草稿');
     await normal.frame.getByRole('button', { name: scan.title, exact: true }).click();
