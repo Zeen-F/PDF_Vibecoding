@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { access, mkdir, readFile, readdir } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -276,6 +276,14 @@ try {
   await expect(page.getByRole('textbox', { name: '笔记', exact: true })).toHaveValue(existingNotes);
   await quit();
   console.log('PASS: native existing-library selection and restart preserve records and original PDF bytes');
+
+  await writeFile(path.join(userData, 'appearance.json'), JSON.stringify({ visual: 'shanlan' }));
+  page = await launch();
+  assert.equal(new URL(page.url()).searchParams.get('visual'), 'shanlan');
+  assert.equal(JSON.parse(await readFile(path.join(userData, 'desktop-settings.json'), 'utf8')).dataDir, fixtureLibrary);
+  assert.equal((await request(`/documents/${existing.id}`)).document.notesZh, existingNotes);
+  await quit();
+  console.log('PASS: normal entry restores Shanlan preference with the same library and notes');
 
   if (appBundle) {
     const resources = packagedAppPath;
